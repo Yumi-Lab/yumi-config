@@ -35,7 +35,7 @@ echo "Klipper directory: $KLIPPER_DIR"
 PROJECT_DIR="$PWD"
 echo "Project directory: $PROJECT_DIR"
 
-KLIPPER_CONFIG_DIR="$KLIPPER_DIR/printer_data/config"
+KLIPPER_CONFIG_DIR="$USER_HOME/printer_data/config"
 echo "Répertoire du config: $KLIPPER_CONFIG_DIR"
 
 # Définition de la fonction d'installation
