@@ -45,7 +45,43 @@ function install {
   cp "$PROJECT_DIR/smartpad-generic/smartpad-cpu-temp.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-cpu-temp.cfg copié avec succès." || echo "Erreur lors de la copie de smartpad-cpu-temp.cfg."
   rm -f "$KLIPPER_CONFIG_DIR/smartpad-adxl345.cfg" && echo "smartpad-adxl345.cfg supprimé avec succès." || echo "Erreur lors de la suppression de smartpad-adxl345.cfg."
   cp "$PROJECT_DIR/smartpad-generic/smartpad-adxl345.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-adxl345.cfg copié avec succès." || echo "Erreur lors de la copie de smartpad-adxl345.cfg."
- 
+  
+  # Check if the update_plr.cfg file exists
+  if [ -f $KLIPPER_CONFIG_DIR/update_yumi-config.cfg ]; then
+      echo "The file update_plr.cfg already exists, deleting the file..."
+      rm $KLIPPER_CONFIG_DIR/update_yumi-config.cfg
+  fi
+
+  # Create a new update_yumi-config.cfg file with cat EOF
+  echo "Creating a new update_yumi-config.cfg file with cat EOF..."
+  cat > $KLIPPER_CONFIG_DIR/update_yumi-config.cfg << EOF
+# yumi-config update_manager entry
+[update_manager yumi-config]
+type: git_repo
+path: ~/yumi-config
+origin: https://github.com/Yumi-Lab/yumi-config.git
+primary_branch: main
+install_script: install.sh
+is_system_service: False
+
+EOF
+
+# Check if the string [include update_yumi-config.cfg] is already present in the file
+  if grep -Fxq "[include update_yumi-config.cfg]" $KLIPPER_CONFIG_DIR/moonraker.conf; then
+      echo "The string [include update_yumi-config.cfg] is already present in the file moonraker.conf."
+  else
+      echo "Adding the string [include update_yumi-config.cfg] to the file moonraker.conf..."
+      # Create a temporary file
+      temp_file=$(mktemp)
+
+      # Add the line [include update_plr.cfg] at the beginning of the file
+      echo "[include update_yumi-config.cfg]" > "$temp_file"
+      cat $KLIPPER_CONFIG_DIR/moonraker.conf >> "$temp_file"
+
+      # Replace the original file with the temporary file
+      mv "$temp_file" $KLIPPER_CONFIG_DIR/moonraker.conf
+  fi
+
   if [ "$1" == "smartpad-generic" ]; then
   rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg supprimé avec succès." || echo "Erreur lors de la suppression de printer.cfg."
   cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copié avec succès." || echo "Erreur lors de la copie de printer.cfg."
