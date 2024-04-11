@@ -1,0 +1,1 @@
+Rename the bin file to Robin_nano_v3.bin
