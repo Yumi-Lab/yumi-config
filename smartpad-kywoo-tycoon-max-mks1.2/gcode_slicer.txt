@@ -1,0 +1,15 @@
+Start Gcode prusaslicer ou orcaslicer:
+PRINT_START BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature]
+
+
+
+End Gcode:
+PRINT_END
+
+
+
+BEFORE_LAYER_CHANGE (add timelaps & recovery)
+G92 E0
+;[layer_z]
+LOG_Z
+TIMELAPSE_TAKE_FRAME
