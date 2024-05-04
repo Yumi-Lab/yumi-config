@@ -1,10 +1,10 @@
 Start Gcode prusaslicer ou orcaslicer:
-PRINT_START BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature]
+START_PRINT BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature]
 
 
 
 End Gcode:
-PRINT_END
+END_PRINT
 
 
 
