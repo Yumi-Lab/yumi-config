@@ -4,7 +4,7 @@ La modification du firmware avec une version non officielle peut entraîner la p
 
 En injectant ce firmware dans votre imprimante 3D, vous renoncez à tout recours envers le fabricant de votre imprimante.
 
-Pour procéder : Renommez le fichier en "Robin_nano35.bin".
+Pour procéder : Renommez le fichier en "ZNP_ROBIN_NANO.bin".
 
 Warning:
 
@@ -12,4 +12,4 @@ Modifying the firmware with an unofficial version may void your product's warran
 
 By injecting this firmware into your 3D printer, you waive any recourse against the manufacturer of your printer.
 
-To proceed: Rename the file to "Robin_nano35.bin".
+To proceed: Rename the file to "ZNP_ROBIN_NANO.bin".
