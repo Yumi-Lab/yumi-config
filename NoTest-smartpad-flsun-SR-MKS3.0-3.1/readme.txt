@@ -6,10 +6,19 @@ En injectant ce firmware dans votre imprimante 3D, vous renoncez à tout recours
 
 Pour procéder : Renommez le fichier FW en "Robin_nano_v3.bin".
 
+Mettre le bon MCU: bientot disponible
+Calibration: suivre toutes les étapes de Guilouz: https://guilouz.github.io/Klipper-Flsun-Super-Racer/calibrations/extrudeur/
+
 Warning:
 
-Modifying the firmware with an unofficial version may void your product's warranty. You are solely responsible for any changes you make to your device. By proceeding with these changes, you acknowledge full responsibility in the event of an error. Injecting incorrect firmware may result in your motherboard being locked. In such a case, it will be necessary to inject a new bootloader using a specific device.
+Modifying the firmware with an unofficial version may result in the loss of your product warranty. You are solely responsible for any changes you make to your device. By making these changes, you accept full responsibility in the event of an error. Injecting incorrect firmware may cause your motherboard to lock up. In this case, it will be necessary to inject a new bootloader using a special device.
 
-By injecting this firmware into your 3D printer, you waive any recourse against the manufacturer of your printer.
+By injecting this firmware into your 3D printer, you waive your right to any recourse against the manufacturer of your printer.
 
-To proceed: Rename the file to "Robin_nano_v3.bin".
+To proceed: Rename the FW file to "Robin_nano_v3.bin".
+
+Insert the correct MCU: available soon
+Calibration: follow all of Guilouz's steps: https://guilouz.github.io/Klipper-Flsun-Super-Racer/calibrations/extrudeur/
+
+
+Translated with DeepL.com (free version)
