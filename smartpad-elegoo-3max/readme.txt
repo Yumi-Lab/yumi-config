@@ -1,3 +1,7 @@
+#Thanks to Guislain Cyril (Guilouz) for his work on the flsun
+#https://github.com/Guilouz/Klipper-Flsun-Super-Racer
+#https://guilouz.github.io/Klipper-Flsun-Super-Racer/
+
 Attention :
 
 La modification du firmware avec une version non officielle peut entraîner la perte de la garantie de votre produit. Vous êtes seul responsable des modifications que vous effectuez sur votre appareil. En procédant à ces changements, vous reconnaissez assumer l'entière responsabilité en cas d'erreur. L'injection d'un firmware incorrect peut entraîner le blocage de votre carte mère. Dans ce cas, il sera nécessaire d'injecter un nouveau bootloader à l'aide d'un dispositif spécifique.
