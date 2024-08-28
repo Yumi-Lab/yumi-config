@@ -1,6 +1,3 @@
-#Thanks to Guislain Cyril (Guilouz) for his work on the flsun
-#https://github.com/Guilouz/Klipper-Flsun-Super-Racer
-#https://guilouz.github.io/Klipper-Flsun-Super-Racer/
 
 Attention :
 
