@@ -136,12 +136,12 @@ ln -s /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $HOME/Kl
 
 # Définition du fichier à modifier
 FILE="/home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py"
-
+cp /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py.sample"
 # Vérification de l'existence du fichier
 if [[ -f "$FILE" ]]; then
     echo "Modification du fichier : $FILE"
 
-    # Remplacement de box_size=4 par box_size=6
+    # Remplacement de box_size=4 par box_size=12
     sed -i 's/box_size=4/box_size=12/g' "$FILE"
 
     # Remplacement de back_color="white" par back_color="grey"
