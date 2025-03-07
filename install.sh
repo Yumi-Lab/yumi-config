@@ -109,4 +109,49 @@ else
   fi
 fi
 
+echo "Enable QRCODE ..."
+#position venv kliperscrenn
+source $HOME/.KlipperScreen-env/bin/activate
+#install module qrcod
+pip3 install qrcode[pil]
+
+# Définition du chemin du fichier klipperscreen.conf
+CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
+
+# Définition du bloc à ajouter
+BLOCK="[menu __main more obico]
+name: Obico
+icon: network
+panel: yumilab"
+
+# Vérifier si le bloc existe déjà dans le fichier
+if grep -qF "[menu __main more obico]" "$CONFIG_FILE"; then
+    echo "Le menu 'Obico' est déjà présent dans le fichier."
+else
+    echo "Ajout du menu 'Obico' dans le fichier..."
+    echo -e "\n$BLOCK" >> "$CONFIG_FILE"
+    echo "Ajout terminé."
+fi
+ln -s /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $HOME/KlipperScreen/panels/yumilab.py
+
+# Définition du fichier à modifier
+FILE="/home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py"
+
+# Vérification de l'existence du fichier
+if [[ -f "$FILE" ]]; then
+    echo "Modification du fichier : $FILE"
+
+    # Remplacement de box_size=4 par box_size=6
+    sed -i 's/box_size=4/box_size=6/g' "$FILE"
+
+    # Remplacement de back_color="white" par back_color="grey"
+    sed -i 's/img = qr.make_image(fill_color="black", back_color="white")/img = qr.make_image(fill_color="black", back_color="grey")/g' "$FILE"
+
+    echo "Modifications appliquées avec succès."
+else
+    echo "Erreur : Le fichier $FILE n'existe pas."
+fi
+
+echo "Enable QRCODE ...[Done]"
+
 echo "Installation terminée."
