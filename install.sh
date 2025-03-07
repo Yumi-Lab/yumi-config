@@ -145,7 +145,7 @@ if [[ -f "$FILE" ]]; then
     sed -i 's/box_size=4/box_size=12/g' "$FILE"
 
     # Remplacement de back_color="white" par back_color="grey"
-    sed -i 's/img = qr.make_image(fill_color="black", back_color="white")/img = qr.make_image(fill_color="black", back_color="grey")/g' "$FILE"
+    sed -i 's/img = qr.make_image(fill_color="black", back_color="white")/img = qr.make_image(fill_color="grey", back_color="black")/g' "$FILE"
 
     echo "Modifications appliquées avec succès."
 else
