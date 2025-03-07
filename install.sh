@@ -128,10 +128,11 @@ panel: yumilab"
 if grep -qF "[menu __main more obico]" "$CONFIG_FILE"; then
     echo "Le menu 'Obico' est déjà présent dans le fichier."
 else
-    echo "Ajout du menu 'Obico' dans le fichier..."
-    echo -e "\n$BLOCK" >> "$CONFIG_FILE"
+    echo "Ajout du menu 'Obico' au début du fichier..."
+    echo -e "$BLOCK\n$(cat "$CONFIG_FILE")" > "$CONFIG_FILE"
     echo "Ajout terminé."
 fi
+
 ln -s /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $HOME/KlipperScreen/panels/yumilab.py
 
 # Définition du fichier à modifier
