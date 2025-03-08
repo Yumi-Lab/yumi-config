@@ -111,6 +111,7 @@ fi
 
 echo "Enable QRCODE ..."
 #position venv kliperscrenn
+HOME="/home/pi/"
 source $HOME/.KlipperScreen-env/bin/activate
 #install module qrcod
 pip3 install qrcode[pil]
