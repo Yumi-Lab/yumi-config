@@ -133,11 +133,28 @@ else
     echo "Ajout terminé."
 fi
 
-ln -s /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $HOME/KlipperScreen/panels/yumilab.py
 
 # Définition du fichier à modifier
-FILE="/home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py"
-cp /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py.sample
+FILE="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
+cp /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $FILE
+
+
+PANEL_SCRIPT="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
+SYMLINK_TARGET="$HOME/KlipperScreen/panels/yumilab.py"
+
+# Vérifier si le fichier existe et s'il est un lien symbolique
+if [[ -L "$SYMLINK_TARGET" ]]; then
+    echo "Un lien symbolique existe déjà vers $(readlink -f "$SYMLINK_TARGET"), suppression..."
+    rm "$SYMLINK_TARGET"
+elif [[ -e "$SYMLINK_TARGET" ]]; then
+    echo "Attention : $SYMLINK_TARGET existe mais n'est pas un lien symbolique."
+    echo "Suppression forcée pour recréer un lien symbolique."
+    rm -f "$SYMLINK_TARGET"
+fi
+
+# Créer un nouveau lien symbolique
+ln -s "$PANEL_SCRIPT" "$SYMLINK_TARGET"
+echo "Nouveau lien symbolique créé : $SYMLINK_TARGET → $PANEL_SCRIPT"
 
 # Vérification de l'existence du fichier
 if [[ -f "$FILE" ]]; then
