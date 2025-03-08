@@ -1,5 +1,6 @@
 #!/bin/bash
 
+#V08-03-2025 Maxime3d77
 # Récupérer l'utilisateur qui exécute le script
 REAL_USER="$USER"
 
