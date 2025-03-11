@@ -182,20 +182,18 @@ CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
 OPTION="idle_timeout"
 VALUE="60"
 
-# Vérifier si l'option est déjà présente
-if grep -q "^${OPTION}=" "$CONFIG_FILE"; then
-    echo "L'option '${OPTION}' existe déjà. Mise à jour de la valeur..."
-    sed -i "s/^${OPTION}=.*/${OPTION}=${VALUE}/" "$CONFIG_FILE"
-else
-    echo "L'option '${OPTION}' n'existe pas. Ajout sous [screen]..."
-    # Vérifier si la section [screen] existe
-    if grep -q "^\[screen\]" "$CONFIG_FILE"; then
-        # Ajouter l'option sous [screen]
-        sed -i "/^\[screen\]/a ${OPTION}=${VALUE}" "$CONFIG_FILE"
+# Vérifier si l'option est déjà présente dans la section [display]
+if grep -q "^\[display\]" "$CONFIG_FILE"; then
+    if grep -q "^${OPTION}=" "$CONFIG_FILE"; then
+        echo "L'option '${OPTION}' existe déjà. Mise à jour de la valeur..."
+        sed -i "s/^${OPTION}=.*/${OPTION}=${VALUE}/" "$CONFIG_FILE"
     else
-        # Si [screen] n'existe pas, on l'ajoute avec l'option
-        echo -e "[screen]\n${OPTION}=${VALUE}" >> "$CONFIG_FILE"
+        echo "Ajout de '${OPTION}' dans la section [display]..."
+        sed -i "/^\[display\]/a ${OPTION}=${VALUE}" "$CONFIG_FILE"
     fi
+else
+    echo "Ajout de la section [display] et de l'option '${OPTION}'..."
+    echo -e "[display]\n${OPTION}=${VALUE}" >> "$CONFIG_FILE"
 fi
 
 echo "Veille KlipperScreen [DONE...]"
