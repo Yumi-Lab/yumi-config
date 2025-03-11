@@ -176,26 +176,6 @@ fi
 
 echo "Enable QRCODE ...[Done]"
 
-echo "Veille KlipperScreen"
-# Fichier de configuration de KlipperScreen
-CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
-OPTION="idle_timeout"
-VALUE="60"
 
-# Vérifier si l'option est déjà présente dans la section [display]
-if grep -q "^\[display\]" "$CONFIG_FILE"; then
-    if grep -q "^${OPTION}=" "$CONFIG_FILE"; then
-        echo "L'option '${OPTION}' existe déjà. Mise à jour de la valeur..."
-        sed -i "s/^${OPTION}=.*/${OPTION}=${VALUE}/" "$CONFIG_FILE"
-    else
-        echo "Ajout de '${OPTION}' dans la section [display]..."
-        sed -i "/^\[display\]/a ${OPTION}=${VALUE}" "$CONFIG_FILE"
-    fi
-else
-    echo "Ajout de la section [display] et de l'option '${OPTION}'..."
-    echo -e "[display]\n${OPTION}=${VALUE}" >> "$CONFIG_FILE"
-fi
-
-echo "Veille KlipperScreen [DONE...]"
 
 echo "Installation terminée."
