@@ -122,16 +122,16 @@ pip3 install qrcode[pil]
 CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
 
 # Définition du bloc à ajouter
-BLOCK="[menu __main more obico]
-name: Obico
+BLOCK="[menu __main more YumiApp]
+name: YumiApp
 icon: network
 panel: yumilab"
 
 # Vérifier si le bloc existe déjà dans le fichier
-if grep -qF "[menu __main more obico]" "$CONFIG_FILE"; then
-    echo "Le menu 'Obico' est déjà présent dans le fichier."
+if grep -qF "[menu __main more YumiApp]" "$CONFIG_FILE"; then
+    echo "Le menu 'YumiApp' est déjà présent dans le fichier."
 else
-    echo "Ajout du menu 'Obico' au début du fichier..."
+    echo "Ajout du menu 'YumiApp' au début du fichier..."
     echo -e "$BLOCK\n$(cat "$CONFIG_FILE")" > "$CONFIG_FILE"
     echo "Ajout terminé."
 fi
