@@ -120,6 +120,8 @@ pip3 install qrcode[pil]
 
 # Définition du chemin du fichier klipperscreen.conf
 CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
+#copy icon klipperscreen
+cp /home/pi/YUMI-CONFIG/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg /home/pi/KlipperScreen/styles/material-dark/images/
 
 # Définition du bloc à ajouter
 BLOCK="[menu __main more YumiApp]
