@@ -123,7 +123,7 @@ CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
 
 # Définition du bloc à ajouter
 BLOCK="[menu __main more YumiApp]
-name: YumiApp
+name: Yumi | App
 icon: network
 panel: yumilab"
 
