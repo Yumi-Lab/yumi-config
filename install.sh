@@ -1,5 +1,6 @@
 #!/bin/bash
 
+#V08-03-2025 Maxime3d77
 # Récupérer l'utilisateur qui exécute le script
 REAL_USER="$USER"
 
@@ -85,6 +86,7 @@ EOF
   fi
 
   if [ "$1" == "smartpad-generic" ]; then
+  cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
   rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg supprimé avec succès." || echo "Erreur lors de la suppression de printer.cfg."
   cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copié avec succès." || echo "Erreur lors de la copie de printer.cfg."
   fi
@@ -108,5 +110,80 @@ else
     install "$1"
   fi
 fi
+
+echo "Enable QRCODE ..."
+#position venv kliperscrenn
+HOME="/home/pi/"
+source $HOME/.KlipperScreen-env/bin/activate
+#install module qrcod
+pip3 install qrcode[pil]
+
+# Définition du chemin du fichier klipperscreen.conf
+CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
+#copy icon klipperscreen
+sudo cp /home/pi/yumi-config/Wanhao\ D12\ Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg /home/pi/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg
+ls /home/pi/KlipperScreen/styles/material-dark/images/
+sudo cp /home/pi/yumi-config/Wanhao\ D12\ Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg /home/pi/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg
+ls /home/pi/KlipperScreen/styles/material-darker/images/
+
+# Définition du bloc à ajouter
+BLOCK="[menu __main more YumiApp]
+name: Yumi | App
+icon: Yumi-Lab-Picto
+panel: yumilab"
+
+# Vérifier si le bloc existe déjà dans le fichier
+if grep -qF "[menu __main more YumiApp]" "$CONFIG_FILE"; then
+    echo "Le menu 'YumiApp' est déjà présent dans le fichier."
+else
+    echo "Ajout du menu 'YumiApp' au début du fichier..."
+    echo -e "$BLOCK\n$(cat "$CONFIG_FILE")" > "$CONFIG_FILE"
+    echo "Ajout terminé."
+fi
+
+
+# Définition du fichier à modifier
+FILE="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
+cp /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $FILE
+
+
+PANEL_SCRIPT="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
+SYMLINK_TARGET="$HOME/KlipperScreen/panels/yumilab.py"
+
+# Vérifier si le fichier existe et s'il est un lien symbolique
+if [[ -L "$SYMLINK_TARGET" ]]; then
+    echo "Un lien symbolique existe déjà vers $(readlink -f "$SYMLINK_TARGET"), suppression..."
+    rm "$SYMLINK_TARGET"
+elif [[ -e "$SYMLINK_TARGET" ]]; then
+    echo "Attention : $SYMLINK_TARGET existe mais n'est pas un lien symbolique."
+    echo "Suppression forcée pour recréer un lien symbolique."
+    rm -f "$SYMLINK_TARGET"
+fi
+
+# Créer un nouveau lien symbolique
+ln -s "$PANEL_SCRIPT" "$SYMLINK_TARGET"
+echo "Nouveau lien symbolique créé : $SYMLINK_TARGET → $PANEL_SCRIPT"
+
+# Vérification de l'existence du fichier
+if [[ -f "$FILE" ]]; then
+    echo "Modification du fichier : $FILE"
+
+    # Remplacement lien doc
+    sed -i "s|self.update_qr_code('https://obico.io/docs/user-guides/klipper-setup/')|self.update_qr_code('https://wiki.yumi-lab.com/KlipperSmartPad/SmartPad_Yumi_App/')|g" "$FILE"
+
+    # Remplacement de box_size=4 par box_size=12
+    sed -i 's/box_size=4/box_size=6/g' "$FILE"
+
+    # Remplacement de back_color="white" par back_color="grey"
+    sed -i 's/img = qr.make_image(fill_color="black", back_color="white")/img = qr.make_image(fill_color="grey", back_color="black")/g' "$FILE"
+
+    echo "Modifications appliquées avec succès."
+else
+    echo "Erreur : Le fichier $FILE n'existe pas."
+fi
+
+echo "Enable QRCODE ...[Done]"
+
+
 
 echo "Installation terminée."
