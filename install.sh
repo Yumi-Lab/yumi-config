@@ -170,6 +170,15 @@ if [[ -f "$FILE" ]]; then
 
     # Remplacement lien doc
     sed -i "s|self.update_qr_code('https://obico.io/docs/user-guides/klipper-setup/')|self.update_qr_code('https://wiki.yumi-lab.com/KlipperSmartPad/SmartPad_Yumi_App/')|g" "$FILE"
+    sed -i 's|guide_text = "Obico is state-of-the-art AI and mobile app for 3D printing."|guide_text = "Yumi is state-of-the-art AI and mobile app for 3D printing."|g' "$FILE"
+    sed -i 's|self.qr_code_label.set_markup(f"<big><b>Scan to Set Up Obico</b></big>")|self.qr_code_label.set_markup(f"<big><b>Scan to Set Up Yumi</b></big>")|g' "$FILE"
+    sed -i 's|setup_label3.set_markup(f"<big>Or enter the code below in the Obico app:</big>")|setup_label3.set_markup(f"<big>Or enter the code below in the Yumi app:</big>")|g' "$FILE"
+    sed -i 's|self.qr_code_label.set_markup(f"<big><b>Scan to Link Obico</b></big>")|self.qr_code_label.set_markup(f"<big><b>Scan to Link Yumi</b></big>")|g' "$FILE"
+    sed -i 's|self.bottom_label.set_markup(f"<big>Scan the QR code to learn more about Obico.</big>")|self.bottom_label.set_markup(f"<big>Scan the QR code to learn more about Yumi.</big>")|g' "$FILE"
+    sed -i "s|self.update_qr_code('https://obico.io/')|self.update_qr_code('https://app.yumi-lab.com/')|g" "$FILE"
+    sed -i 's|setup_label1.set_markup(f"<big>Printer is linked to Obico server.</big>")|setup_label1.set_markup(f"<big>Printer is linked to Yumi server.</big>")|g' "$FILE"
+
+
 
     # Remplacement de box_size=4 par box_size=12
     sed -i 's/box_size=4/box_size=6/g' "$FILE"

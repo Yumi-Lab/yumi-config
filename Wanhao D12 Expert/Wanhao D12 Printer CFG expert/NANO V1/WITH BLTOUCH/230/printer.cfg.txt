@@ -20,8 +20,7 @@ filename:  ~/printer_data/config/variables.cfg
 [exclude_object]
 
 # Enable arcs support
-[gcode_arcs]
-resolution: 0.1
+
 
 [stepper_x]
 step_pin: PE3
