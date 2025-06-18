@@ -193,6 +193,18 @@ fi
 
 echo "Enable QRCODE ...[Done]"
 
-
+echo "Motion Sensor ..."
+KLIPPER_EXTRAS_DIR="/home/pi/klipper/klippy/extras"
+SOURCE_FILE="/home/pi/YUMI-CONFIG/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
+# Vérification de l'existence du fichier
+if [ -f "/home/pi/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" ]; then
+  echo "✅ Fichier trouvé, copie en cours..."
+  cp "/home/pi/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" "$KLIPPER_EXTRAS_DIR/"
+  echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR"
+else
+  echo "❌ Fichier introuvable dans le dépôt !"
+  exit 1
+fi
+echo "Motion Sensor ...[Done]"
 
 echo "Installation terminée."
