@@ -195,7 +195,7 @@ echo "Enable QRCODE ...[Done]"
 
 echo "Motion Sensor ..."
 KLIPPER_EXTRAS_DIR="/home/pi/klipper/klippy/extras"
-SOURCE_FILE="/home/pi/YUMI-CONFIG/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
+SOURCE_FILE="/home/pi/yumi-config/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
 # Vérification de l'existence du fichier
 if [ -f "/home/pi/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" ]; then
   echo "✅ Fichier trouvé, copie en cours..."
