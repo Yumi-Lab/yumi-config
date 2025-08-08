@@ -196,7 +196,7 @@ echo "Enable QRCODE ...[Done]"
 echo "Motion Sensor ..."
 
 # Vérification de l'existence du fichier
-if [ -f "/home/pi/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" ]; then
+if [ -f "/home/pi/yumi-config/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" ]; then
   echo "✅ Fichier trouvé, copie en cours..."
   cp "/home/pi/yumi-config/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" "/home/pi/klipper/klippy/extras/"
   echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
