@@ -204,6 +204,22 @@ else
   echo "❌ Fichier introuvable dans le dépôt !"
   exit 1
 fi
+if [ -f "/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py" ]; then
+  echo "✅ Fichier trouvé, copie en cours..."
+  cp "/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py" "/home/pi/klipper/klippy/extras/"
+  echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
+else
+  echo "❌ Fichier introuvable dans le dépôt !"
+  exit 1
+fi
+if [ -f "/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py" ]; then
+  echo "✅ Fichier trouvé, copie en cours..."
+  cp "/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py" "/home/pi/klipper/klippy/extras/"
+  echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
+else
+  echo "❌ Fichier introuvable dans le dépôt !"
+  exit 1
+fi
 echo "Motion Sensor ...[Done]"
 
 echo "Installation terminée."
