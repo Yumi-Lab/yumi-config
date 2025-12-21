@@ -39,6 +39,9 @@ echo "Project directory: $PROJECT_DIR"
 KLIPPER_CONFIG_DIR="$USER_HOME/printer_data/config"
 echo "Répertoire du config: $KLIPPER_CONFIG_DIR"
 
+KLIPPER_EXTRAS_DIR="$KLIPPER_DIR/klippy/extras"
+echo "Klipper extras directory: $KLIPPER_EXTRAS_DIR"
+
 # Définition de la fonction d'installation
 function install {
   # Remplacer les fichiers du projet dans le répertoire Klipper
@@ -59,6 +62,10 @@ function install {
   echo "Creating a new update_yumi-config.cfg file with cat EOF..."
   cat > $KLIPPER_CONFIG_DIR/update_yumi-config.cfg << EOF
 # yumi-config update_manager entry
+# Moonraker will automatically:
+# 1. Pull the latest changes from the git repository
+# 2. Execute install.sh after each update
+# 3. Restart Klipper service automatically
 [update_manager yumi-config]
 type: git_repo
 path: ~/yumi-config
@@ -66,6 +73,7 @@ origin: https://github.com/Yumi-Lab/yumi-config.git
 primary_branch: main
 install_script: install.sh
 is_system_service: False
+managed_services: klipper
 
 EOF
 
@@ -113,18 +121,17 @@ fi
 
 echo "Enable QRCODE ..."
 #position venv kliperscrenn
-HOME="/home/pi/"
-source $HOME/.KlipperScreen-env/bin/activate
+source $USER_HOME/.KlipperScreen-env/bin/activate
 #install module qrcod
 pip3 install qrcode[pil]
 
 # Définition du chemin du fichier klipperscreen.conf
-CONFIG_FILE="/home/pi/printer_data/config/KlipperScreen.conf"
+CONFIG_FILE="$KLIPPER_CONFIG_DIR/KlipperScreen.conf"
 #copy icon klipperscreen
-sudo cp /home/pi/yumi-config/Wanhao\ D12\ Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg /home/pi/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg
-ls /home/pi/KlipperScreen/styles/material-dark/images/
-sudo cp /home/pi/yumi-config/Wanhao\ D12\ Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg /home/pi/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg
-ls /home/pi/KlipperScreen/styles/material-darker/images/
+sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg"
+ls "$USER_HOME/KlipperScreen/styles/material-dark/images/"
+sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg"
+ls "$USER_HOME/KlipperScreen/styles/material-darker/images/"
 
 # Définition du bloc à ajouter
 BLOCK="[menu __main more YumiApp]
@@ -143,12 +150,12 @@ fi
 
 
 # Définition du fichier à modifier
-FILE="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
-cp /home/pi/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py $FILE
+FILE="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
+cp "$USER_HOME/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py" "$FILE"
 
 
-PANEL_SCRIPT="/home/pi/moonraker-yumi-lab/scripts/yumilab.py"
-SYMLINK_TARGET="$HOME/KlipperScreen/panels/yumilab.py"
+PANEL_SCRIPT="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
+SYMLINK_TARGET="$USER_HOME/KlipperScreen/panels/yumilab.py"
 
 # Vérifier si le fichier existe et s'il est un lien symbolique
 if [[ -L "$SYMLINK_TARGET" ]]; then
@@ -194,6 +201,7 @@ fi
 echo "Enable QRCODE ...[Done]"
 
 echo "Motion Sensor ..."
+SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
 
 # Vérification de l'existence du fichier
 if [ -f "$SOURCE_FILE" ]; then
@@ -207,7 +215,7 @@ fi
 echo "Motion Sensor ...[Done]"
 
 echo "Yumi Z Offset Calculator ..."
-SOURCE_FILE="/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py"
+SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/yumi_z_offset_calculator.py"
 # Vérification de l'existence du fichier
 if [ -f $SOURCE_FILE ]; then
   echo "✅ Fichier trouvé, copie en cours..."
@@ -220,7 +228,7 @@ fi
 echo "Yumi Z Offset Calculator ...[Done]"
 
 echo "Probe Pressure ..."
-SOURCE_FILE="/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py"
+SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/probe_pressure.py"
 # Vérification de l'existence du fichier
 if [ -f $SOURCE_FILE ]; then
   echo "✅ Fichier trouvé, copie en cours..."
@@ -232,12 +240,18 @@ else
 fi
 echo "Probe Pressure ...[Done]"
 
-echo "Restarting Klipper service to load new modules..."
-sudo systemctl restart klipper
-if [ $? -eq 0 ]; then
-    echo "✅ Klipper restarted successfully!"
+# Redémarrer Klipper uniquement si le script n'est PAS appelé par Moonraker
+# Moonraker redémarre automatiquement les services via managed_services
+if [ -z "$MOONRAKER_PROCESS_UID" ]; then
+    echo "Restarting Klipper service to load new modules..."
+    sudo systemctl restart klipper
+    if [ $? -eq 0 ]; then
+        echo "✅ Klipper restarted successfully!"
+    else
+        echo "⚠️ Warning: Failed to restart Klipper. Please restart manually with: sudo systemctl restart klipper"
+    fi
 else
-    echo "⚠️ Warning: Failed to restart Klipper. Please restart manually with: sudo systemctl restart klipper"
+    echo "ℹ️ Script called by Moonraker - Klipper will be restarted automatically by Moonraker"
 fi
 
 echo "Installation terminée."
