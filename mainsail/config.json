@@ -1,0 +1,10 @@
+{
+    "defaultLocale": "en",
+    "defaultMode": "dark",
+    "defaultTheme": "yumi",
+    "hostname": null,
+    "port": null,
+    "path": null,
+    "instancesDB": "moonraker",
+    "instances": []
+}
