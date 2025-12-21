@@ -254,4 +254,13 @@ else
     echo "ℹ️ Script called by Moonraker - Klipper will be restarted automatically by Moonraker"
 fi
 
+echo "Configuring Mainsail settings..."
+# Replace Mainsail config.json with Yumi template
+MAINSAIL_DIR="$USER_HOME/mainsail"
+if [ -f "$MAINSAIL_DIR/config.json" ]; then
+    rm -f "$MAINSAIL_DIR/config.json" && echo "Old config.json deleted." || echo "Error deleting config.json."
+fi
+cp "$PROJECT_DIR/mainsail/config.json" "$MAINSAIL_DIR/" && echo "Yumi config.json copied successfully." || echo "Error copying config.json."
+chown -R "$OWNER:$OWNER" "$MAINSAIL_DIR/config.json"
+
 echo "Installation completed."
