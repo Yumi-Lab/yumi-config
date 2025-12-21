@@ -196,30 +196,40 @@ echo "Enable QRCODE ...[Done]"
 echo "Motion Sensor ..."
 
 # Vérification de l'existence du fichier
-if [ -f "/home/pi/yumi-config/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" ]; then
+if [ -f "$SOURCE_FILE" ]; then
   echo "✅ Fichier trouvé, copie en cours..."
-  cp "/home/pi/yumi-config/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py" "/home/pi/klipper/klippy/extras/"
-  echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
-else
-  echo "❌ Fichier introuvable dans le dépôt !"
-  exit 1
-fi
-if [ -f "/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py" ]; then
-  echo "✅ Fichier trouvé, copie en cours..."
-  cp "/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py" "/home/pi/klipper/klippy/extras/"
-  echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
-else
-  echo "❌ Fichier introuvable dans le dépôt !"
-  exit 1
-fi
-if [ -f "/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py" ]; then
-  echo "✅ Fichier trouvé, copie en cours..."
-  cp "/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py" "/home/pi/klipper/klippy/extras/"
-  echo "🎉 Fichier copié dans /home/pi/klipper/klippy/extras"
+  rm -f "$KLIPPER_EXTRAS_DIR/filament_yumi_smart_motion_sensor.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
 else
   echo "❌ Fichier introuvable dans le dépôt !"
   exit 1
 fi
 echo "Motion Sensor ...[Done]"
+
+echo "Yumi Z Offset Calculator ..."
+SOURCE_FILE="/home/pi/yumi-config/klipper/klippy/extras/yumi_z_offset_calculator.py"
+# Vérification de l'existence du fichier
+if [ -f $SOURCE_FILE ]; then
+  echo "✅ Fichier trouvé, copie en cours..."
+  rm -f "$KLIPPER_EXTRAS_DIR/yumi_z_offset_calculator.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
+else
+  echo "❌ Fichier introuvable dans le dépôt !"
+  exit 1
+fi
+echo "Yumi Z Offset Calculator ...[Done]"
+
+echo "Probe Pressure ..."
+SOURCE_FILE="/home/pi/yumi-config/klipper/klippy/extras/probe_pressure.py"
+# Vérification de l'existence du fichier
+if [ -f $SOURCE_FILE ]; then
+  echo "✅ Fichier trouvé, copie en cours..."
+  rm -f "$KLIPPER_EXTRAS_DIR/probe_pressure.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
+else
+  echo "❌ Fichier introuvable dans le dépôt !"
+  exit 1
+fi
+echo "Probe Pressure ...[Done]"
 
 echo "Installation terminée."

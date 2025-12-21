@@ -15,8 +15,12 @@ class ZOffsetCalculator:
         self.retract_dist = config.getfloat('retract_dist', 5.0)
         self.dwell_time = config.getfloat('dwell_time', 2.0)  # 压力开关稳定时间
         self.max_probe_travel = config.getfloat('max_probe_travel', 20.0)  # 最大探测距离
+        self.max_probe_times = config.getint('max_probe_times', 6)  # 最大探测次数
         self.z_hop = config.getfloat("z_hop", 10.0)
         self.samples_tolerance = config.getfloat("samples_tolerance", 0.02)
+        
+        # 新增：探测延迟配置（单位：毫秒）
+        self.probe_delay = config.getfloat("probe_delay", 1000.0)  # 单位：毫秒
         
         # 延迟初始化，确保所有对象都已加载
         self.printer.register_event_handler("klippy:connect", self._handle_connect)
@@ -42,6 +46,8 @@ class ZOffsetCalculator:
     def cmd_CALCULATE_Z_OFFSET(self, gcmd):
         logging.info("[ZOffsetCalculator] Starting z_offset calculation")
         toolhead = self.printer.lookup_object('toolhead')
+         # 检查是否有SAVE参数
+        save_config = gcmd.get_int('SAVE', 0, minval=0, maxval=1)
         
         gcode = self.printer.lookup_object('gcode')
         gcode.run_script_from_command("G28")
@@ -54,7 +60,8 @@ class ZOffsetCalculator:
         gcmd.respond_info("Moving to pressure switch position...")
         self.move_to_pressure_switch()
         gcode.run_script_from_command("M400")
-        gcode.run_script_from_command("G4 P1000")
+        # 使用配置的延迟（单位：毫秒）
+        gcode.run_script_from_command(f"G4 P{self.probe_delay}")
         
         # 用压力开关执行探测
         gcmd.respond_info("Probing with pressure switch...")
@@ -69,7 +76,7 @@ class ZOffsetCalculator:
         self.move_to_pressure_switch()
         
         # 保存z_offset到配置文件
-        self.save_z_offset(z_offset)
+        self.save_z_offset(z_offset, save_config)
         
         gcmd.respond_info("Z offset calculation complete!")
         logging.info(f"[ZOffsetCalculator] Completed z_offset calculation: {z_offset:.4f}")
@@ -105,10 +112,11 @@ class ZOffsetCalculator:
         """使用压力开关探测Z高度"""
         toolhead = self.printer.lookup_object('toolhead')
         zendstop_p = self.printer.lookup_object('probe_pressure').run_probe(gcmd)
+        gcode = self.printer.lookup_object('gcode')
         
         reprobe_cnt = 1
         while True:
-            if(reprobe_cnt >= 6):
+            if(reprobe_cnt >= self.max_probe_times):
                 gcmd.respond_info("ZoffsetCalibration: Pressure probe more than five times.")
                 raise gcmd.error('ZoffsetCalibration: Pressure probe more than five times.')
             # Perform Z Hop
@@ -117,6 +125,9 @@ class ZOffsetCalculator:
                 pos[2] += self.z_hop
                 toolhead.manual_move([None, None, pos[2]], 5)
             gcmd.respond_info("ZoffsetCalibration: Pressure verifying the difference between before and after %d/5." % (reprobe_cnt))
+            gcode.run_script_from_command("M400")
+            # 使用配置的延迟（单位：毫秒）
+            gcode.run_script_from_command(f"G4 P{self.probe_delay}")
             zendstop_p1 = self.printer.lookup_object('probe_pressure').run_probe(gcmd)
             diff_z = abs(zendstop_p1[2] - zendstop_p[2])
             zendstop_p = zendstop_p1
@@ -128,7 +139,7 @@ class ZOffsetCalculator:
         logging.info(f"[ZOffsetCalculator] Pressure switch triggered at Z={zendstop_p[2]}")
         return zendstop_p[2]
     
-    def save_z_offset(self, z_offset):
+    def save_z_offset(self, z_offset, save_config):
         # 保存z_offset到配置文件
         configfile = self.printer.lookup_object('configfile')
         configfile.set('probe', 'z_offset', f"{z_offset:.4f}")
@@ -137,7 +148,9 @@ class ZOffsetCalculator:
         gcode = self.printer.lookup_object('gcode')
         gcode.respond_info(f"Z offset saved to config file: {z_offset:.4f}")
         logging.info(f"[ZOffsetCalculator] Z offset saved: {z_offset:.4f}")
-        gcode.run_script_from_command("SAVE_CONFIG")
+        
+        if save_config:
+            gcode.run_script_from_command("SAVE_CONFIG")
 
 def load_config(config):
     return ZOffsetCalculator(config)
