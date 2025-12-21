@@ -1,17 +1,17 @@
 #!/bin/bash
 
 #V08-03-2025 Maxime3d77
-# Récupérer l'utilisateur qui exécute le script
+# Get the user executing the script
 REAL_USER="$USER"
 
-# Initialisation de la variable OWNER
+# Initialize the OWNER variable
 OWNER=""
 
-# Récupérer le répertoire de l'utilisateur
+# Get the user's home directory
 if [ -n "$SUDO_USER" ]; then
     echo "shell script execute by with sudo :  user is $SUDO_USER"
     if [ "$SUDO_USER" = "runner" ]; then
-        # Définir USER_HOME spécifiquement pour 'runner' et définir OWNER à 'pi'
+        # Set USER_HOME specifically for 'runner' and set OWNER to 'pi'
         USER_HOME="/home/pi"
         OWNER="pi"
     else
@@ -37,20 +37,20 @@ PROJECT_DIR="$PWD"
 echo "Project directory: $PROJECT_DIR"
 
 KLIPPER_CONFIG_DIR="$USER_HOME/printer_data/config"
-echo "Répertoire du config: $KLIPPER_CONFIG_DIR"
+echo "Config directory: $KLIPPER_CONFIG_DIR"
 
 KLIPPER_EXTRAS_DIR="$KLIPPER_DIR/klippy/extras"
 echo "Klipper extras directory: $KLIPPER_EXTRAS_DIR"
 
-# Définition de la fonction d'installation
+# Define the installation function
 function install {
-  # Remplacer les fichiers du projet dans le répertoire Klipper
-  rm -f "$KLIPPER_CONFIG_DIR/smartpad-cpu-temp.cfg" && echo "smartpad-cpu-temp.cfg supprimé avec succès." || echo "Erreur lors de la suppression de smartpad-cpu-temp.cfg."
-  cp "$PROJECT_DIR/smartpad-generic/smartpad-cpu-temp.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-cpu-temp.cfg copié avec succès." || echo "Erreur lors de la copie de smartpad-cpu-temp.cfg."
-  rm -f "$KLIPPER_CONFIG_DIR/smartpad-adxl345.cfg" && echo "smartpad-adxl345.cfg supprimé avec succès." || echo "Erreur lors de la suppression de smartpad-adxl345.cfg."
-  cp "$PROJECT_DIR/smartpad-generic/smartpad-adxl345.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-adxl345.cfg copié avec succès." || echo "Erreur lors de la copie de smartpad-adxl345.cfg."
-  rm -f "$KLIPPER_CONFIG_DIR/crowsnest.conf" && echo "crowsnest.conf supprimé avec succès." || echo "Erreur lors de la suppression de crowsnest.conf."
-  cp "$PROJECT_DIR/smartpad-generic/crowsnest.conf" "$KLIPPER_CONFIG_DIR" && echo "crowsnest.conf copié avec succès." || echo "Erreur lors de la copie de crowsnest.conf."
+  # Replace project files in the Klipper directory
+  rm -f "$KLIPPER_CONFIG_DIR/smartpad-cpu-temp.cfg" && echo "smartpad-cpu-temp.cfg deleted successfully." || echo "Error deleting smartpad-cpu-temp.cfg."
+  cp "$PROJECT_DIR/smartpad-generic/smartpad-cpu-temp.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-cpu-temp.cfg copied successfully." || echo "Error copying smartpad-cpu-temp.cfg."
+  rm -f "$KLIPPER_CONFIG_DIR/smartpad-adxl345.cfg" && echo "smartpad-adxl345.cfg deleted successfully." || echo "Error deleting smartpad-adxl345.cfg."
+  cp "$PROJECT_DIR/smartpad-generic/smartpad-adxl345.cfg" "$KLIPPER_CONFIG_DIR" && echo "smartpad-adxl345.cfg copied successfully." || echo "Error copying smartpad-adxl345.cfg."
+  rm -f "$KLIPPER_CONFIG_DIR/crowsnest.conf" && echo "crowsnest.conf deleted successfully." || echo "Error deleting crowsnest.conf."
+  cp "$PROJECT_DIR/smartpad-generic/crowsnest.conf" "$KLIPPER_CONFIG_DIR" && echo "crowsnest.conf copied successfully." || echo "Error copying crowsnest.conf."
 
   # Check if the update_plr.cfg file exists
   if [ -f $KLIPPER_CONFIG_DIR/update_yumi-config.cfg ]; then
@@ -95,61 +95,61 @@ EOF
 
   if [ "$1" == "smartpad-generic" ]; then
   cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
-  rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg supprimé avec succès." || echo "Erreur lors de la suppression de printer.cfg."
-  cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copié avec succès." || echo "Erreur lors de la copie de printer.cfg."
+  rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg deleted successfully." || echo "Error deleting printer.cfg."
+  cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copied successfully." || echo "Error copying printer.cfg."
   fi
 
-  # Modifier les permissions pour que l'utilisateur "pi" conserve les droits sur les fichiers créés ou modifiés
+  # Modify permissions so user "pi" retains rights on created or modified files
   chown -R pi:pi "$KLIPPER_CONFIG_DIR"
 }
 
-# Vérifier si le script a été appelé avec un argument
+# Check if the script was called with an argument
 if [ "$1" == "" ]; then
-  # Si aucun argument n'est passé, installer smartpad-generic
-  echo "Aucun argument passé. Installation de smartpad-generic."
+  # If no argument is passed, install smartpad-generic
+  echo "No argument passed. Installing smartpad-generic."
   install "smartpad-generic"
 else
-  # Vérifier si le dossier correspondant à l'argument existe
+  # Check if the folder corresponding to the argument exists
   if [ ! -d "$PROJECT_DIR/$1" ]; then
-    echo "Erreur : $PROJECT_DIR/$1 n'existe pas. Installation de smartpad-generic."
+    echo "Error: $PROJECT_DIR/$1 does not exist. Installing smartpad-generic."
     install "smartpad-generic"
   else
-    echo "Installation du projet : $1"
+    echo "Installing project: $1"
     install "$1"
   fi
 fi
 
 echo "Enable QRCODE ..."
-#position venv kliperscrenn
+# Activate KlipperScreen virtual environment
 source $USER_HOME/.KlipperScreen-env/bin/activate
-#install module qrcod
+# Install qrcode module
 pip3 install qrcode[pil]
 
-# Définition du chemin du fichier klipperscreen.conf
+# Define the klipperscreen.conf file path
 CONFIG_FILE="$KLIPPER_CONFIG_DIR/KlipperScreen.conf"
-#copy icon klipperscreen
+# Copy KlipperScreen icons
 sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg"
 ls "$USER_HOME/KlipperScreen/styles/material-dark/images/"
 sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg"
 ls "$USER_HOME/KlipperScreen/styles/material-darker/images/"
 
-# Définition du bloc à ajouter
+# Define the block to add
 BLOCK="[menu __main more YumiApp]
 name: Yumi | App
 icon: Yumi-Lab-Picto
 panel: yumilab"
 
-# Vérifier si le bloc existe déjà dans le fichier
+# Check if the block already exists in the file
 if grep -qF "[menu __main more YumiApp]" "$CONFIG_FILE"; then
-    echo "Le menu 'YumiApp' est déjà présent dans le fichier."
+    echo "The 'YumiApp' menu is already present in the file."
 else
-    echo "Ajout du menu 'YumiApp' au début du fichier..."
+    echo "Adding the 'YumiApp' menu at the beginning of the file..."
     echo -e "$BLOCK\n$(cat "$CONFIG_FILE")" > "$CONFIG_FILE"
-    echo "Ajout terminé."
+    echo "Addition completed."
 fi
 
 
-# Définition du fichier à modifier
+# Define the file to modify
 FILE="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
 cp "$USER_HOME/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py" "$FILE"
 
@@ -157,25 +157,25 @@ cp "$USER_HOME/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py" "$FILE"
 PANEL_SCRIPT="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
 SYMLINK_TARGET="$USER_HOME/KlipperScreen/panels/yumilab.py"
 
-# Vérifier si le fichier existe et s'il est un lien symbolique
+# Check if the file exists and is a symbolic link
 if [[ -L "$SYMLINK_TARGET" ]]; then
-    echo "Un lien symbolique existe déjà vers $(readlink -f "$SYMLINK_TARGET"), suppression..."
+    echo "A symbolic link already exists to $(readlink -f "$SYMLINK_TARGET"), deleting..."
     rm "$SYMLINK_TARGET"
 elif [[ -e "$SYMLINK_TARGET" ]]; then
-    echo "Attention : $SYMLINK_TARGET existe mais n'est pas un lien symbolique."
-    echo "Suppression forcée pour recréer un lien symbolique."
+    echo "Warning: $SYMLINK_TARGET exists but is not a symbolic link."
+    echo "Force deletion to recreate a symbolic link."
     rm -f "$SYMLINK_TARGET"
 fi
 
-# Créer un nouveau lien symbolique
+# Create a new symbolic link
 ln -s "$PANEL_SCRIPT" "$SYMLINK_TARGET"
-echo "Nouveau lien symbolique créé : $SYMLINK_TARGET → $PANEL_SCRIPT"
+echo "New symbolic link created: $SYMLINK_TARGET → $PANEL_SCRIPT"
 
-# Vérification de l'existence du fichier
+# Check file existence
 if [[ -f "$FILE" ]]; then
-    echo "Modification du fichier : $FILE"
+    echo "Modifying file: $FILE"
 
-    # Remplacement lien doc
+    # Replace documentation links
     sed -i "s|self.update_qr_code('https://obico.io/docs/user-guides/klipper-setup/')|self.update_qr_code('https://wiki.yumi-lab.com/KlipperSmartPad/SmartPad_Yumi_App/')|g" "$FILE"
     sed -i 's|guide_text = "Obico is state-of-the-art AI and mobile app for 3D printing."|guide_text = "Yumi is state-of-the-art AI and mobile app for 3D printing."|g' "$FILE"
     sed -i 's|self.qr_code_label.set_markup(f"<big><b>Scan to Set Up Obico</b></big>")|self.qr_code_label.set_markup(f"<big><b>Scan to Set Up Yumi</b></big>")|g' "$FILE"
@@ -187,15 +187,15 @@ if [[ -f "$FILE" ]]; then
 
 
 
-    # Remplacement de box_size=4 par box_size=12
+    # Replace box_size=4 with box_size=6
     sed -i 's/box_size=4/box_size=6/g' "$FILE"
 
-    # Remplacement de back_color="white" par back_color="grey"
+    # Replace back_color="white" with back_color="grey"
     sed -i 's/img = qr.make_image(fill_color="black", back_color="white")/img = qr.make_image(fill_color="grey", back_color="black")/g' "$FILE"
 
-    echo "Modifications appliquées avec succès."
+    echo "Modifications applied successfully."
 else
-    echo "Erreur : Le fichier $FILE n'existe pas."
+    echo "Error: File $FILE does not exist."
 fi
 
 echo "Enable QRCODE ...[Done]"
@@ -203,45 +203,45 @@ echo "Enable QRCODE ...[Done]"
 echo "Motion Sensor ..."
 SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
 
-# Vérification de l'existence du fichier
+# Check file existence
 if [ -f "$SOURCE_FILE" ]; then
-  echo "✅ Fichier trouvé, copie en cours..."
-  rm -f "$KLIPPER_EXTRAS_DIR/filament_yumi_smart_motion_sensor.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
+  echo "✅ File found, copying..."
+  rm -f "$KLIPPER_EXTRAS_DIR/filament_yumi_smart_motion_sensor.py" && echo "Old version deleted." || echo "No old version to delete."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
 else
-  echo "❌ Fichier introuvable dans le dépôt !"
+  echo "❌ File not found in repository!"
   exit 1
 fi
 echo "Motion Sensor ...[Done]"
 
 echo "Yumi Z Offset Calculator ..."
 SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/yumi_z_offset_calculator.py"
-# Vérification de l'existence du fichier
+# Check file existence
 if [ -f $SOURCE_FILE ]; then
-  echo "✅ Fichier trouvé, copie en cours..."
-  rm -f "$KLIPPER_EXTRAS_DIR/yumi_z_offset_calculator.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
+  echo "✅ File found, copying..."
+  rm -f "$KLIPPER_EXTRAS_DIR/yumi_z_offset_calculator.py" && echo "Old version deleted." || echo "No old version to delete."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
 else
-  echo "❌ Fichier introuvable dans le dépôt !"
+  echo "❌ File not found in repository!"
   exit 1
 fi
 echo "Yumi Z Offset Calculator ...[Done]"
 
 echo "Probe Pressure ..."
 SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/probe_pressure.py"
-# Vérification de l'existence du fichier
+# Check file existence
 if [ -f $SOURCE_FILE ]; then
-  echo "✅ Fichier trouvé, copie en cours..."
-  rm -f "$KLIPPER_EXTRAS_DIR/probe_pressure.py" && echo "Ancienne version supprimée." || echo "Pas d'ancienne version à supprimer."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 Fichier copié dans $KLIPPER_EXTRAS_DIR" || echo "❌ Erreur lors de la copie !"
+  echo "✅ File found, copying..."
+  rm -f "$KLIPPER_EXTRAS_DIR/probe_pressure.py" && echo "Old version deleted." || echo "No old version to delete."
+  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
 else
-  echo "❌ Fichier introuvable dans le dépôt !"
+  echo "❌ File not found in repository!"
   exit 1
 fi
 echo "Probe Pressure ...[Done]"
 
-# Redémarrer Klipper uniquement si le script n'est PAS appelé par Moonraker
-# Moonraker redémarre automatiquement les services via managed_services
+# Restart Klipper only if the script is NOT called by Moonraker
+# Moonraker automatically restarts services via managed_services
 if [ -z "$MOONRAKER_PROCESS_UID" ]; then
     echo "Restarting Klipper service to load new modules..."
     sudo systemctl restart klipper
@@ -254,4 +254,4 @@ else
     echo "ℹ️ Script called by Moonraker - Klipper will be restarted automatically by Moonraker"
 fi
 
-echo "Installation terminée."
+echo "Installation completed."

@@ -11,7 +11,7 @@ from . import filament_switch_sensor
 
 CHECK_RUNOUT_TIMEOUT = .250  # 250ms for better responsiveness
 
-class FilamentYumiSmartMotionSensor:  # MODIFICATION ICI
+class FilamentYumiSmartMotionSensor:  # MODIFICATION HERE
     def __init__(self, config):
         # Basic configuration
         self.printer = config.get_printer()
@@ -143,7 +143,7 @@ class FilamentYumiSmartMotionSensor:  # MODIFICATION ICI
         self.last_retraction_pos = self.last_valid_pos
         self.runout_triggered = False
         self.ignore_next_pitch = False
-        
+
         logging.info("Detection reset for new print")
         self.printer.lookup_object('gcode').respond_info(
             f"// {self.sensor_name}: Filament sensor reset - ready for new detection")
@@ -259,15 +259,15 @@ class FilamentYumiSmartMotionSensor:  # MODIFICATION ICI
         elif delta < 0:  # Retraction
             retraction_delta = self.last_retraction_pos - current_pos
             abs_retraction_delta = abs(retraction_delta)
-            
+
             self.last_retraction_pos = current_pos
             self.ignore_next_pitch = True
-            
-            # CONSERVER les compteurs existants - NE PAS RÉINITIALISER
-            # self.anomaly_count = 0  # <-- À SUPPRIMER
-            # self.normal_count = 0   # <-- À SUPPRIMER
-            
-            # Mise à jour positionnelle seulement
+
+            # KEEP existing counters - DO NOT RESET
+            # self.anomaly_count = 0  # <-- TO BE REMOVED
+            # self.normal_count = 0   # <-- TO BE REMOVED
+
+            # Update position only
             self.last_valid_pos = current_pos
             self.last_event_pos = current_pos
             self.last_event_time = eventtime
@@ -342,7 +342,7 @@ class FilamentYumiSmartMotionSensor:  # MODIFICATION ICI
         self.normal_count = 0
         self.anomaly_count = 0
 
-# MODIFICATION DES FONCTIONS DE CHARGEMENT ICI
+# MODIFICATION OF LOADING FUNCTIONS HERE
 def load_config(config):
     return FilamentYumiSmartMotionSensor(config)
 
