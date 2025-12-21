@@ -263,4 +263,12 @@ fi
 cp "$PROJECT_DIR/mainsail/config.json" "$MAINSAIL_DIR/" && echo "Yumi config.json copied successfully." || echo "Error copying config.json."
 chown -R "$OWNER:$OWNER" "$MAINSAIL_DIR/config.json"
 
+# Copy default theme template for factory reset
+THEME_DIR="$USER_HOME/printer_data/config/.theme"
+if [ ! -d "$THEME_DIR" ]; then
+    mkdir -p "$THEME_DIR" && echo ".theme directory created." || echo "Error creating .theme directory."
+fi
+cp "$PROJECT_DIR/printer_data/config/theme/default.json" "$THEME_DIR/" && echo "Default theme template copied successfully." || echo "Error copying default.json."
+chown -R "$OWNER:$OWNER" "$THEME_DIR"
+
 echo "Installation completed."
