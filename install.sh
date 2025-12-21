@@ -232,4 +232,12 @@ else
 fi
 echo "Probe Pressure ...[Done]"
 
+echo "Restarting Klipper service to load new modules..."
+sudo systemctl restart klipper
+if [ $? -eq 0 ]; then
+    echo "✅ Klipper restarted successfully!"
+else
+    echo "⚠️ Warning: Failed to restart Klipper. Please restart manually with: sudo systemctl restart klipper"
+fi
+
 echo "Installation terminée."
