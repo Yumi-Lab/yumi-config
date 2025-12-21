@@ -64,7 +64,7 @@ type: git_repo
 path: ~/yumi-config
 origin: https://github.com/Yumi-Lab/yumi-config.git
 primary_branch: main
-install_script: update_klipper_modules.sh
+install_script: install.sh
 is_system_service: False
 managed_services: klipper
 
