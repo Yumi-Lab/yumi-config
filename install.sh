@@ -254,6 +254,73 @@ else
     echo "ℹ️ Script called by Moonraker - Klipper will be restarted automatically by Moonraker"
 fi
 
+# === QC System (Quality Control) ===
+echo "Installing QC System..."
+QC_DIR="$PROJECT_DIR/qc"
+if [ -d "$QC_DIR" ]; then
+    # QC Macros for Klipper
+    cp "$QC_DIR/qc_macros.cfg" "$KLIPPER_CONFIG_DIR/qc_macros.cfg" && echo "qc_macros.cfg copied successfully." || echo "Error copying qc_macros.cfg."
+
+    # Add include in printer.cfg if not present
+    if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
+        if ! grep -q "qc_macros.cfg" "$KLIPPER_CONFIG_DIR/printer.cfg"; then
+            sed -i '/include mainsail.cfg/a [include qc_macros.cfg]' "$KLIPPER_CONFIG_DIR/printer.cfg"
+            echo "Added [include qc_macros.cfg] to printer.cfg"
+        else
+            echo "[include qc_macros.cfg] already in printer.cfg"
+        fi
+    fi
+
+    # KlipperScreen panel (symlinks)
+    if [ -d "$USER_HOME/KlipperScreen/panels" ]; then
+        # QC wizard panel
+        if [ -L "$USER_HOME/KlipperScreen/panels/qc_wizard.py" ]; then
+            rm "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
+        fi
+        ln -sf "$QC_DIR/qc_wizard.py" "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
+        echo "Symlink created: panels/qc_wizard.py"
+
+        # QC engine module
+        if [ -L "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py" ]; then
+            rm "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
+        fi
+        ln -sf "$QC_DIR/qc_engine.py" "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
+        echo "Symlink created: ks_includes/qc_engine.py"
+
+        # QC icon
+        for style_dir in material-dark material-darker; do
+            if [ -d "$USER_HOME/KlipperScreen/styles/$style_dir/images" ]; then
+                cp "$QC_DIR/qc-check.svg" "$USER_HOME/KlipperScreen/styles/$style_dir/images/qc-check.svg"
+                echo "QC icon copied to $style_dir"
+            fi
+        done
+    fi
+
+    # KlipperScreen menu entry
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! grep -q "qc_wizard" "$CONFIG_FILE"; then
+            cat >> "$CONFIG_FILE" <<'QCMENU'
+
+[menu __main more qc]
+name: Quality Control
+icon: qc-check
+panel: qc_wizard
+QCMENU
+            echo "Added QC menu entry to KlipperScreen.conf"
+        else
+            echo "QC menu entry already in KlipperScreen.conf"
+        fi
+    fi
+
+    # QC reports directory
+    mkdir -p "$KLIPPER_CONFIG_DIR/qc_reports"
+    chown -R "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/qc_reports"
+    echo "QC reports directory ready."
+else
+    echo "QC directory not found, skipping QC installation."
+fi
+echo "QC System ...[Done]"
+
 echo "Configuring Mainsail settings..."
 # Replace Mainsail config.json with Yumi template
 MAINSAIL_DIR="$USER_HOME/mainsail"
