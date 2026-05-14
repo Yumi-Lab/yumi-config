@@ -338,4 +338,13 @@ fi
 cp "$PROJECT_DIR/printer_data/config/theme/default.json" "$THEME_DIR/" && echo "Default theme template copied successfully." || echo "Error copying default.json."
 chown -R "$OWNER:$OWNER" "$THEME_DIR"
 
+# Fix YUMI_SYNC service name: ensure YUMI_SYNC.service exists
+# V1 pads have yumi_sync.service (lowercase) but moonraker expects YUMI_SYNC
+if [ -f /etc/systemd/system/yumi_sync.service ] && [ ! -e /etc/systemd/system/YUMI_SYNC.service ]; then
+    echo "Fixing YUMI_SYNC service name..."
+    sudo ln -sf /etc/systemd/system/yumi_sync.service /etc/systemd/system/YUMI_SYNC.service
+    sudo systemctl daemon-reload
+    echo "YUMI_SYNC.service symlink created."
+fi
+
 echo "Installation completed."
