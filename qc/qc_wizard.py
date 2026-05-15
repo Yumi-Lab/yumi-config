@@ -67,14 +67,20 @@ class Panel(ScreenPanel):
         info_label.set_justify(Gtk.Justification.CENTER)
         box.pack_start(info_label, False, False, 5)
 
-        # Printer ID input
+        # Printer ID — auto-filled from YUMI ID (ETH0 MAC)
+        try:
+            with open("/sys/class/net/end0/address") as f:
+                yumi_id = f.read().strip().replace(":", "").upper()
+        except Exception:
+            yumi_id = "UNKNOWN"
         id_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         id_box.set_halign(Gtk.Align.CENTER)
-        id_label = Gtk.Label(label="Printer ID:")
-        id_label.set_markup("<span size='large'>Printer ID:</span>")
+        id_label = Gtk.Label()
+        id_label.set_markup(f"<span size='large'>Printer ID: {yumi_id}</span>")
         self.labels["printer_id"] = Gtk.Entry()
-        self.labels["printer_id"].set_placeholder_text("SP-2026-XXXXX")
-        self.labels["printer_id"].set_width_chars(20)
+        self.labels["printer_id"].set_text(yumi_id)
+        self.labels["printer_id"].set_editable(False)
+        self.labels["printer_id"].set_visible(False)
         id_box.pack_start(id_label, False, False, 0)
         id_box.pack_start(self.labels["printer_id"], False, False, 0)
         box.pack_start(id_box, False, False, 10)

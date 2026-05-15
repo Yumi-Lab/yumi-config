@@ -221,8 +221,8 @@ class QCEngine:
         if not message.startswith("QC:") and not message.startswith("echo: QC:"):
             return False
 
-        # Strip echo prefix if present
-        msg = message.replace("echo: ", "").strip()
+        # Strip echo/RESPOND prefix if present
+        msg = message.replace("echo: ", "").replace("// ", "").strip()
         parts = msg.split(":")
         if len(parts) < 3:
             return False
@@ -231,7 +231,7 @@ class QCEngine:
         status = parts[2]
 
         test = self.get_current_test()
-        if not test or test["id"] != test_id:
+        if not test or test["id"].lower() != test_id.lower():
             logger.warning(f"QC: Received response for {test_id} but current test is {test['id'] if test else 'none'}")
             return True
 
@@ -281,12 +281,14 @@ class QCEngine:
             "details": details,
         }
         logger.info(f"QC: Test {test_id} = {result.value}")
+        self._set_state(QCState.RUNNING)
+
+        # Auto-advance to next test
+        next_test = self.next_test()
 
         if self._on_test_complete:
             self._on_test_complete(test_id, result)
 
-        # Auto-advance to next test
-        next_test = self.next_test()
         if next_test is None:
             return  # QC finished, _finish() already called
 
