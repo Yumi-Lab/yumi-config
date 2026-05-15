@@ -157,13 +157,6 @@ QC_TESTS = [
         "macro": "QC_PID_BED",
         "timeout": 600,
     },
-    {
-        "id": "save_config",
-        "name": "Save Config",
-        "type": "automated",
-        "macro": "QC_SAVE",
-        "timeout": 30,
-    },
 ]
 
 

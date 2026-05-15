@@ -227,13 +227,16 @@ class Panel(ScreenPanel):
         # Bottom buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
-        save_btn = self._gtk.Button("sd", _("Save Report"), "color3")
+        # Show "Validate & Save Config" only if QC passed
+        overall = report.get("overall_result", "FAIL")
+        if overall == "PASS":
+            validate_btn = self._gtk.Button("complete", "Validate & Save Config", "color3")
+            validate_btn.connect("clicked", self._on_validate_save)
+            btn_box.pack_start(validate_btn, True, True, 0)
+
+        save_btn = self._gtk.Button("sd", _("Save Report"), "color2")
         save_btn.connect("clicked", self._on_save_report)
         btn_box.pack_start(save_btn, True, True, 0)
-
-        upload_btn = self._gtk.Button("network", _("Upload"), "color4")
-        upload_btn.connect("clicked", self._on_upload_report)
-        btn_box.pack_start(upload_btn, True, True, 0)
 
         new_btn = self._gtk.Button("refresh", _("New QC"), "color1")
         new_btn.connect("clicked", self._on_new_qc)
@@ -333,6 +336,13 @@ class Panel(ScreenPanel):
             self._gtk.remove_dialog(self._visual_dialog)
             self._visual_dialog = None
         self.engine.skip_current_test()
+
+    def _on_validate_save(self, widget):
+        """Save report + SAVE_CONFIG (applies PID/mesh values, restarts Klipper)."""
+        if self._current_report:
+            self.engine.save_report(self._current_report)
+        self._screen.show_popup_message("Saving config & restarting Klipper...", level=1)
+        self._screen._ws.klippy.gcode_script("SAVE_CONFIG")
 
     def _on_save_report(self, widget):
         if self._current_report:
