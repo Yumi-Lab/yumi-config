@@ -137,6 +137,13 @@ QC_TESTS = [
         "timeout": 300,
     },
     {
+        "id": "bed_mesh",
+        "name": "Bed Mesh",
+        "type": "automated",
+        "macro": "QC_BED_MESH",
+        "timeout": 600,
+    },
+    {
         "id": "pid_extruder",
         "name": "PID Extruder",
         "type": "automated",
@@ -151,11 +158,11 @@ QC_TESTS = [
         "timeout": 600,
     },
     {
-        "id": "bed_mesh",
-        "name": "Bed Mesh",
+        "id": "save_config",
+        "name": "Save Config",
         "type": "automated",
-        "macro": "QC_BED_MESH",
-        "timeout": 600,
+        "macro": "QC_SAVE",
+        "timeout": 30,
     },
 ]
 
