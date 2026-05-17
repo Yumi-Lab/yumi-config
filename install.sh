@@ -94,10 +94,13 @@ EOF
       mv "$temp_file" $KLIPPER_CONFIG_DIR/moonraker.conf
   fi
 
-  if [ "$1" == "smartpad-generic" ]; then
-  cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
-  rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg deleted successfully." || echo "Error deleting printer.cfg."
-  cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copied successfully." || echo "Error copying printer.cfg."
+  # Only replace printer.cfg on first install, never during Moonraker updates
+  if [ "$1" == "smartpad-generic" ] && [ -z "$MOONRAKER_PROCESS_UID" ]; then
+      cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
+      rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg deleted successfully." || echo "Error deleting printer.cfg."
+      cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copied successfully." || echo "Error copying printer.cfg."
+  elif [ -n "$MOONRAKER_PROCESS_UID" ]; then
+      echo "Moonraker update detected — skipping printer.cfg replacement"
   fi
 
   # Modify permissions so user "pi" retains rights on created or modified files
