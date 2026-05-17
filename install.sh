@@ -326,6 +326,17 @@ QCMENU
         fi
     fi
 
+    # Exclude symlinked files from KlipperScreen git tracking
+    KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
+    if [ -f "$KS_EXCLUDE" ]; then
+        for entry in "panels/qc_wizard.py" "panels/yumilab.py" "ks_includes/qc_engine.py"; do
+            if ! grep -qF "$entry" "$KS_EXCLUDE"; then
+                echo "$entry" >> "$KS_EXCLUDE"
+            fi
+        done
+        echo "KlipperScreen git exclude updated"
+    fi
+
     # QC reports directory
     mkdir -p "$KLIPPER_CONFIG_DIR/qc_reports"
     chown -R "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/qc_reports"
@@ -363,7 +374,6 @@ fi
 
 # === USB Offline Update Service ===
 echo "Installing USB offline update service..."
-chmod +x "$PROJECT_DIR/yumi-usb-update-check.sh"
 
 # Install script to a location accessible without sudo
 mkdir -p "$USER_HOME/.local/bin"
