@@ -1,0 +1,394 @@
+{
+  "components": {
+
+    "SMARTPAD": {
+      "parent": null,
+      "description": "SmartPad — SBC NanoPi/RPi, racine de tout le système",
+      "children": ["C_SERIES_3D_PRINTER", "HYPERDRIVE_3P2L"],
+      "cfg": {
+        "mcu_rpi": { "serial": "/tmp/klipper_host_mcu" },
+        "adxl345": { "cs_pin": "rpi:gpio13", "spi_bus": "spidev1.0" },
+        "temperature_sensor_host": { "sensor_type": "temperature_host", "min_temp": 0, "max_temp": 100 }
+      }
+    },
+
+    "C_SERIES_3D_PRINTER": {
+      "parent": "SMARTPAD",
+      "description": "Imprimante C Series — carte mère avec 2 slots extrudeur (E0, E1) + mécanique XYZ",
+      "children": ["YMS_LITE", "CHROMA_X12_HOTEND", "DIRECT_DRIVE_HOTEND"],
+      "slots": {
+        "E0": { "accepts": ["YMS_LITE", "DIRECT_DRIVE_HOTEND"], "exclusive": true, "comment": "E0 = soit un YMS soit le direct drive (mutuellement exclusif)" },
+        "E1": { "accepts": ["YMS_LITE"] }
+      },
+      "cfg": {
+        "mcu": { "serial": "/dev/ttyS1", "restart_method": "command" },
+        "printer": {
+          "kinematics": "cartesian",
+          "max_velocity": 700, "max_accel": 20000,
+          "max_z_velocity": 25, "max_z_accel": 1000
+        },
+        "idle_timeout": { "timeout": 99999999 },
+        "virtual_sdcard": { "path": "~/printer_data/gcodes/" },
+        "save_variables": { "filename": "~/printer_data/config/variables.cfg" },
+        "exclude_object": {},
+        "gcode_arcs": { "resolution": 0.1 },
+        "includes": ["plr.cfg", "timelapse.cfg", "moonraker_obico_macros.cfg"],
+        "stepper_x": {
+          "step_pin": "PB1", "dir_pin": "PB0", "enable_pin": "!PA15",
+          "microsteps": 16, "rotation_distance": 40,
+          "endstop_pin": "tmc2209_stepper_x:virtual_endstop",
+          "homing_speed": 70, "homing_retract_dist": 0
+        },
+        "tmc2209_stepper_x": {
+          "uart_pin": "PB15", "run_current": 1.2, "hold_current": 1.1,
+          "stealthchop_threshold": 0, "driver_sgthrs": 150, "diag_pin": "PA13"
+        },
+        "stepper_y": {
+          "step_pin": "PA1", "dir_pin": "!PA0", "enable_pin": "!PC5",
+          "microsteps": 16, "rotation_distance": 40,
+          "endstop_pin": "tmc2209_stepper_y:virtual_endstop",
+          "homing_speed": 50, "homing_retract_dist": 0
+        },
+        "tmc2209_stepper_y": {
+          "uart_pin": "PC11", "run_current": 1.2, "hold_current": 1.2,
+          "stealthchop_threshold": 0, "driver_sgthrs": 100, "diag_pin": "PB9"
+        },
+        "stepper_z": {
+          "step_pin": "PC3", "dir_pin": "PC2", "enable_pin": "!PC4",
+          "microsteps": 16, "rotation_distance": 8,
+          "endstop_pin": "probe:z_virtual_endstop",
+          "position_min": -5, "homing_speed": 5, "second_homing_speed": 5, "homing_retract_dist": 5
+        },
+        "tmc2209_stepper_z": {
+          "uart_pin": "PC10", "run_current": 1.2, "hold_current": 1.2, "stealthchop_threshold": 0
+        },
+        "heater_bed": {
+          "heater_pin": "PC9", "sensor_type": "EPCOS 100K B57560G104F", "sensor_pin": "PC0",
+          "control": "pid", "pid_kp": 66.717, "pid_ki": 0.847, "pid_kd": 1313.487,
+          "min_temp": 0, "max_temp": 130
+        },
+        "fan": { "pin": "PC7" },
+        "controller_fan_motherboard": {
+          "pin": "PB8", "fan_speed": 0.7, "idle_timeout": 10, "idle_speed": 0,
+          "kick_start_time": 0.01, "off_below": 0.1
+        },
+        "fan_generic_aux": { "pin": "PA2" },
+        "verify_heater_extruder": { "max_error": 500, "check_gain_time": 20, "hysteresis": 20, "heating_gain": 2 },
+        "verify_heater_bed": { "max_error": 500, "hysteresis": 10 },
+        "probe": {
+          "pin": "PA14", "x_offset": -17, "y_offset": 30,
+          "speed": 5, "samples": 6, "samples_result": "average",
+          "sample_retract_dist": 2, "samples_tolerance": 0.08, "samples_tolerance_retries": 10
+        },
+        "probe_pressure": { "pin": "!PB7", "speed": 10.0, "lift_speed": 10 },
+        "yumi_z_offset_calculator": {
+          "compression_offset": -0.1, "approach_speed": 3.0, "retract_dist": 10.0,
+          "max_probe_travel": 20.0, "max_probe_times": 10, "probe_delay": 1000,
+          "z_hop": 5, "samples_tolerance": 0.01
+        },
+        "bed_mesh": { "speed": 120, "horizontal_move_z": 10, "algorithm": "bicubic", "adaptive_margin": 5 },
+        "screws_tilt_adjust": { "horizontal_move_z": 10, "speed": 200, "screw_thread": "CCW-M3" },
+        "homing_override": { "axes": "xyz", "x_type": "sensorless", "y_type": "sensorless", "z_type": "probe" },
+        "tmc_autotune": {
+          "voltage": 24,
+          "stepper_x": { "motor": "BJ42D29-28V03", "tuning_goal": "auto", "toff": 3, "tbl": 2, "sg4_thrs": 50, "extra_hysteresis": 0, "pwm_freq_target": 25000 },
+          "stepper_y": { "motor": "BJ42D29-28V03", "tuning_goal": "auto", "toff": 3, "tbl": 2, "sg4_thrs": 50, "extra_hysteresis": 0, "pwm_freq_target": 25000 },
+          "stepper_z": { "motor": "BJ42D07-06V02", "tuning_goal": "auto", "toff": 3, "tbl": 2, "sg4_thrs": 50, "extra_hysteresis": 0, "pwm_freq_target": 25000 }
+        }
+      },
+      "overrides_by_model": {
+        "C235": {
+          "stepper_x": { "position_endstop": 257, "position_min": -10, "position_max": 257 },
+          "stepper_y": { "position_endstop": -33, "position_min": -33, "position_max": 239 },
+          "stepper_z": { "position_max": 270 },
+          "resonance_tester": { "probe_points": "115,115,20" },
+          "bed_mesh": { "mesh_min": "10,10", "mesh_max": "223,225", "probe_count": "10,10", "zero_reference_position": "100.5,147.5" },
+          "screws_tilt_adjust": { "screws": [
+            { "x": 49.5, "y": 171.5, "name": "front left screw" },
+            { "x": 220, "y": 171.5, "name": "front right screw" },
+            { "x": 220, "y": 1, "name": "rear right screw" },
+            { "x": 49.5, "y": 1, "name": "rear left screw" }
+          ]},
+          "yumi_z_offset_calculator": { "pressure_switch_x": 35, "pressure_switch_y": 185 }
+        },
+        "C335": {
+          "stepper_x": { "position_endstop": 357, "position_min": -10, "position_max": 357 },
+          "stepper_y": { "position_endstop": -33, "position_min": -33, "position_max": 335 },
+          "stepper_z": { "position_max": 340 },
+          "resonance_tester": { "probe_points": "165,165,20" },
+          "bed_mesh": { "mesh_min": "10,10", "mesh_max": "320,320", "probe_count": "10,10", "zero_reference_position": "150,150" },
+          "screws_tilt_adjust": { "screws": [
+            { "x": 49.5, "y": 271.5, "name": "front left screw" },
+            { "x": 320, "y": 271.5, "name": "front right screw" },
+            { "x": 320, "y": 1, "name": "rear right screw" },
+            { "x": 49.5, "y": 1, "name": "rear left screw" }
+          ]},
+          "yumi_z_offset_calculator": { "pressure_switch_x": 35, "pressure_switch_y": 285 }
+        },
+        "C435": {
+          "stepper_x": { "position_endstop": 457, "position_min": -10, "position_max": 457 },
+          "stepper_y": { "position_endstop": -33, "position_min": -33, "position_max": 435 },
+          "stepper_z": { "position_max": 400 },
+          "resonance_tester": { "probe_points": "215,215,20" },
+          "bed_mesh": { "mesh_min": "10,10", "mesh_max": "420,420", "probe_count": "10,10", "zero_reference_position": "200,200" },
+          "screws_tilt_adjust": { "screws": [
+            { "x": 49.5, "y": 371.5, "name": "front left screw" },
+            { "x": 420, "y": 371.5, "name": "front right screw" },
+            { "x": 420, "y": 1, "name": "rear right screw" },
+            { "x": 49.5, "y": 1, "name": "rear left screw" }
+          ]},
+          "yumi_z_offset_calculator": { "pressure_switch_x": 35, "pressure_switch_y": 385 }
+        }
+      }
+    },
+
+    "HYPERDRIVE_3P2L": {
+      "parent": "SMARTPAD",
+      "description": "Smartbox HyperDrive 3PRO+2LITE. UART=E2-E6, USB=E7-E11",
+      "children": ["YMS_PRO", "YMS_LITE"],
+      "detection": {
+        "uart": { "serial": "/dev/ttyS2", "slots": "E2-E6" },
+        "usb": { "serial": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "slots": "E7-E11" }
+      },
+      "slots": {
+        "E2": ["YMS_PRO", "YMS_LITE"],
+        "E3": ["YMS_PRO", "YMS_LITE"],
+        "E4": ["YMS_PRO", "YMS_LITE"],
+        "E5": ["YMS_LITE"],
+        "E6": ["YMS_LITE"]
+      },
+      "cfg": {
+        "mcu_smartbox": { "restart_method": "command" },
+        "controller_fan_smartbox": {
+          "pin": "smartbox:PB8", "fan_speed": 1.0, "idle_timeout": 10, "idle_speed": 0,
+          "kick_start_time": 0.01, "off_below": 0.1
+        },
+        "dryer": {
+          "name": "YMS-3-PRO",
+          "heater_pin": "smartbox:PC8", "sensor_type": "100K4190YUMI", "sensor_pin": "smartbox:PC1",
+          "max_power": 1, "control": "pid", "pid_kp": 50, "pid_ki": 50, "pid_kd": 50,
+          "min_temp": -50, "max_temp": 110,
+          "fan_pin": "smartbox:PC6", "fan_max_power": 1, "fan_off_below": 0.31, "fan_heater_temp": 25,
+          "verify_max_error": 180000, "verify_check_gain_time": 3000, "verify_hysteresis": 10, "verify_heating_gain": 2
+        }
+      }
+    },
+
+    "YMS_PRO": {
+      "parent": "HYPERDRIVE_3P2L",
+      "description": "Module YMS PRO — extrudeur avec capteur filament motion avancé. Positions E2-E4 sur HyperDrive uniquement.",
+      "children": [],
+      "cfg_base": {
+        "microsteps": 16,
+        "rotation_distance": 22.6789511,
+        "gear_ratio": "50:17",
+        "full_steps_per_rotation": 200,
+        "pressure_advance": 0.0,
+        "run_current": 1.2,
+        "hold_current": 0.3,
+        "stealthchop_threshold": 0,
+        "sensor_type": "filament_yumi_smart_motion_sensor",
+        "detection_length": 50,
+        "tmc_autotune": {
+          "motor": "BJ42D07-06V02", "tuning_goal": "auto",
+          "toff": 1, "tbl": 1, "sg4_thrs": 150, "extra_hysteresis": 2, "pwm_freq_target": 60000
+        }
+      },
+      "overrides_by_position": {
+        "E2": {
+          "name": "extruder2", "sensor_name": "YMS-3",
+          "step_pin": "smartbox:PB12", "dir_pin": "!smartbox:PB10", "enable_pin": "!smartbox:PB13",
+          "uart_pin": "smartbox:PB14", "switch_pin": "smartbox:PA13"
+        },
+        "E3": {
+          "name": "extruder3", "sensor_name": "YMS-4",
+          "step_pin": "smartbox:PA5", "dir_pin": "!smartbox:PA4", "enable_pin": "!smartbox:PA6",
+          "uart_pin": "smartbox:PA7", "switch_pin": "smartbox:PB9"
+        },
+        "E4": {
+          "name": "extruder4", "sensor_name": "YMS-5",
+          "step_pin": "smartbox:PB1", "dir_pin": "!smartbox:PB0", "enable_pin": "!smartbox:PA15",
+          "uart_pin": "smartbox:PB15", "switch_pin": "smartbox:PC13"
+        }
+      }
+    },
+
+    "YMS_LITE": {
+      "parent": ["C_SERIES_3D_PRINTER", "HYPERDRIVE_3P2L"],
+      "description": "Module YMS LITE — extrudeur simplifié. Positions E0-E1 sur carte mère, E2-E6 sur HyperDrive.",
+      "children": [],
+      "cfg_base": {
+        "microsteps": 16,
+        "rotation_distance": 25,
+        "gear_ratio": "50:17",
+        "full_steps_per_rotation": 200,
+        "pressure_advance": 0.0,
+        "run_current": 1.2,
+        "hold_current": 0.3,
+        "stealthchop_threshold": 0,
+        "sensor_type": "filament_motion_sensor",
+        "detection_length": 50,
+        "tmc_autotune": {
+          "motor": "BJ42D07-06V02", "tuning_goal": "auto",
+          "toff": 1, "tbl": 1, "sg4_thrs": 150, "extra_hysteresis": 2, "pwm_freq_target": 60000
+        }
+      },
+      "overrides_by_position": {
+        "E0": {
+          "mcu": "main", "name": "extruder0", "sensor_name": "YMS-1",
+          "step_pin": "PB12", "dir_pin": "PB10", "enable_pin": "!PB13",
+          "uart_pin": "PB14", "switch_pin": "!PC14"
+        },
+        "E1": {
+          "mcu": "main", "name": "extruder1", "sensor_name": "YMS-2",
+          "step_pin": "PA5", "dir_pin": "PA4", "enable_pin": "!PA6",
+          "uart_pin": "PA7", "switch_pin": "PC13"
+        },
+        "E2": {
+          "mcu": "smartbox", "name": "extruder2", "sensor_name": "YMS-3",
+          "step_pin": "smartbox:PB12", "dir_pin": "!smartbox:PB10", "enable_pin": "!smartbox:PB13",
+          "uart_pin": "smartbox:PB14", "switch_pin": "smartbox:PA13"
+        },
+        "E3": {
+          "mcu": "smartbox", "name": "extruder3", "sensor_name": "YMS-4",
+          "step_pin": "smartbox:PA5", "dir_pin": "!smartbox:PA4", "enable_pin": "!smartbox:PA6",
+          "uart_pin": "smartbox:PA7", "switch_pin": "smartbox:PB9"
+        },
+        "E4": {
+          "mcu": "smartbox", "name": "extruder4", "sensor_name": "YMS-5",
+          "step_pin": "smartbox:PB1", "dir_pin": "!smartbox:PB0", "enable_pin": "!smartbox:PA15",
+          "uart_pin": "smartbox:PB15", "switch_pin": "smartbox:PC13"
+        },
+        "E5": {
+          "mcu": "smartbox", "name": "extruder5", "sensor_name": "YMS-6",
+          "step_pin": "smartbox:PA1", "dir_pin": "!smartbox:PA0", "enable_pin": "!smartbox:PC5",
+          "uart_pin": "smartbox:PC11", "switch_pin": "smartbox:PC14",
+          "detection_length": 4
+        },
+        "E6": {
+          "mcu": "smartbox", "name": "extruder6", "sensor_name": "YMS-7",
+          "step_pin": "smartbox:PC3", "dir_pin": "!smartbox:PC2", "enable_pin": "!smartbox:PC4",
+          "uart_pin": "smartbox:PC10", "switch_pin": "smartbox:PB7",
+          "detection_length": 4
+        }
+      }
+    },
+
+    "CHROMA_X12_HOTEND": {
+      "parent": "C_SERIES_3D_PRINTER",
+      "description": "Hotend Chroma X12 — extrudeur principal avec thermistance 100K4190YUMI",
+      "children": ["HOTEND_LOW_WASTE", "HOTEND_HIGH_FLOW"],
+      "cfg": {
+        "thermistor_100K4190YUMI": { "temperature1": 25, "resistance1": 100000, "beta": 4300 },
+        "extruder": {
+          "max_extrude_only_velocity": 500,
+          "step_pin": "PA12", "dir_pin": "PA11", "enable_pin": "PA3",
+          "rotation_distance": 25, "gear_ratio": "50:17",
+          "microsteps": 16, "full_steps_per_rotation": 200,
+          "filament_diameter": 1.75,
+          "heater_pin": "PC8", "sensor_type": "100K4190YUMI", "sensor_pin": "PC1",
+          "min_temp": -200, "max_temp": 300,
+          "max_extrude_only_distance": 8000.0, "max_extrude_cross_section": 40,
+          "min_extrude_temp": 0, "pressure_advance": 0
+        },
+        "heater_fan_hotend": {
+          "pin": "PC6", "max_power": 1, "kick_start_time": 0.5,
+          "heater": "extruder", "heater_temp": 50.0, "fan_speed": 1, "shutdown_speed": 1.0
+        }
+      }
+    },
+
+    "DIRECT_DRIVE_HOTEND": {
+      "parent": "C_SERIES_3D_PRINTER",
+      "description": "Hotend Direct Drive — extrudeur direct sans gear ratio. Occupe le slot E0 (pas de YMS en E0).",
+      "occupies_slot": "E0",
+      "children": ["HOTEND_LOW_WASTE", "HOTEND_HIGH_FLOW"],
+      "cfg": {
+        "thermistor_100K4190YUMI": { "temperature1": 25, "resistance1": 100000, "beta": 4300 },
+        "extruder": {
+          "max_extrude_only_velocity": 500,
+          "step_pin": "PA12", "dir_pin": "PA11", "enable_pin": "PA3",
+          "rotation_distance": 4.5, "gear_ratio": null,
+          "microsteps": 16, "full_steps_per_rotation": 200,
+          "filament_diameter": 1.75,
+          "heater_pin": "PC8", "sensor_type": "100K4190YUMI", "sensor_pin": "PC1",
+          "min_temp": -200, "max_temp": 300,
+          "max_extrude_only_distance": 8000.0, "max_extrude_cross_section": 40,
+          "min_extrude_temp": 0, "pressure_advance": 0
+        },
+        "heater_fan_hotend": {
+          "pin": "PC6", "max_power": 1, "kick_start_time": 0.5,
+          "heater": "extruder", "heater_temp": 50.0, "fan_speed": 1, "shutdown_speed": 1.0
+        }
+      }
+    },
+
+    "HOTEND_LOW_WASTE": {
+      "parent": ["CHROMA_X12_HOTEND", "DIRECT_DRIVE_HOTEND"],
+      "description": "Hotend Low Waste — optimisé purge minimale au changement filament",
+      "children": ["NOZZLE_SIZE"],
+      "cfg": {
+        "thermistor_100K4190YUMI": { "temperature1": 25, "resistance1": 100000, "beta": 4300 },
+        "extruder": {
+          "max_extrude_only_velocity": 500,
+          "step_pin": "PA12", "dir_pin": "PA11", "enable_pin": "PA3",
+          "rotation_distance": 25, "gear_ratio": "50:17",
+          "microsteps": 16, "full_steps_per_rotation": 200,
+          "filament_diameter": 1.75,
+          "heater_pin": "PC8", "sensor_type": "100K4190YUMI", "sensor_pin": "PC1",
+          "min_temp": -200, "max_temp": 300,
+          "max_extrude_only_distance": 8000.0, "max_extrude_cross_section": 40,
+          "min_extrude_temp": 0, "pressure_advance": 0
+        },
+        "heater_fan_hotend": {
+          "pin": "PC6", "max_power": 1, "kick_start_time": 0.5,
+          "heater": "extruder", "heater_temp": 50.0, "fan_speed": 1, "shutdown_speed": 1.0
+        }
+      }
+    },
+
+    "HOTEND_HIGH_FLOW": {
+      "parent": ["CHROMA_X12_HOTEND", "DIRECT_DRIVE_HOTEND"],
+      "description": "Hotend High Flow — débit élevé, impressions rapides",
+      "children": ["NOZZLE_SIZE"],
+      "cfg": {
+        "thermistor_100K4190YUMI": { "temperature1": 25, "resistance1": 100000, "beta": 4300 },
+        "extruder": {
+          "max_extrude_only_velocity": 500,
+          "step_pin": "PA12", "dir_pin": "PA11", "enable_pin": "PA3",
+          "rotation_distance": 25, "gear_ratio": "50:17",
+          "microsteps": 16, "full_steps_per_rotation": 200,
+          "filament_diameter": 1.75,
+          "heater_pin": "PC8", "sensor_type": "100K4190YUMI", "sensor_pin": "PC1",
+          "min_temp": -200, "max_temp": 350,
+          "max_extrude_only_distance": 8000.0, "max_extrude_cross_section": 80,
+          "min_extrude_temp": 0, "pressure_advance": 0
+        },
+        "heater_fan_hotend": {
+          "pin": "PC6", "max_power": 1, "kick_start_time": 0.5,
+          "heater": "extruder", "heater_temp": 50.0, "fan_speed": 1, "shutdown_speed": 1.0
+        }
+      }
+    },
+
+    "NOZZLE_SIZE": {
+      "parent": ["HOTEND_LOW_WASTE", "HOTEND_HIGH_FLOW"],
+      "description": "Override diamètre de buse",
+      "children": [],
+      "overrides_by_variant": {
+        "0.2": { "extruder": { "nozzle_diameter": 0.2 } },
+        "0.4": { "extruder": { "nozzle_diameter": 0.4 } },
+        "0.6": { "extruder": { "nozzle_diameter": 0.6 } },
+        "0.8": { "extruder": { "nozzle_diameter": 0.8 } },
+        "1.0": { "extruder": { "nozzle_diameter": 1.0 } }
+      }
+    }
+  },
+
+  "motor_constants": {
+    "BJ42D29-28V31": { "comment": "MOTOR X/Y C SERIES", "resistance": 1.4, "inductance": 0.0026, "holding_torque": 0.460, "max_current": 1.5, "steps_per_revolution": 200 },
+    "BJ42D29-28V03": { "comment": "MOTOR Y C435", "resistance": 1.4, "inductance": 0.0026, "holding_torque": 0.460, "max_current": 1.5, "steps_per_revolution": 200 },
+    "BJ42D07-06V02": { "comment": "YMS MOTOR", "resistance": 1.4, "inductance": 0.0022, "holding_torque": 0.16, "max_current": 1.20, "steps_per_revolution": 200 },
+    "BJ42D07-03V05": { "comment": "1GEN YMS MOTOR", "resistance": 4.3, "inductance": 0.0058, "holding_torque": 0.150, "max_current": 0.84, "steps_per_revolution": 200 }
+  }
+}
