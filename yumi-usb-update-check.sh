@@ -13,16 +13,16 @@ log() {
 
 log "=== yumi-usb-update-check started ==="
 
-# Wait for USB mount (up to 30s)
-for i in $(seq 1 30); do
-    if [ -d "$USB_DIR" ]; then
+# Wait for USB mount (up to 60s)
+for i in $(seq 1 60); do
+    if mountpoint -q "$USB_DIR" 2>/dev/null; then
         break
     fi
     sleep 1
 done
 
-if [ ! -d "$USB_DIR" ]; then
-    log "USB directory not found: $USB_DIR — skipping"
+if ! mountpoint -q "$USB_DIR" 2>/dev/null; then
+    log "USB not mounted at $USB_DIR — skipping"
     exit 0
 fi
 
@@ -63,8 +63,8 @@ else
     log "WARNING: yumi-update.sh exited with code $EXIT_CODE"
 fi
 
-# Cleanup — one-shot
-rm -f "$UPDATE_ZIP"
+# Cleanup — rename zip to .backup (one-shot, won't re-run)
+mv "$UPDATE_ZIP" "${UPDATE_ZIP%.zip}.backup"
 rm -rf "$WORK_DIR"
-log "yumi-update.zip removed — update cycle complete"
+log "yumi-update.zip renamed to .backup — update cycle complete"
 log "=== yumi-usb-update-check finished ==="
