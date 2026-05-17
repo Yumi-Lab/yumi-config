@@ -401,4 +401,41 @@ fi
 echo -1 2>/dev/null | run_privileged tee /sys/module/usbcore/parameters/autosuspend > /dev/null 2>&1
 echo "USB autosuspend fix ...[Done]"
 
+# === CFG Wizard KlipperScreen Panel ===
+echo "Installing CFG Wizard panel..."
+CFG_WIZARD_SRC="$PROJECT_DIR/generator/cfg_wizard.py"
+if [ -f "$CFG_WIZARD_SRC" ] && [ -d "$USER_HOME/KlipperScreen/panels" ]; then
+    # Symlink panel
+    rm -f "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    ln -sf "$CFG_WIZARD_SRC" "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    echo "Symlink created: panels/cfg_wizard.py"
+
+    # Add menu entry to KlipperScreen.conf
+    CONFIG_FILE="$KLIPPER_CONFIG_DIR/KlipperScreen.conf"
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! grep -q "cfg_wizard" "$CONFIG_FILE"; then
+            cat >> "$CONFIG_FILE" << 'CFGMENU'
+
+[menu __main more CfgWizard]
+name: Printer Config
+icon: settings
+panel: cfg_wizard
+CFGMENU
+            echo "Added CFG Wizard menu entry to KlipperScreen.conf"
+        else
+            echo "CFG Wizard menu entry already in KlipperScreen.conf"
+        fi
+    fi
+
+    # Exclude from KlipperScreen git tracking
+    KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
+    if [ -f "$KS_EXCLUDE" ]; then
+        if ! grep -qF "panels/cfg_wizard.py" "$KS_EXCLUDE"; then
+            echo "panels/cfg_wizard.py" >> "$KS_EXCLUDE"
+        fi
+        echo "KlipperScreen git exclude updated for cfg_wizard"
+    fi
+fi
+echo "CFG Wizard panel ...[Done]"
+
 echo "Installation completed."
