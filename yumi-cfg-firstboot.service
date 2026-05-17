@@ -1,0 +1,16 @@
+[Unit]
+Description=Yumi CFG Generator — Firstboot hardware detection and printer.cfg generation
+After=klipper.service
+Wants=klipper.service
+ConditionPathExists=!/home/pi/printer_data/config/.yumi_cfg_generated
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/yumi-cfg-firstboot.sh
+ExecStartPost=/bin/touch /home/pi/printer_data/config/.yumi_cfg_generated
+TimeoutStartSec=120
+User=root
+
+[Install]
+WantedBy=multi-user.target

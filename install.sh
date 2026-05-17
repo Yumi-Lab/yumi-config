@@ -361,4 +361,45 @@ sudo systemctl enable yumi-usb-update.service
 echo "yumi-usb-update.service enabled at boot"
 echo "USB offline update service ...[Done]"
 
+# === CFG Generator + Maintenance Monitor ===
+echo "Installing CFG Generator and Maintenance modules..."
+
+GENERATOR_DIR="$PROJECT_DIR/generator"
+MAINTENANCE_DIR="$PROJECT_DIR/maintenance"
+
+# Symlink maintenance monitor as klippy extra
+if [ -f "$MAINTENANCE_DIR/monitor.py" ]; then
+    rm -f "$KLIPPER_EXTRAS_DIR/yumi_maintenance.py"
+    ln -sf "$MAINTENANCE_DIR/monitor.py" "$KLIPPER_EXTRAS_DIR/yumi_maintenance.py"
+    echo "yumi_maintenance.py symlinked to klippy extras"
+else
+    echo "Warning: maintenance/monitor.py not found, skipping"
+fi
+
+# Symlink maintenance thresholds to printer_data/config
+if [ -f "$MAINTENANCE_DIR/thresholds.json" ]; then
+    rm -f "$KLIPPER_CONFIG_DIR/maintenance_thresholds.json"
+    ln -sf "$MAINTENANCE_DIR/thresholds.json" "$KLIPPER_CONFIG_DIR/maintenance_thresholds.json"
+    echo "maintenance_thresholds.json symlinked to config"
+fi
+
+# Install firstboot CFG generator service
+FIRSTBOOT_SCRIPT="/usr/local/bin/yumi-cfg-firstboot.sh"
+FIRSTBOOT_SERVICE="/etc/systemd/system/yumi-cfg-firstboot.service"
+
+if [ -f "$PROJECT_DIR/yumi-cfg-firstboot.sh" ]; then
+    sudo cp "$PROJECT_DIR/yumi-cfg-firstboot.sh" "$FIRSTBOOT_SCRIPT"
+    sudo chmod +x "$FIRSTBOOT_SCRIPT"
+    echo "yumi-cfg-firstboot.sh installed to $FIRSTBOOT_SCRIPT"
+fi
+
+if [ -f "$PROJECT_DIR/yumi-cfg-firstboot.service" ]; then
+    sudo cp "$PROJECT_DIR/yumi-cfg-firstboot.service" "$FIRSTBOOT_SERVICE"
+    sudo systemctl daemon-reload
+    sudo systemctl enable yumi-cfg-firstboot.service
+    echo "yumi-cfg-firstboot.service enabled at boot"
+fi
+
+echo "CFG Generator + Maintenance ...[Done]"
+
 echo "Installation completed."
