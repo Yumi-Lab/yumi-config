@@ -1,11 +1,11 @@
 #!/bin/bash
 # yumi-usb-update-check.sh — Offline USB update mechanism for YumiOS
-# Scans USB mount point for .yumi-update trigger file and executes update script
+# Scans USB mount point for yumi-update.zip, extracts and executes yumi-update.sh
 
 LOG="/var/log/yumi-update.log"
 USB_DIR="/home/pi/printer_data/gcodes/USB"
-TRIGGER="$USB_DIR/.yumi-update"
-UPDATE_SCRIPT="$USB_DIR/yumi-update.sh"
+UPDATE_ZIP="$USB_DIR/yumi-update.zip"
+WORK_DIR="/tmp/yumi-update"
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$LOG"
@@ -26,25 +26,34 @@ if [ ! -d "$USB_DIR" ]; then
     exit 0
 fi
 
-if [ ! -f "$TRIGGER" ]; then
-    log "No .yumi-update trigger found — nothing to do"
+if [ ! -f "$UPDATE_ZIP" ]; then
+    log "No yumi-update.zip found — nothing to do"
     exit 0
 fi
 
-log "Trigger .yumi-update found"
+log "yumi-update.zip found — extracting..."
 
-if [ ! -f "$UPDATE_SCRIPT" ]; then
-    log "ERROR: trigger present but yumi-update.sh not found in $USB_DIR"
-    rm -f "$TRIGGER"
+# Clean and create work directory
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR"
+
+unzip -o "$UPDATE_ZIP" -d "$WORK_DIR" >> "$LOG" 2>&1
+if [ $? -ne 0 ]; then
+    log "ERROR: failed to extract yumi-update.zip"
+    rm -rf "$WORK_DIR"
     exit 1
 fi
 
-if [ ! -x "$UPDATE_SCRIPT" ]; then
-    chmod +x "$UPDATE_SCRIPT"
-    log "Made yumi-update.sh executable"
+UPDATE_SCRIPT="$WORK_DIR/yumi-update.sh"
+
+if [ ! -f "$UPDATE_SCRIPT" ]; then
+    log "ERROR: yumi-update.sh not found inside zip"
+    rm -rf "$WORK_DIR"
+    exit 1
 fi
 
-log "Executing $UPDATE_SCRIPT ..."
+chmod +x "$UPDATE_SCRIPT"
+log "Executing yumi-update.sh ..."
 bash "$UPDATE_SCRIPT" >> "$LOG" 2>&1
 EXIT_CODE=$?
 
@@ -54,7 +63,8 @@ else
     log "WARNING: yumi-update.sh exited with code $EXIT_CODE"
 fi
 
-# Remove trigger — one-shot
-rm -f "$TRIGGER"
-log "Trigger .yumi-update removed — update cycle complete"
+# Cleanup — one-shot
+rm -f "$UPDATE_ZIP"
+rm -rf "$WORK_DIR"
+log "yumi-update.zip removed — update cycle complete"
 log "=== yumi-usb-update-check finished ==="
