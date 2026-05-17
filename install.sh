@@ -288,16 +288,12 @@ if [ -d "$QC_DIR" ]; then
     # KlipperScreen panel (symlinks)
     if [ -d "$USER_HOME/KlipperScreen/panels" ]; then
         # QC wizard panel
-        if [ -L "$USER_HOME/KlipperScreen/panels/qc_wizard.py" ]; then
-            rm "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
-        fi
+        rm -f "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
         ln -sf "$QC_DIR/qc_wizard.py" "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
         echo "Symlink created: panels/qc_wizard.py"
 
         # QC engine module
-        if [ -L "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py" ]; then
-            rm "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
-        fi
+        rm -f "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
         ln -sf "$QC_DIR/qc_engine.py" "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
         echo "Symlink created: ks_includes/qc_engine.py"
 
