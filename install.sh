@@ -62,16 +62,11 @@ function install {
   echo "Creating a new update_yumi-config.cfg file with cat EOF..."
   cat > $KLIPPER_CONFIG_DIR/update_yumi-config.cfg << EOF
 # yumi-config update_manager entry
-# Moonraker will automatically:
-# 1. Pull the latest changes from the git repository
-# 2. Execute install.sh after each update
-# 3. Restart Klipper service automatically
 [update_manager yumi-config]
 type: git_repo
 path: ~/yumi-config
 origin: https://github.com/Yumi-Lab/yumi-config.git
 primary_branch: main
-install_script: install.sh
 system_dependencies: system_dependencies.json
 is_system_service: False
 managed_services: klipper
