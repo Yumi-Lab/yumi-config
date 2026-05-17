@@ -1,15 +1,14 @@
 [Unit]
 Description=Yumi USB Offline Update Check
 After=local-fs.target
-ConditionPathIsDirectory=/home/pi/printer_data/gcodes/USB
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/yumi-usb-update-check.sh
+ExecStart=%h/yumi-config/yumi-usb-update-check.sh
 TimeoutStartSec=180
 StandardOutput=journal
 StandardError=journal
 RemainAfterExit=no
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

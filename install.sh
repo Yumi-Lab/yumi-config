@@ -42,6 +42,16 @@ echo "Config directory: $KLIPPER_CONFIG_DIR"
 KLIPPER_EXTRAS_DIR="$KLIPPER_DIR/klippy/extras"
 echo "Klipper extras directory: $KLIPPER_EXTRAS_DIR"
 
+# Helper: run with sudo if available, otherwise run directly
+run_privileged() {
+    if sudo -n true 2>/dev/null; then
+        sudo "$@"
+    else
+        echo "WARNING: no sudo access, skipping privileged command: $*"
+        return 1
+    fi
+}
+
 # Define the installation function
 function install {
   # Replace project files in the Klipper directory
@@ -132,9 +142,9 @@ pip3 install qrcode[pil]
 # Define the klipperscreen.conf file path
 CONFIG_FILE="$KLIPPER_CONFIG_DIR/KlipperScreen.conf"
 # Copy KlipperScreen icons
-sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg"
+cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-dark/images/Yumi-Lab-Picto.svg"
 ls "$USER_HOME/KlipperScreen/styles/material-dark/images/"
-sudo cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg"
+cp "$PROJECT_DIR/Wanhao D12 Expert/Icon_klipperscreen/Yumi-Lab-Picto.svg" "$USER_HOME/KlipperScreen/styles/material-darker/images/Yumi-Lab-Picto.svg"
 ls "$USER_HOME/KlipperScreen/styles/material-darker/images/"
 
 # Define the block to add
@@ -248,7 +258,7 @@ echo "Probe Pressure ...[Done]"
 # Moonraker automatically restarts services via managed_services
 if [ -z "$MOONRAKER_PROCESS_UID" ]; then
     echo "Restarting Klipper service to load new modules..."
-    sudo systemctl restart klipper
+    run_privileged systemctl restart klipper
     if [ $? -eq 0 ]; then
         echo "✅ Klipper restarted successfully!"
     else
@@ -346,42 +356,48 @@ chown -R "$OWNER:$OWNER" "$THEME_DIR"
 # V1 pads have yumi_sync.service (lowercase) but moonraker expects YUMI_SYNC
 if [ -f /etc/systemd/system/yumi_sync.service ] && [ ! -e /etc/systemd/system/YUMI_SYNC.service ]; then
     echo "Fixing YUMI_SYNC service name..."
-    sudo ln -sf /etc/systemd/system/yumi_sync.service /etc/systemd/system/YUMI_SYNC.service
-    sudo systemctl daemon-reload
+    run_privileged ln -sf /etc/systemd/system/yumi_sync.service /etc/systemd/system/YUMI_SYNC.service
+    run_privileged systemctl daemon-reload
     echo "YUMI_SYNC.service symlink created."
 fi
 
-# === USB Offline Update Service ===
+# === USB Offline Update Service (user-space, no sudo needed) ===
 echo "Installing USB offline update service..."
-USB_SCRIPT="/usr/local/bin/yumi-usb-update-check.sh"
-USB_SERVICE="/etc/systemd/system/yumi-usb-update.service"
+chmod +x "$PROJECT_DIR/yumi-usb-update-check.sh"
 
-sudo cp "$PROJECT_DIR/yumi-usb-update-check.sh" "$USB_SCRIPT"
-sudo chmod +x "$USB_SCRIPT"
-echo "yumi-usb-update-check.sh installed to $USB_SCRIPT"
+# Install as user systemd service
+USER_SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
+mkdir -p "$USER_SYSTEMD_DIR"
+cp "$PROJECT_DIR/yumi-usb-update.service" "$USER_SYSTEMD_DIR/yumi-usb-update.service"
 
-sudo cp "$PROJECT_DIR/yumi-usb-update.service" "$USB_SERVICE"
-sudo systemctl daemon-reload
-sudo systemctl enable yumi-usb-update.service
-echo "yumi-usb-update.service enabled at boot"
+# Enable user service (requires loginctl enable-linger for boot start)
+systemctl --user daemon-reload 2>/dev/null
+systemctl --user enable yumi-usb-update.service 2>/dev/null
+
+# Enable lingering so user services start at boot without login
+run_privileged loginctl enable-linger "$OWNER" 2>/dev/null
+
+echo "yumi-usb-update.service installed as user service"
 echo "USB offline update service ...[Done]"
 
 # === Fix WiFi USB dongle autosuspend ===
 echo "Fixing USB autosuspend for WiFi dongles..."
 UDEV_RULE="/etc/udev/rules.d/99-usb-no-autosuspend.rules"
 if [ ! -f "$UDEV_RULE" ]; then
-    cat <<'UDEV' | sudo tee "$UDEV_RULE" > /dev/null
+    if run_privileged tee "$UDEV_RULE" > /dev/null <<'UDEV'
 # Disable USB autosuspend for all USB devices
 # Prevents WiFi dongles (RTL8188EUS etc.) from failing to re-enumerate after reboot
 ACTION=="add", SUBSYSTEM=="usb", ATTR{power/control}="on"
 UDEV
-    sudo udevadm control --reload-rules
-    echo "USB autosuspend udev rule installed"
+    then
+        run_privileged udevadm control --reload-rules
+        echo "USB autosuspend udev rule installed"
+    fi
 else
     echo "USB autosuspend udev rule already present"
 fi
-# Disable autosuspend immediately for current session
-echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend > /dev/null 2>&1
+# Disable autosuspend immediately for current session (best effort)
+echo -1 2>/dev/null | run_privileged tee /sys/module/usbcore/parameters/autosuspend > /dev/null 2>&1
 echo "USB autosuspend fix ...[Done]"
 
 echo "Installation completed."
