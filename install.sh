@@ -72,6 +72,7 @@ path: ~/yumi-config
 origin: https://github.com/Yumi-Lab/yumi-config.git
 primary_branch: main
 install_script: install.sh
+requirements: requirements.txt
 is_system_service: False
 managed_services: klipper
 
