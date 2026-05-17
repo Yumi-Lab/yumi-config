@@ -366,4 +366,22 @@ sudo systemctl enable yumi-usb-update.service
 echo "yumi-usb-update.service enabled at boot"
 echo "USB offline update service ...[Done]"
 
+# === Fix WiFi USB dongle autosuspend ===
+echo "Fixing USB autosuspend for WiFi dongles..."
+UDEV_RULE="/etc/udev/rules.d/99-usb-no-autosuspend.rules"
+if [ ! -f "$UDEV_RULE" ]; then
+    cat <<'UDEV' | sudo tee "$UDEV_RULE" > /dev/null
+# Disable USB autosuspend for all USB devices
+# Prevents WiFi dongles (RTL8188EUS etc.) from failing to re-enumerate after reboot
+ACTION=="add", SUBSYSTEM=="usb", ATTR{power/control}="on"
+UDEV
+    sudo udevadm control --reload-rules
+    echo "USB autosuspend udev rule installed"
+else
+    echo "USB autosuspend udev rule already present"
+fi
+# Disable autosuspend immediately for current session
+echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend > /dev/null 2>&1
+echo "USB autosuspend fix ...[Done]"
+
 echo "Installation completed."
