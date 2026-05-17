@@ -361,23 +361,23 @@ if [ -f /etc/systemd/system/yumi_sync.service ] && [ ! -e /etc/systemd/system/YU
     echo "YUMI_SYNC.service symlink created."
 fi
 
-# === USB Offline Update Service (user-space, no sudo needed) ===
+# === USB Offline Update Service ===
 echo "Installing USB offline update service..."
 chmod +x "$PROJECT_DIR/yumi-usb-update-check.sh"
 
-# Install as user systemd service
-USER_SYSTEMD_DIR="$USER_HOME/.config/systemd/user"
-mkdir -p "$USER_SYSTEMD_DIR"
-cp "$PROJECT_DIR/yumi-usb-update.service" "$USER_SYSTEMD_DIR/yumi-usb-update.service"
+# Install script to a location accessible without sudo
+mkdir -p "$USER_HOME/.local/bin"
+cp "$PROJECT_DIR/yumi-usb-update-check.sh" "$USER_HOME/.local/bin/yumi-usb-update-check.sh"
+chmod +x "$USER_HOME/.local/bin/yumi-usb-update-check.sh"
 
-# Enable user service (requires loginctl enable-linger for boot start)
-systemctl --user daemon-reload 2>/dev/null
-systemctl --user enable yumi-usb-update.service 2>/dev/null
-
-# Enable lingering so user services start at boot without login
-run_privileged loginctl enable-linger "$OWNER" 2>/dev/null
-
-echo "yumi-usb-update.service installed as user service"
+# Install systemd service (requires sudo)
+if run_privileged cp "$PROJECT_DIR/yumi-usb-update.service" /etc/systemd/system/yumi-usb-update.service; then
+    run_privileged systemctl daemon-reload
+    run_privileged systemctl enable yumi-usb-update.service
+    echo "yumi-usb-update.service enabled at boot"
+else
+    echo "WARNING: no sudo access, skipping systemd service install"
+fi
 echo "USB offline update service ...[Done]"
 
 # === Fix WiFi USB dongle autosuspend ===

@@ -4,11 +4,11 @@ After=local-fs.target
 
 [Service]
 Type=oneshot
-ExecStart=%h/yumi-config/yumi-usb-update-check.sh
+ExecStart=/home/pi/.local/bin/yumi-usb-update-check.sh
 TimeoutStartSec=180
 StandardOutput=journal
 StandardError=journal
 RemainAfterExit=no
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
