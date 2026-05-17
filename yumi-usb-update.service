@@ -6,6 +6,7 @@ ConditionPathIsDirectory=/home/pi/printer_data/gcodes/USB
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/yumi-usb-update-check.sh
+TimeoutStartSec=180
 StandardOutput=journal
 StandardError=journal
 RemainAfterExit=no
