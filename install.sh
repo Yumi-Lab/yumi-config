@@ -325,7 +325,7 @@ QCMENU
     # Exclude symlinked files from KlipperScreen git tracking
     KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
     if [ -f "$KS_EXCLUDE" ]; then
-        for entry in "panels/qc_wizard.py" "panels/yumilab.py" "ks_includes/qc_engine.py"; do
+        for entry in "panels/qc_wizard.py" "panels/yumilab.py" "ks_includes/qc_engine.py" "styles/material-dark/images/Yumi-Lab-Picto.svg" "styles/material-dark/images/qc-check.svg" "styles/material-darker/images/Yumi-Lab-Picto.svg" "styles/material-darker/images/qc-check.svg"; do
             if ! grep -qF "$entry" "$KS_EXCLUDE"; then
                 echo "$entry" >> "$KS_EXCLUDE"
             fi
