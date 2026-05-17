@@ -16,6 +16,18 @@ import sys
 import argparse
 from pathlib import Path
 
+from macros_yms import (
+    render_tool_macros, render_yms_utility_macros,
+    render_pressure_advance_override, render_heater_temperature_override,
+    render_purge_macros
+)
+from macros_core import (
+    render_pause_resume_cancel, render_print_start_end,
+    render_filament_macros, render_gcode_offset,
+    render_calibration_macros, render_bed_detection_macros,
+    render_marlin_compat
+)
+
 # Repertoire du generateur
 GENERATOR_DIR = Path(__file__).parent
 PRODUCTS_FILE = GENERATOR_DIR / "products.json"
@@ -768,6 +780,19 @@ def generate(model, yms_count, hotend_type="chroma_x12"):
         render_sensors(cfg),
         render_probe(cfg),
         render_homing(cfg),
+        # Macros
+        render_heater_temperature_override(cfg),
+        render_pressure_advance_override(cfg),
+        render_purge_macros(cfg),
+        render_yms_utility_macros(cfg),
+        render_tool_macros(cfg),
+        render_pause_resume_cancel(cfg),
+        render_print_start_end(cfg),
+        render_filament_macros(cfg),
+        render_gcode_offset(cfg),
+        render_calibration_macros(cfg),
+        render_bed_detection_macros(cfg),
+        render_marlin_compat(cfg),
     ]
 
     return "\n".join(sections)
