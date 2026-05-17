@@ -348,4 +348,19 @@ if [ -f /etc/systemd/system/yumi_sync.service ] && [ ! -e /etc/systemd/system/YU
     echo "YUMI_SYNC.service symlink created."
 fi
 
+# === USB Offline Update Service ===
+echo "Installing USB offline update service..."
+USB_SCRIPT="/usr/local/bin/yumi-usb-update-check.sh"
+USB_SERVICE="/etc/systemd/system/yumi-usb-update.service"
+
+sudo cp "$PROJECT_DIR/yumi-usb-update-check.sh" "$USB_SCRIPT"
+sudo chmod +x "$USB_SCRIPT"
+echo "yumi-usb-update-check.sh installed to $USB_SCRIPT"
+
+sudo cp "$PROJECT_DIR/yumi-usb-update.service" "$USB_SERVICE"
+sudo systemctl daemon-reload
+sudo systemctl enable yumi-usb-update.service
+echo "yumi-usb-update.service enabled at boot"
+echo "USB offline update service ...[Done]"
+
 echo "Installation completed."
