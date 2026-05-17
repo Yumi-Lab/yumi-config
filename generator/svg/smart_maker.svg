@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 350" width="600" height="350">
+  <style>
+    .board { fill: #1a3c5c; stroke: #0d1f35; stroke-width: 2; }
+    .connector { fill: #333; stroke: #666; stroke-width: 1; }
+    .pin-label { font-family: monospace; font-size: 8px; fill: #fff; }
+    .section-label { font-family: sans-serif; font-size: 10px; fill: #ccc; font-weight: bold; }
+    .status-detected { fill: #4caf50; }
+    .status-open-load { fill: #ff9800; }
+    .status-absent { fill: #f44336; }
+    .status-unknown { fill: #9e9e9e; }
+  </style>
+
+  <!-- PCB Board -->
+  <rect class="board" x="10" y="10" width="580" height="330" rx="5"/>
+
+  <!-- Title -->
+  <text x="300" y="35" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#fff" font-weight="bold">SMART MAKER / HYPERDRIVE 3P2L</text>
+
+  <!-- E2 (slot_0) -->
+  <g id="conn_e2">
+    <rect class="connector" x="30" y="60" width="100" height="60" rx="3"/>
+    <text class="section-label" x="80" y="55">E2 — YMS-3</text>
+    <text class="pin-label" x="35" y="75">STEP: PB12</text>
+    <text class="pin-label" x="35" y="85">DIR:  !PB10</text>
+    <text class="pin-label" x="35" y="95">EN:   !PB13</text>
+    <text class="pin-label" x="35" y="105">UART: PB14</text>
+    <text class="pin-label" x="35" y="115">SENS: PA13</text>
+    <circle id="status_e2" cx="120" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E3 (slot_1) -->
+  <g id="conn_e3">
+    <rect class="connector" x="150" y="60" width="100" height="60" rx="3"/>
+    <text class="section-label" x="200" y="55">E3 — YMS-4</text>
+    <text class="pin-label" x="155" y="75">STEP: PA5</text>
+    <text class="pin-label" x="155" y="85">DIR:  !PA4</text>
+    <text class="pin-label" x="155" y="95">EN:   !PA6</text>
+    <text class="pin-label" x="155" y="105">UART: PA7</text>
+    <text class="pin-label" x="155" y="115">SENS: PB9</text>
+    <circle id="status_e3" cx="240" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E4 (slot_2) -->
+  <g id="conn_e4">
+    <rect class="connector" x="270" y="60" width="100" height="60" rx="3"/>
+    <text class="section-label" x="320" y="55">E4 — YMS-5</text>
+    <text class="pin-label" x="275" y="75">STEP: PB1</text>
+    <text class="pin-label" x="275" y="85">DIR:  !PB0</text>
+    <text class="pin-label" x="275" y="95">EN:   !PA15</text>
+    <text class="pin-label" x="275" y="105">UART: PB15</text>
+    <text class="pin-label" x="275" y="115">SENS: PC13</text>
+    <circle id="status_e4" cx="360" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E5 (slot_3) -->
+  <g id="conn_e5">
+    <rect class="connector" x="390" y="60" width="100" height="60" rx="3"/>
+    <text class="section-label" x="440" y="55">E5 — YMS-6</text>
+    <text class="pin-label" x="395" y="75">STEP: PA1</text>
+    <text class="pin-label" x="395" y="85">DIR:  !PA0</text>
+    <text class="pin-label" x="395" y="95">EN:   !PC5</text>
+    <text class="pin-label" x="395" y="105">UART: PC11</text>
+    <text class="pin-label" x="395" y="115">SENS: PC14</text>
+    <circle id="status_e5" cx="480" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E6 (slot_4) -->
+  <g id="conn_e6">
+    <rect class="connector" x="30" y="150" width="100" height="60" rx="3"/>
+    <text class="section-label" x="80" y="145">E6 — YMS-7</text>
+    <text class="pin-label" x="35" y="165">STEP: PC3</text>
+    <text class="pin-label" x="35" y="175">DIR:  !PC2</text>
+    <text class="pin-label" x="35" y="185">EN:   !PC4</text>
+    <text class="pin-label" x="35" y="195">UART: PC10</text>
+    <text class="pin-label" x="35" y="205">SENS: PB7</text>
+    <circle id="status_e6" cx="120" cy="155" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- DRYER -->
+  <g id="conn_dryer">
+    <rect class="connector" x="150" y="150" width="120" height="50" rx="3"/>
+    <text class="section-label" x="210" y="145">DRYER</text>
+    <text class="pin-label" x="155" y="165">HTR: PC8</text>
+    <text class="pin-label" x="155" y="175">SNS: PC1</text>
+    <text class="pin-label" x="155" y="185">FAN: PC6</text>
+    <circle id="status_dryer" cx="260" cy="155" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- FAN -->
+  <g id="conn_fan_smartbox">
+    <rect class="connector" x="290" y="150" width="100" height="40" rx="3"/>
+    <text class="section-label" x="340" y="145">SMARTBOX FAN</text>
+    <text class="pin-label" x="295" y="165">FAN: PB8</text>
+  </g>
+
+  <!-- CONNECTION -->
+  <g id="conn_connection">
+    <rect class="connector" x="410" y="150" width="160" height="50" rx="3"/>
+    <text class="section-label" x="490" y="145">CONNECTION</text>
+    <text class="pin-label" x="415" y="165">UART: /dev/ttyS2</text>
+    <text class="pin-label" x="415" y="175">USB:  by-id/usb-1a86...</text>
+    <text class="pin-label" x="415" y="185">MCU:  smartbox</text>
+    <circle id="status_smartbox_mcu" cx="560" cy="155" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- SLOT CONSTRAINTS -->
+  <g id="slot_info" transform="translate(30, 240)">
+    <text class="section-label" x="0" y="0">SLOT CONSTRAINTS:</text>
+    <text class="pin-label" x="0" y="15">E2-E4: YMS PRO ou LITE</text>
+    <text class="pin-label" x="0" y="25">E5-E6: YMS LITE uniquement</text>
+  </g>
+
+  <!-- Legend -->
+  <g id="legend" transform="translate(30, 290)">
+    <text class="section-label" x="0" y="0">STATUS:</text>
+    <circle cx="70" cy="-3" r="5" class="status-detected"/><text class="pin-label" x="80" y="0">Detected</text>
+    <circle cx="140" cy="-3" r="5" class="status-open-load"/><text class="pin-label" x="150" y="0">Open Load</text>
+    <circle cx="220" cy="-3" r="5" class="status-absent"/><text class="pin-label" x="230" y="0">Absent</text>
+    <circle cx="290" cy="-3" r="5" class="status-unknown"/><text class="pin-label" x="300" y="0">Unknown</text>
+  </g>
+</svg>

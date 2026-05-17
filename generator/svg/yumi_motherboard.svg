@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">
+  <style>
+    .board { fill: #1a5c2a; stroke: #0d3518; stroke-width: 2; }
+    .connector { fill: #333; stroke: #666; stroke-width: 1; }
+    .pin-label { font-family: monospace; font-size: 8px; fill: #fff; }
+    .section-label { font-family: sans-serif; font-size: 10px; fill: #ccc; font-weight: bold; }
+    .status-detected { fill: #4caf50; }
+    .status-open-load { fill: #ff9800; }
+    .status-absent { fill: #f44336; }
+    .status-unknown { fill: #9e9e9e; }
+  </style>
+
+  <!-- PCB Board -->
+  <rect class="board" x="10" y="10" width="580" height="380" rx="5"/>
+
+  <!-- Title -->
+  <text x="300" y="35" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#fff" font-weight="bold">YUMI MOTHERBOARD V1.x</text>
+
+  <!-- STEPPER X -->
+  <g id="conn_stepper_x">
+    <rect class="connector" x="30" y="60" width="80" height="50" rx="3"/>
+    <text class="section-label" x="70" y="55">STEPPER X</text>
+    <text class="pin-label" x="35" y="75">STEP: PB1</text>
+    <text class="pin-label" x="35" y="85">DIR:  PB0</text>
+    <text class="pin-label" x="35" y="95">EN:   !PA15</text>
+    <text class="pin-label" x="35" y="105">UART: PB15</text>
+    <circle id="status_stepper_x" cx="100" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- STEPPER Y -->
+  <g id="conn_stepper_y">
+    <rect class="connector" x="130" y="60" width="80" height="50" rx="3"/>
+    <text class="section-label" x="170" y="55">STEPPER Y</text>
+    <text class="pin-label" x="135" y="75">STEP: PA1</text>
+    <text class="pin-label" x="135" y="85">DIR:  !PA0</text>
+    <text class="pin-label" x="135" y="95">EN:   !PC5</text>
+    <text class="pin-label" x="135" y="105">UART: PC11</text>
+    <circle id="status_stepper_y" cx="200" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- STEPPER Z -->
+  <g id="conn_stepper_z">
+    <rect class="connector" x="230" y="60" width="80" height="50" rx="3"/>
+    <text class="section-label" x="270" y="55">STEPPER Z</text>
+    <text class="pin-label" x="235" y="75">STEP: PC3</text>
+    <text class="pin-label" x="235" y="85">DIR:  PC2</text>
+    <text class="pin-label" x="235" y="95">EN:   !PC4</text>
+    <text class="pin-label" x="235" y="105">UART: PC10</text>
+    <circle id="status_stepper_z" cx="300" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- EXTRUDER (hotend motor) -->
+  <g id="conn_extruder">
+    <rect class="connector" x="330" y="60" width="80" height="50" rx="3"/>
+    <text class="section-label" x="370" y="55">EXTRUDER</text>
+    <text class="pin-label" x="335" y="75">STEP: PA12</text>
+    <text class="pin-label" x="335" y="85">DIR:  PA11</text>
+    <text class="pin-label" x="335" y="95">EN:   PA3</text>
+    <text class="pin-label" x="335" y="105">HTR:  PC8</text>
+    <circle id="status_extruder" cx="400" cy="65" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E0 (YMS-1) -->
+  <g id="conn_e0">
+    <rect class="connector" x="30" y="140" width="120" height="60" rx="3"/>
+    <text class="section-label" x="90" y="135">E0 — YMS-1</text>
+    <text class="pin-label" x="35" y="155">STEP: PB12</text>
+    <text class="pin-label" x="35" y="165">DIR:  PB10</text>
+    <text class="pin-label" x="35" y="175">EN:   !PB13</text>
+    <text class="pin-label" x="35" y="185">UART: PB14</text>
+    <text class="pin-label" x="35" y="195">SENS: !PC14</text>
+    <circle id="status_e0" cx="140" cy="145" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- E1 (YMS-2) -->
+  <g id="conn_e1">
+    <rect class="connector" x="170" y="140" width="120" height="60" rx="3"/>
+    <text class="section-label" x="230" y="135">E1 — YMS-2</text>
+    <text class="pin-label" x="175" y="155">STEP: PA5</text>
+    <text class="pin-label" x="175" y="165">DIR:  PA4</text>
+    <text class="pin-label" x="175" y="175">EN:   !PA6</text>
+    <text class="pin-label" x="175" y="185">UART: PA7</text>
+    <text class="pin-label" x="175" y="195">SENS: PC13</text>
+    <circle id="status_e1" cx="280" cy="145" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- HEATER BED -->
+  <g id="conn_heater_bed">
+    <rect class="connector" x="30" y="230" width="100" height="40" rx="3"/>
+    <text class="section-label" x="80" y="225">HEATER BED</text>
+    <text class="pin-label" x="35" y="245">HTR: PC9</text>
+    <text class="pin-label" x="35" y="255">SNS: PC0</text>
+    <circle id="status_heater_bed" cx="120" cy="235" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- PROBE -->
+  <g id="conn_probe">
+    <rect class="connector" x="150" y="230" width="100" height="40" rx="3"/>
+    <text class="section-label" x="200" y="225">PROBE</text>
+    <text class="pin-label" x="155" y="245">SIG: PA14</text>
+    <text class="pin-label" x="155" y="255">PRS: !PB7</text>
+    <circle id="status_probe" cx="240" cy="235" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- FANS -->
+  <g id="conn_fans">
+    <rect class="connector" x="270" y="230" width="120" height="50" rx="3"/>
+    <text class="section-label" x="330" y="225">FANS</text>
+    <text class="pin-label" x="275" y="245">PART: PC7</text>
+    <text class="pin-label" x="275" y="255">HOTEND: PC6</text>
+    <text class="pin-label" x="275" y="265">MOBO: PB8</text>
+    <text class="pin-label" x="275" y="275">AUX: PA2</text>
+  </g>
+
+  <!-- UART / CONNECTION -->
+  <g id="conn_uart">
+    <rect class="connector" x="430" y="140" width="140" height="50" rx="3"/>
+    <text class="section-label" x="500" y="135">CONNECTION</text>
+    <text class="pin-label" x="435" y="155">MCU: /dev/ttyS1</text>
+    <text class="pin-label" x="435" y="165">SMARTBOX: /dev/ttyS2</text>
+    <text class="pin-label" x="435" y="175">RPI: /tmp/klipper_host_mcu</text>
+    <circle id="status_mcu" cx="560" cy="145" r="5" class="status-unknown"/>
+  </g>
+
+  <!-- DIAG PINS -->
+  <g id="conn_diag">
+    <rect class="connector" x="430" y="230" width="140" height="40" rx="3"/>
+    <text class="section-label" x="500" y="225">SENSORLESS</text>
+    <text class="pin-label" x="435" y="245">DIAG_X: PA13</text>
+    <text class="pin-label" x="435" y="255">DIAG_Y: PB9</text>
+  </g>
+
+  <!-- Legend -->
+  <g id="legend" transform="translate(30, 320)">
+    <text class="section-label" x="0" y="0">STATUS:</text>
+    <circle cx="70" cy="-3" r="5" class="status-detected"/><text class="pin-label" x="80" y="0">Detected</text>
+    <circle cx="140" cy="-3" r="5" class="status-open-load"/><text class="pin-label" x="150" y="0">Open Load</text>
+    <circle cx="220" cy="-3" r="5" class="status-absent"/><text class="pin-label" x="230" y="0">Absent</text>
+    <circle cx="290" cy="-3" r="5" class="status-unknown"/><text class="pin-label" x="300" y="0">Unknown</text>
+  </g>
+</svg>

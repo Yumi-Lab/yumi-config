@@ -1,0 +1,45 @@
+{
+  "print_hours": {
+    "warning": 500,
+    "critical": 1000,
+    "action": "Inspection generale recommandee",
+    "guide": "maintenance/guides/general_inspection.md"
+  },
+  "extrusion_per_yms_mm": {
+    "warning": 50000000,
+    "critical": 100000000,
+    "action": "Verifier gear YMS, remplacer si use",
+    "guide": "maintenance/guides/yms_gear_check.md"
+  },
+  "cuts_count": {
+    "warning": 5000,
+    "critical": 10000,
+    "action": "Verifier lame cutter, affuter ou remplacer",
+    "guide": "maintenance/guides/cutter_blade.md"
+  },
+  "bed_heat_hours": {
+    "warning": 2000,
+    "critical": 5000,
+    "action": "Verifier connecteur bed, resistance thermistance",
+    "guide": "maintenance/guides/bed_heater.md"
+  },
+  "hotend_heat_hours": {
+    "warning": 1000,
+    "critical": 2000,
+    "action": "Verifier heatbreak, remplacer si colmatage",
+    "guide": "maintenance/guides/hotend_heatbreak.md"
+  },
+  "belt_tension_drift": {
+    "warning": 5.0,
+    "critical": 10.0,
+    "unit": "Hz",
+    "action": "Retendre courroie X/Y",
+    "guide": "maintenance/guides/belt_tension.md"
+  },
+  "overrides_by_model": {
+    "C435": {
+      "belt_tension_drift": { "warning": 3.0, "critical": 7.0 },
+      "print_hours": { "warning": 400, "critical": 800 }
+    }
+  }
+}
