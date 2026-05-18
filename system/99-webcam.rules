@@ -1,0 +1,7 @@
+# Create /dev/webcamN symlinks for USB cameras (capture devices only)
+# First USB cam = /dev/webcam0, second = /dev/webcam1, etc.
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_BUS}=="usb", PROGRAM="/usr/local/bin/webcam-enumerate.sh %k", SYMLINK+="%c"
+
+# Restart crowsnest on USB webcam hotplug (add/remove) with 3s delay for device stabilization
+ACTION=="add", SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_BUS}=="usb", RUN+="/usr/local/bin/crowsnest-hotplug.sh"
+ACTION=="remove", SUBSYSTEM=="video4linux", ENV{ID_BUS}=="usb", RUN+="/usr/local/bin/crowsnest-hotplug.sh"
