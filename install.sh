@@ -438,4 +438,59 @@ CFGMENU
 fi
 echo "CFG Wizard panel ...[Done]"
 
+# === Webcam udev rules for stable /dev/webcamN symlinks ===
+echo "Installing webcam udev rules..."
+WEBCAM_RULE="/etc/udev/rules.d/99-webcam.rules"
+WEBCAM_ENUM="/usr/local/bin/webcam-enumerate.sh"
+WEBCAM_HOTPLUG="/usr/local/bin/crowsnest-hotplug.sh"
+
+if [ ! -f "$WEBCAM_ENUM" ]; then
+    run_privileged tee "$WEBCAM_ENUM" > /dev/null <<'ENUMSH'
+#!/bin/bash
+# Assign stable /dev/webcamN name based on device order
+# Called by udev: PROGRAM="/usr/local/bin/webcam-enumerate.sh %k"
+DEVICE="$1"
+N=0
+for dev in /sys/class/video4linux/video*; do
+    name=$(basename "$dev")
+    idx=$(cat "$dev/index" 2>/dev/null)
+    [ "$idx" != "0" ] && continue
+    bus=$(udevadm info -q property "/dev/$name" 2>/dev/null | grep "^ID_BUS=usb$")
+    [ -z "$bus" ] && continue
+    if [ "$name" \< "$DEVICE" ]; then
+        N=$((N + 1))
+    fi
+done
+echo "webcam${N}"
+ENUMSH
+    run_privileged chmod +x "$WEBCAM_ENUM"
+    echo "webcam-enumerate.sh installed"
+fi
+
+if [ ! -f "$WEBCAM_HOTPLUG" ]; then
+    run_privileged tee "$WEBCAM_HOTPLUG" > /dev/null <<'HOTPLUG'
+#!/bin/bash
+# Restart crowsnest after USB webcam hotplug
+( sleep 3; systemctl restart crowsnest ) &
+HOTPLUG
+    run_privileged chmod +x "$WEBCAM_HOTPLUG"
+    echo "crowsnest-hotplug.sh installed"
+fi
+
+if [ ! -f "$WEBCAM_RULE" ]; then
+    run_privileged tee "$WEBCAM_RULE" > /dev/null <<'UDEVWC'
+# Create /dev/webcamN symlinks for USB cameras (capture devices only)
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_BUS}=="usb", PROGRAM="/usr/local/bin/webcam-enumerate.sh %k", SYMLINK+="%c"
+# Restart crowsnest on USB webcam hotplug
+ACTION=="add", SUBSYSTEM=="video4linux", ATTR{index}=="0", ENV{ID_BUS}=="usb", RUN+="/usr/local/bin/crowsnest-hotplug.sh"
+ACTION=="remove", SUBSYSTEM=="video4linux", ENV{ID_BUS}=="usb", RUN+="/usr/local/bin/crowsnest-hotplug.sh"
+UDEVWC
+    run_privileged udevadm control --reload-rules
+    run_privileged udevadm trigger --subsystem-match=video4linux
+    echo "Webcam udev rules installed"
+else
+    echo "Webcam udev rules already present"
+fi
+echo "Webcam udev rules ...[Done]"
+
 echo "Installation completed."
