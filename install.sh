@@ -438,6 +438,42 @@ CFGMENU
 fi
 echo "CFG Wizard panel ...[Done]"
 
+# === Maintenance Panel ===
+echo "Installing Maintenance panel..."
+MAINT_PANEL_SRC="$PROJECT_DIR/maintenance/maintenance_panel.py"
+if [ -f "$MAINT_PANEL_SRC" ] && [ -d "$USER_HOME/KlipperScreen/panels" ]; then
+    # Symlink panel
+    rm -f "$USER_HOME/KlipperScreen/panels/maintenance_panel.py"
+    ln -sf "$MAINT_PANEL_SRC" "$USER_HOME/KlipperScreen/panels/maintenance_panel.py"
+    echo "Symlink created: panels/maintenance_panel.py"
+
+    # Add menu entry to KlipperScreen.conf
+    CONFIG_FILE="$KLIPPER_CONFIG_DIR/KlipperScreen.conf"
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! grep -q "maintenance_panel" "$CONFIG_FILE"; then
+            cat >> "$CONFIG_FILE" << 'MAINTMENU'
+
+[menu __main more Maintenance]
+name: Maintenance
+icon: heat-up
+panel: maintenance_panel
+MAINTMENU
+            echo "Added Maintenance menu entry to KlipperScreen.conf"
+        else
+            echo "Maintenance menu entry already in KlipperScreen.conf"
+        fi
+    fi
+
+    # Exclude from KlipperScreen git tracking
+    KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
+    if [ -f "$KS_EXCLUDE" ]; then
+        if ! grep -qF "panels/maintenance_panel.py" "$KS_EXCLUDE"; then
+            echo "panels/maintenance_panel.py" >> "$KS_EXCLUDE"
+        fi
+    fi
+fi
+echo "Maintenance panel ...[Done]"
+
 # === Webcam udev rules for stable /dev/webcamN symlinks ===
 echo "Installing webcam udev rules..."
 WEBCAM_RULE="/etc/udev/rules.d/99-webcam.rules"
