@@ -159,11 +159,11 @@ fi
 
 
 # Define the file to modify
-FILE="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
-cp "$USER_HOME/moonraker-yumi-lab/scripts/klipper_screen_obico_panel.py" "$FILE"
+FILE="$USER_HOME/moonraker-app-yumi-lab/scripts/yumilab.py"
+cp "$USER_HOME/moonraker-app-yumi-lab/scripts/klipper_screen_obico_panel.py" "$FILE"
 
 
-PANEL_SCRIPT="$USER_HOME/moonraker-yumi-lab/scripts/yumilab.py"
+PANEL_SCRIPT="$USER_HOME/moonraker-app-yumi-lab/scripts/yumilab.py"
 SYMLINK_TARGET="$USER_HOME/KlipperScreen/panels/yumilab.py"
 
 # Check if the file exists and is a symbolic link
