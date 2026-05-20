@@ -27,6 +27,7 @@ from macros_core import (
     render_calibration_macros, render_bed_detection_macros,
     render_marlin_compat
 )
+from macros_qc import render_qc_macros
 
 # Repertoire du generateur
 GENERATOR_DIR = Path(__file__).parent
@@ -793,6 +794,8 @@ def generate(model, yms_count, hotend_type="chroma_x12"):
         render_calibration_macros(cfg),
         render_bed_detection_macros(cfg),
         render_marlin_compat(cfg),
+        # QC macros (adapted to hardware)
+        render_qc_macros(cfg),
     ]
 
     return "\n".join(sections)
