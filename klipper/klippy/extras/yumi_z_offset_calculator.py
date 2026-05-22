@@ -1,6 +1,5 @@
 import logging
-import math
-import time
+
 
 class ZOffsetCalculator:
     def __init__(self, config):
@@ -13,14 +12,11 @@ class ZOffsetCalculator:
         self.compression_offset = config.getfloat('compression_offset', 0.2)
         self.approach_speed = config.getfloat('approach_speed', 5.0)
         self.retract_dist = config.getfloat('retract_dist', 5.0)
-        self.dwell_time = config.getfloat('dwell_time', 2.0)  # Pressure switch stabilization time
-        self.max_probe_travel = config.getfloat('max_probe_travel', 20.0)  # Maximum probe travel distance
-        self.max_probe_times = config.getint('max_probe_times', 6)  # Maximum number of probe attempts
+        self.max_probe_travel = config.getfloat('max_probe_travel', 20.0)
+        self.max_probe_times = config.getint('max_probe_times', 6)
         self.z_hop = config.getfloat("z_hop", 10.0)
         self.samples_tolerance = config.getfloat("samples_tolerance", 0.02)
-
-        # New: Probe delay configuration (unit: milliseconds)
-        self.probe_delay = config.getfloat("probe_delay", 1000.0)  # Unit: milliseconds
+        self.probe_delay = config.getfloat("probe_delay", 1000.0)
 
         # Delayed initialization to ensure all objects are loaded
         self.printer.register_event_handler("klippy:connect", self._handle_connect)
@@ -31,126 +27,122 @@ class ZOffsetCalculator:
                               desc="Calculate probe z_offset using pressure switch")
 
     def _handle_connect(self):
-        # Initialize all dependent objects after Klipper connection is complete
         self.probe = self.printer.lookup_object('probe')
-
-        # Get probe offset values - using compatible API
         self.probe_x_offset = self.probe.get_offsets()[0]
         self.probe_y_offset = self.probe.get_offsets()[1]
+        logging.info("[ZOffsetCalculator] Probe offsets: X=%.2f, Y=%.2f",
+                     self.probe_x_offset, self.probe_y_offset)
 
-        # Add debug logging
-        logging.info(f"[ZOffsetCalculator] Probe offsets: X={self.probe_x_offset}, Y={self.probe_y_offset}")
+    def _check_homed(self, gcmd):
+        toolhead = self.printer.lookup_object('toolhead')
+        if 'xy' not in toolhead.get_status(0).get('homed_axes', ''):
+            raise gcmd.error("ZOffsetCalculator: X and Y must be homed before running YUMI_CALCULATE_Z_OFFSET")
 
-    
-    
     def cmd_CALCULATE_Z_OFFSET(self, gcmd):
         logging.info("[ZOffsetCalculator] Starting z_offset calculation")
-        toolhead = self.printer.lookup_object('toolhead')
-         # Check if SAVE parameter exists
+        self._check_homed(gcmd)
+
         save_config = gcmd.get_int('SAVE', 0, minval=0, maxval=1)
-
         gcode = self.printer.lookup_object('gcode')
-        gcode.run_script_from_command("G28")
 
-        # Probe with proximity sensor
-        gcmd.respond_info("Probing with proximity sensor...")
-        proximity_z = self.probe_with_proximity_sensor()
+        # Phase 1: Probe with proximity sensor at pressure switch location
+        gcmd.respond_info("Phase 1: Probing with proximity sensor...")
+        proximity_z = self._probe_with_proximity_sensor(gcmd)
 
-        # Move to pressure switch position
-        gcmd.respond_info("Moving to pressure switch position...")
-        self.move_to_pressure_switch()
+        # Move to pressure switch position (nozzle directly above)
+        gcmd.respond_info("Phase 2: Moving to pressure switch position...")
+        self._move_to_pressure_switch()
         gcode.run_script_from_command("M400")
-        # Use configured delay (unit: milliseconds)
-        gcode.run_script_from_command(f"G4 P{self.probe_delay}")
+        gcode.run_script_from_command("G4 P%d" % int(self.probe_delay))
 
-        # Probe with pressure switch
-        gcmd.respond_info("Probing with pressure switch...")
-        pressure_z = self.probe_with_pressure_switch(gcmd)
+        # Phase 2: Probe with pressure switch (nozzle touches)
+        gcmd.respond_info("Phase 2: Probing with pressure switch...")
+        pressure_z = self._probe_with_pressure_switch(gcmd)
 
         # Calculate z_offset
         z_offset = proximity_z - pressure_z + self.compression_offset
-        gcmd.respond_info(f"Calculated z_offset: {z_offset:.4f}")
+        gcmd.respond_info("Calculated z_offset: %.4f" % z_offset)
 
-        # Move to pressure switch position
-        gcmd.respond_info("Moving to pressure switch position...")
-        self.move_to_pressure_switch()
-
-        # Save z_offset to config file
-        self.save_z_offset(z_offset, save_config)
+        # Save z_offset
+        self._save_z_offset(z_offset, save_config, gcmd)
 
         gcmd.respond_info("Z offset calculation complete!")
-        logging.info(f"[ZOffsetCalculator] Completed z_offset calculation: {z_offset:.4f}")
-    
-    def move_to_pressure_switch(self):
-        # Move to safe height above pressure switch
-        toolhead = self.printer.lookup_object('toolhead')
-        toolhead.manual_move([self.pressure_switch_x, self.pressure_switch_y, 10.0], 50.0)
-        logging.info(f"[ZOffsetCalculator] Moved to pressure switch position: X={self.pressure_switch_x}, Y={self.pressure_switch_y}")
+        logging.info("[ZOffsetCalculator] Completed z_offset calculation: %.4f", z_offset)
 
-    def probe_with_proximity_sensor(self):
-        # Probe using proximity sensor
+    def _move_to_pressure_switch(self):
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.manual_move([self.pressure_switch_x, self.pressure_switch_y, self.z_hop], self.approach_speed * 10)
+        logging.info("[ZOffsetCalculator] Moved to pressure switch: X=%.1f, Y=%.1f",
+                     self.pressure_switch_x, self.pressure_switch_y)
+
+    def _probe_with_proximity_sensor(self, gcmd):
         toolhead = self.printer.lookup_object('toolhead')
         gcode = self.printer.lookup_object('gcode')
 
-        # Apply reverse movement for probe offset
+        # Move probe (not nozzle) above pressure switch — compensate for probe offset
         actual_x = self.pressure_switch_x - self.probe_x_offset
         actual_y = self.pressure_switch_y - self.probe_y_offset
 
-        # Move to corrected position
-        toolhead.manual_move([actual_x, actual_y, 10.0], 50.0)
+        # Check travel distance is within limits
+        pos = toolhead.get_position()
+        travel = ((pos[0] - actual_x) ** 2 + (pos[1] - actual_y) ** 2) ** 0.5
+        if travel > self.max_probe_travel * 50:
+            raise gcmd.error("ZOffsetCalculator: Travel distance %.1f too large" % travel)
 
-        # Execute probe - using PROBE command
+        toolhead.manual_move([actual_x, actual_y, self.z_hop], self.approach_speed * 10)
         gcode.run_script_from_command("PROBE")
 
-        # Get current Z position
         pos = toolhead.get_position()
-        logging.info(f"[ZOffsetCalculator] Proximity probe result: Z={pos[2]}")
+        logging.info("[ZOffsetCalculator] Proximity probe result: Z=%.4f", pos[2])
+
+        # Retract after probe
+        toolhead.manual_move([None, None, pos[2] + self.retract_dist], self.approach_speed * 10)
 
         return pos[2]
 
-    def probe_with_pressure_switch(self, gcmd=None):
-        """Probe Z height using pressure switch"""
+    def _probe_with_pressure_switch(self, gcmd):
         toolhead = self.printer.lookup_object('toolhead')
-        zendstop_p = self.printer.lookup_object('probe_pressure').run_probe(gcmd)
         gcode = self.printer.lookup_object('gcode')
-        
-        reprobe_cnt = 1
-        while True:
-            if(reprobe_cnt >= self.max_probe_times):
-                gcmd.respond_info("ZoffsetCalibration: Pressure probe more than five times.")
-                raise gcmd.error('ZoffsetCalibration: Pressure probe more than five times.')
-            # Perform Z Hop
+        probe_pressure = self.printer.lookup_object('probe_pressure')
+
+        zendstop_p = probe_pressure.run_probe(gcmd)
+
+        for attempt in range(1, self.max_probe_times):
+            # Z hop between probes
             if self.z_hop:
                 pos = toolhead.get_position()
-                pos[2] += self.z_hop
-                toolhead.manual_move([None, None, pos[2]], 5)
-            gcmd.respond_info("ZoffsetCalibration: Pressure verifying the difference between before and after %d/5." % (reprobe_cnt))
+                toolhead.manual_move([None, None, pos[2] + self.z_hop], self.approach_speed * 10)
+
+            gcmd.respond_info("ZoffsetCalibration: Verifying probe %d/%d"
+                              % (attempt, self.max_probe_times - 1))
             gcode.run_script_from_command("M400")
-            # Use configured delay (unit: milliseconds)
-            gcode.run_script_from_command(f"G4 P{self.probe_delay}")
-            zendstop_p1 = self.printer.lookup_object('probe_pressure').run_probe(gcmd)
+            gcode.run_script_from_command("G4 P%d" % int(self.probe_delay))
+
+            zendstop_p1 = probe_pressure.run_probe(gcmd)
             diff_z = abs(zendstop_p1[2] - zendstop_p[2])
             zendstop_p = zendstop_p1
-            if diff_z <= self.samples_tolerance:
-                gcmd.respond_info("ZoffsetCalibration: Pressure check success.")
-                break
-            reprobe_cnt += 1
 
-        logging.info(f"[ZOffsetCalculator] Pressure switch triggered at Z={zendstop_p[2]}")
+            if diff_z <= self.samples_tolerance:
+                gcmd.respond_info("ZoffsetCalibration: Pressure check success (diff=%.4f)" % diff_z)
+                break
+        else:
+            raise gcmd.error("ZoffsetCalibration: Pressure probe exceeded %d attempts"
+                             % self.max_probe_times)
+
+        logging.info("[ZOffsetCalculator] Pressure switch triggered at Z=%.4f", zendstop_p[2])
         return zendstop_p[2]
 
-    def save_z_offset(self, z_offset, save_config):
-        # Save z_offset to config file
+    def _save_z_offset(self, z_offset, save_config, gcmd):
         configfile = self.printer.lookup_object('configfile')
-        configfile.set('probe', 'z_offset', f"{z_offset:.4f}")
+        configfile.set('probe', 'z_offset', "%.4f" % z_offset)
 
-        # Notify user
-        gcode = self.printer.lookup_object('gcode')
-        gcode.respond_info(f"Z offset saved to config file: {z_offset:.4f}")
-        logging.info(f"[ZOffsetCalculator] Z offset saved: {z_offset:.4f}")
+        gcmd.respond_info("Z offset saved to config: %.4f" % z_offset)
+        logging.info("[ZOffsetCalculator] Z offset saved: %.4f", z_offset)
 
         if save_config:
+            gcode = self.printer.lookup_object('gcode')
             gcode.run_script_from_command("SAVE_CONFIG")
+
 
 def load_config(config):
     return ZOffsetCalculator(config)
