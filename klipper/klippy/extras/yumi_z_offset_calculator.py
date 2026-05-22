@@ -138,6 +138,13 @@ class ZOffsetCalculator:
         return zendstop_p[2]
 
     def _save_z_offset(self, z_offset, save_config, gcmd):
+        gcode = self.printer.lookup_object('gcode')
+
+        # Apply z_offset immediately for the current session
+        gcode.run_script_from_command("SET_GCODE_OFFSET Z=%.4f MOVE=0" % z_offset)
+        gcmd.respond_info("Z offset applied for current session: %.4f" % z_offset)
+
+        # Save to config for persistence across reboots
         configfile = self.printer.lookup_object('configfile')
         configfile.set('probe', 'z_offset', "%.4f" % z_offset)
 
@@ -145,7 +152,6 @@ class ZOffsetCalculator:
         logging.info("[ZOffsetCalculator] Z offset saved: %.4f", z_offset)
 
         if save_config:
-            gcode = self.printer.lookup_object('gcode')
             gcode.run_script_from_command("SAVE_CONFIG")
 
 
