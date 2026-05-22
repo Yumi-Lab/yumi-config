@@ -209,45 +209,28 @@ fi
 
 echo "Enable QRCODE ...[Done]"
 
-echo "Motion Sensor ..."
-SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/filament_yumi_smart_motion_sensor.py"
+# Symlink klippy extras from yumi-config to klipper
+# Git pull on yumi-config automatically updates klipper modules
+YUMI_EXTRAS=(
+  "filament_yumi_smart_motion_sensor.py"
+  "yumi_z_offset_calculator.py"
+  "probe_pressure.py"
+  "gcode_shell_command.py"
+)
 
-# Check file existence
-if [ -f "$SOURCE_FILE" ]; then
-  echo "✅ File found, copying..."
-  rm -f "$KLIPPER_EXTRAS_DIR/filament_yumi_smart_motion_sensor.py" && echo "Old version deleted." || echo "No old version to delete."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
-else
-  echo "❌ File not found in repository!"
-  exit 1
-fi
-echo "Motion Sensor ...[Done]"
-
-echo "Yumi Z Offset Calculator ..."
-SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/yumi_z_offset_calculator.py"
-# Check file existence
-if [ -f $SOURCE_FILE ]; then
-  echo "✅ File found, copying..."
-  rm -f "$KLIPPER_EXTRAS_DIR/yumi_z_offset_calculator.py" && echo "Old version deleted." || echo "No old version to delete."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
-else
-  echo "❌ File not found in repository!"
-  exit 1
-fi
-echo "Yumi Z Offset Calculator ...[Done]"
-
-echo "Probe Pressure ..."
-SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/probe_pressure.py"
-# Check file existence
-if [ -f $SOURCE_FILE ]; then
-  echo "✅ File found, copying..."
-  rm -f "$KLIPPER_EXTRAS_DIR/probe_pressure.py" && echo "Old version deleted." || echo "No old version to delete."
-  cp "$SOURCE_FILE" "$KLIPPER_EXTRAS_DIR/" && echo "🎉 File copied to $KLIPPER_EXTRAS_DIR" || echo "❌ Error during copy!"
-else
-  echo "❌ File not found in repository!"
-  exit 1
-fi
-echo "Probe Pressure ...[Done]"
+echo "Symlinking klippy extras..."
+for module in "${YUMI_EXTRAS[@]}"; do
+  SOURCE_FILE="$PROJECT_DIR/klipper/klippy/extras/$module"
+  TARGET_FILE="$KLIPPER_EXTRAS_DIR/$module"
+  if [ -f "$SOURCE_FILE" ]; then
+    rm -f "$TARGET_FILE"
+    ln -sf "$SOURCE_FILE" "$TARGET_FILE"
+    echo "✅ $module -> symlinked"
+  else
+    echo "⚠ $module not found in yumi-config, skipping"
+  fi
+done
+echo "Klippy extras symlinked ...[Done]"
 
 # Restart Klipper only if the script is NOT called by Moonraker
 # Moonraker automatically restarts services via managed_services
