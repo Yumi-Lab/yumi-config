@@ -43,13 +43,13 @@ class ZOffsetCalculator:
         gcmd.respond_info("Probing with pressure switch...")
         self._probe_with_pressure_switch(gcmd)
 
-        # Lift by compression_offset to compensate switch compression
-        if self.compression_offset != 0:
+        # Lift by compression_offset to compensate switch compression (positive = up)
+        if self.compression_offset > 0:
             pos = toolhead.get_position()
-            toolhead.manual_move([None, None, pos[2] + abs(self.compression_offset)],
+            toolhead.manual_move([None, None, pos[2] + self.compression_offset],
                                  self.approach_speed)
             gcode.run_script_from_command("M400")
-            gcmd.respond_info("Compression offset applied: +%.2fmm" % abs(self.compression_offset))
+            gcmd.respond_info("Compression offset applied: +%.2fmm" % self.compression_offset)
 
         # This position = Z=0
         gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
