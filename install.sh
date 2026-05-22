@@ -257,6 +257,7 @@ if [ -d "$QC_DIR" ]; then
     if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
         if ! grep -q "qc_macros.cfg" "$KLIPPER_CONFIG_DIR/printer.cfg"; then
             sed -i '/include mainsail.cfg/a [include qc_macros.cfg]' "$KLIPPER_CONFIG_DIR/printer.cfg"
+            chown pi:pi "$KLIPPER_CONFIG_DIR/printer.cfg"
             echo "Added [include qc_macros.cfg] to printer.cfg"
         else
             echo "[include qc_macros.cfg] already in printer.cfg"
