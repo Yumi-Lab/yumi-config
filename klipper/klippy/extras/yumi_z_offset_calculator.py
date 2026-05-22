@@ -63,6 +63,11 @@ class ZOffsetCalculator:
         z_offset = proximity_z - pressure_z + self.compression_offset
         gcmd.respond_info("Calculated z_offset: %.4f" % z_offset)
 
+        # Lift nozzle before saving
+        toolhead = self.printer.lookup_object('toolhead')
+        pos = toolhead.get_position()
+        toolhead.manual_move([None, None, pos[2] + 10.0], self.approach_speed * 10)
+
         # Save z_offset
         self._save_z_offset(z_offset, save_config, gcmd)
 
