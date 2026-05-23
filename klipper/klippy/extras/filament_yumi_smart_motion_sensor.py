@@ -39,32 +39,31 @@ class FilamentYumiSmartMotionSensor:
         # Sequential event counter for logging
         self.event_seq = 0
 
-        # Hold-mode specific: blockage detection parameters
-        self.blockage_detection = False
-        if self.mode == 'hold':
-            self.blockage_detection = config.getboolean(
-                'blockage_detection', False)
-            if self.blockage_detection:
-                self.min_pitch = config.getfloat(
-                    'min_pitch', 1.0, above=self.low_pitch_filter)
-                self.max_pitch = config.getfloat(
-                    'max_pitch', 2.4, above=self.min_pitch)
-                self.blockage_threshold = config.getint(
-                    'blockage_threshold', 2, minval=1)
-                self.reset_motion_sensor_threshold = config.getint(
-                    'reset_motion_sensor_threshold', 16, minval=1)
-                self.pitch_window = config.getint(
-                    'pitch_window', 4, minval=1)
-                self.post_retract_skip = config.getint(
-                    'post_retract_skip', 2, minval=0)
-                # Minimum retraction delta to count as real retraction
-                # (not PA micro-retraction). PA typically does ~0.04mm.
-                self.retraction_min = config.getfloat(
-                    'retraction_min', 0.1, above=0.)
-                self.skip_counter = 0
-                self.anomaly_count = 0
-                self.normal_count = 0
-                self.pause_sent = False
+        # Blockage detection parameters — always consumed from config
+        # to avoid Klipper "option not valid" errors, but only used
+        # when mode=hold and blockage_detection=True
+        self.blockage_detection = config.getboolean(
+            'blockage_detection', False)
+        self.min_pitch = config.getfloat('min_pitch', 1.0, minval=0.)
+        self.max_pitch = config.getfloat('max_pitch', 2.4, minval=0.)
+        self.blockage_threshold = config.getint(
+            'blockage_threshold', 2, minval=1)
+        self.reset_motion_sensor_threshold = config.getint(
+            'reset_motion_sensor_threshold', 16, minval=1)
+        self.pitch_window = config.getint('pitch_window', 4, minval=1)
+        self.post_retract_skip = config.getint(
+            'post_retract_skip', 2, minval=0)
+        self.retraction_min = config.getfloat(
+            'retraction_min', 0.1, above=0.)
+        # In free mode, disable blockage_detection regardless of config
+        if self.mode == 'free':
+            self.blockage_detection = False
+        # Runtime state for blockage detection
+        if self.blockage_detection:
+            self.skip_counter = 0
+            self.anomaly_count = 0
+            self.normal_count = 0
+            self.pause_sent = False
 
         # Sliding window state (hold mode only, but initialized always
         # to keep logging code simple)
