@@ -29,43 +29,24 @@ class FilamentYumiSmartMotionSensor:
                 "Invalid mode '%s' for %s, must be 'free' or 'hold'"
                 % (self.mode, config.get_name()))
 
-        # both: show pitch values in console
-        self.pitch_view = config.getboolean('pitch_view', False)
-        # both: enable CSV data logging
-        self.data_logging = config.getboolean('data_logging', False)
-        # both: CSV log file path
+        self.pitch_view = config.getboolean('pitch_view', False)  # both: show pitch in console
+        self.data_logging = config.getboolean('data_logging', False)  # both: enable CSV logging
         self.log_file_path = config.get('log_file_path',
-                                        '/tmp/filament_sensor_log.csv')
-        # both: ignore encoder ticks with delta <= this value (noise floor)
-        self.low_pitch_filter = config.getfloat('low_pitch_filter', 0.015, above=0.)
+                                        '/tmp/filament_sensor_log.csv')  # both: CSV log path
+        self.low_pitch_filter = config.getfloat('low_pitch_filter', 0.015, above=0.)  # both: noise floor
 
-        # Sequential event counter for logging
         self.event_seq = 0
 
-        # Blockage detection parameters — always consumed from config
-        # to avoid Klipper "option not valid" errors, but only used
-        # when mode=hold and blockage_detection=True
-        # hold: enable pitch-based blockage detection
-        self.blockage_detection = config.getboolean(
-            'blockage_detection', False)
-        # hold: pitch below this = blockage suspect
-        self.min_pitch = config.getfloat('min_pitch', 1.0, minval=0.)
-        # hold: pitch above this = blockage suspect
-        self.max_pitch = config.getfloat('max_pitch', 2.4, minval=0.)
-        # hold: consecutive abnormal pitches before triggering blockage
-        self.blockage_threshold = config.getint(
-            'blockage_threshold', 2, minval=1)
-        # hold: consecutive normal pitches to clear anomaly counter
+        # All params consumed to avoid Klipper "option not valid" — hold-only are ignored in free
+        self.blockage_detection = config.getboolean('blockage_detection', False)  # hold: enable blockage detection
+        self.min_pitch = config.getfloat('min_pitch', 1.0, minval=0.)  # hold: pitch below = suspect
+        self.max_pitch = config.getfloat('max_pitch', 2.4, minval=0.)  # hold: pitch above = suspect
+        self.blockage_threshold = config.getint('blockage_threshold', 2, minval=1)  # hold: abnormal count to trigger
         self.reset_motion_sensor_threshold = config.getint(
-            'reset_motion_sensor_threshold', 16, minval=1)
-        # hold: number of encoder ticks averaged before judging pitch
-        self.pitch_window = config.getint('pitch_window', 4, minval=1)
-        # hold: windows to skip after a travel artifact (rebound filter)
-        self.post_retract_skip = config.getint(
-            'post_retract_skip', 2, minval=0)
-        # hold: min negative delta to count as real retraction (filters PA)
-        self.retraction_min = config.getfloat(
-            'retraction_min', 0.1, above=0.)
+            'reset_motion_sensor_threshold', 16, minval=1)  # hold: normal count to clear anomaly
+        self.pitch_window = config.getint('pitch_window', 4, minval=1)  # hold: ticks averaged per window
+        self.post_retract_skip = config.getint('post_retract_skip', 2, minval=0)  # hold: windows skipped after travel
+        self.retraction_min = config.getfloat('retraction_min', 0.1, above=0.)  # hold: min delta for real retraction
         # In free mode, disable blockage_detection regardless of config
         if self.mode == 'free':
             self.blockage_detection = False
