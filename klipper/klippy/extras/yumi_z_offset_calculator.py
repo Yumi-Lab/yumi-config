@@ -15,6 +15,8 @@ class ZOffsetCalculator:
         self.samples_tolerance = config.getfloat("samples_tolerance", 0.02)
         self.samples = config.getint("samples", 2)
         self.probe_delay = config.getfloat("probe_delay", 1000.0)
+        self.safe_z = config.getfloat("safe_z", 10.0)
+        self.travel_speed = config.getfloat("travel_speed", 30.0)
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
@@ -34,7 +36,7 @@ class ZOffsetCalculator:
         toolhead = self.printer.lookup_object('toolhead')
         probe_pressure = self.printer.lookup_object('probe_pressure')
         self.lift_speed = probe_pressure.get_lift_speed()
-        self.travel_speed = 30.0  # XY travel speed
+        # travel_speed from config (set in __init__)
 
         # Set Z to max position to give full travel range for probe
         z_max = self.printer.lookup_object('configfile').get_status(0)['settings']['stepper_z']['position_max']
@@ -108,9 +110,10 @@ class ZOffsetCalculator:
                         % (-self.compression_offset))
                     gcmd.respond_info("SET_KINEMATIC_POSITION Z=%.4f"
                                       % (-self.compression_offset))
-                    # Lift to z_hop above Z=0
-                    toolhead.manual_move([None, None, self.z_hop],
+                    # Lift to safe_z above Z=0
+                    toolhead.manual_move([None, None, self.safe_z],
                                          self.lift_speed)
+                    gcode.run_script_from_command("M400")
                     return
             else:
                 stable_count = 1
