@@ -10,10 +10,10 @@ class ZOffsetCalculator:
         self.pressure_switch_x = config.getfloat('pressure_switch_x', 30.0)
         self.pressure_switch_y = config.getfloat('pressure_switch_y', 200.0)
         self.compression_offset = config.getfloat('compression_offset', 0.2)
-        self.approach_speed = config.getfloat('approach_speed', 5.0)
         self.max_probe_times = config.getint('max_probe_times', 6)
         self.z_hop = config.getfloat("z_hop", 10.0)
         self.samples_tolerance = config.getfloat("samples_tolerance", 0.02)
+        self.samples = config.getint("samples", 2)
         self.probe_delay = config.getfloat("probe_delay", 1000.0)
 
         # Register gcode command
@@ -32,6 +32,9 @@ class ZOffsetCalculator:
 
         gcode = self.printer.lookup_object('gcode')
         toolhead = self.printer.lookup_object('toolhead')
+        probe_pressure = self.printer.lookup_object('probe_pressure')
+        self.lift_speed = probe_pressure.get_lift_speed()
+        self.travel_speed = 30.0  # XY travel speed
 
         # Move nozzle above pressure switch
         gcmd.respond_info("Moving to pressure switch position...")
@@ -47,7 +50,7 @@ class ZOffsetCalculator:
         if self.compression_offset != 0:
             pos = toolhead.get_position()
             toolhead.manual_move([None, None, pos[2] + self.compression_offset],
-                                 self.approach_speed)
+                                 self.lift_speed)
             gcode.run_script_from_command("M400")
             gcmd.respond_info("Compression offset applied: %.2fmm" % self.compression_offset)
 
@@ -56,15 +59,16 @@ class ZOffsetCalculator:
         gcmd.respond_info("Z=0 set at nozzle contact + compression offset")
 
         # Lift nozzle
-        toolhead.manual_move([None, None, 10.0], self.approach_speed * 10)
+        toolhead.manual_move([None, None, 10.0], self.lift_speed)
 
         gcmd.respond_info("Z calibration complete!")
         logging.info("[ZOffsetCalculator] Z=0 set at pressure switch contact")
 
     def _move_to_pressure_switch(self):
         toolhead = self.printer.lookup_object('toolhead')
-        toolhead.manual_move([self.pressure_switch_x, self.pressure_switch_y, self.z_hop],
-                             self.approach_speed * 10)
+        # Move XY only — Z stays where it is, probe will descend
+        toolhead.manual_move([self.pressure_switch_x, self.pressure_switch_y, None],
+                             self.travel_speed)
         logging.info("[ZOffsetCalculator] Moved to pressure switch: X=%.1f, Y=%.1f",
                      self.pressure_switch_x, self.pressure_switch_y)
 
@@ -74,32 +78,53 @@ class ZOffsetCalculator:
         probe_pressure = self.printer.lookup_object('probe_pressure')
 
         zendstop_p = probe_pressure.run_probe(gcmd)
+        stable_count = 1  # first probe counts
 
         for attempt in range(1, self.max_probe_times):
-            # Z hop between probes
+            # Z hop from first probe (or previous iteration lift already done)
+            if attempt == 1 and self.z_hop:
+                pos = toolhead.get_position()
+                toolhead.manual_move([None, None, pos[2] + self.z_hop],
+                                     self.lift_speed)
+                gcode.run_script_from_command("M400")
+
+            gcmd.respond_info("Tap %d/%d (stable: %d/%d)"
+                              % (attempt + 1, self.max_probe_times,
+                                 stable_count, self.samples))
+
+            # Probe
+            zendstop_p1 = probe_pressure.run_probe(gcmd)
+
+            # Lift immediately after trigger
             if self.z_hop:
                 pos = toolhead.get_position()
                 toolhead.manual_move([None, None, pos[2] + self.z_hop],
-                                     self.approach_speed * 10)
+                                     self.lift_speed)
 
-            gcmd.respond_info("Verifying probe %d/%d"
-                              % (attempt, self.max_probe_times - 1))
-            gcode.run_script_from_command("M400")
-            gcode.run_script_from_command("G4 P%d" % int(self.probe_delay))
-
-            zendstop_p1 = probe_pressure.run_probe(gcmd)
+            # Process result during lift
             diff_z = abs(zendstop_p1[2] - zendstop_p[2])
             zendstop_p = zendstop_p1
 
             if diff_z <= self.samples_tolerance:
-                gcmd.respond_info("Pressure check success (diff=%.4f)" % diff_z)
-                break
-        else:
-            raise gcmd.error("Pressure probe exceeded %d attempts"
-                             % self.max_probe_times)
+                stable_count += 1
+                gcmd.respond_info("Tap OK (diff=%.4fmm, stable %d/%d)"
+                                  % (diff_z, stable_count, self.samples))
+                if stable_count >= self.samples:
+                    gcmd.respond_info("Z probe validated: %d stable samples"
+                                      % self.samples)
+                    logging.info("[ZOffsetCalculator] Pressure switch at Z=%.4f"
+                                 " (%d stable samples)", zendstop_p[2], self.samples)
+                    return
+            else:
+                stable_count = 1
+                gcmd.respond_info("Tap drift (diff=%.4fmm) — reset"
+                                  % diff_z)
 
-        logging.info("[ZOffsetCalculator] Pressure switch contact at Z=%.4f",
-                     zendstop_p[2])
+            # Wait for lift before next descent
+            gcode.run_script_from_command("M400")
+
+        raise gcmd.error("Pressure probe failed: only %d/%d stable after %d taps"
+                         % (stable_count, self.samples, self.max_probe_times))
 
 
 def load_config(config):
