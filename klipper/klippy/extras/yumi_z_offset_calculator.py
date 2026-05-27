@@ -94,23 +94,23 @@ class ZOffsetCalculator:
                                   % (diff_z, stable_count, self.samples))
                 if stable_count >= self.samples:
                     # VALIDATED
-                    gcmd.respond_info("Z probe validated: %d stable samples"
-                                      % self.samples)
                     trigger_z = zendstop_p[2]
                     current_z = toolhead.get_position()[2]
-                    # Z=0 = trigger point + compression_offset
-                    # Current position is (current_z - trigger_z - compression_offset) above Z=0
-                    z_above_zero = current_z - trigger_z - self.compression_offset
+                    gcmd.respond_info(
+                        "VALIDATED: trigger_z=%.4f current_z=%.4f "
+                        "diff=%.4f compression=%.2f"
+                        % (trigger_z, current_z,
+                           current_z - trigger_z, self.compression_offset))
+                    # Z=0 = trigger + compression_offset above bed
+                    # We are at trigger point → set Z = -compression_offset
                     gcode.run_script_from_command(
-                        "SET_KINEMATIC_POSITION Z=%.4f" % z_above_zero)
-                    logging.info("[ZOffsetCalculator] trigger=%.4f current=%.4f "
-                                 "offset=%.2f → Z set to %.4f",
-                                 trigger_z, current_z,
-                                 self.compression_offset, z_above_zero)
-                    gcmd.respond_info("Z=0 set (trigger=%.3f, compression=%.2f)"
-                                      % (trigger_z, self.compression_offset))
+                        "SET_KINEMATIC_POSITION Z=%.4f"
+                        % (-self.compression_offset))
+                    gcmd.respond_info("SET_KINEMATIC_POSITION Z=%.4f"
+                                      % (-self.compression_offset))
                     # Lift to z_hop above Z=0
-                    toolhead.manual_move([None, None, self.z_hop], self.lift_speed)
+                    toolhead.manual_move([None, None, self.z_hop],
+                                         self.lift_speed)
                     return
             else:
                 stable_count = 1
