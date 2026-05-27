@@ -50,21 +50,6 @@ class ZOffsetCalculator:
         gcmd.respond_info("Probing with pressure switch...")
         self._probe_with_pressure_switch(gcmd)
 
-        # Apply compression_offset (positive = up, negative = down)
-        if self.compression_offset != 0:
-            pos = toolhead.get_position()
-            toolhead.manual_move([None, None, pos[2] + self.compression_offset],
-                                 self.lift_speed)
-            gcode.run_script_from_command("M400")
-            gcmd.respond_info("Compression offset applied: %.2fmm" % self.compression_offset)
-
-        # This position = Z=0
-        gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
-        gcmd.respond_info("Z=0 set at nozzle contact + compression offset")
-
-        # Lift nozzle
-        toolhead.manual_move([None, None, 10.0], self.lift_speed)
-
         gcmd.respond_info("Z calibration complete!")
         logging.info("[ZOffsetCalculator] Z=0 set at pressure switch contact")
 
@@ -99,13 +84,7 @@ class ZOffsetCalculator:
             # Probe
             zendstop_p1 = probe_pressure.run_probe(gcmd)
 
-            # Lift immediately after trigger
-            if self.z_hop:
-                pos = toolhead.get_position()
-                toolhead.manual_move([None, None, pos[2] + self.z_hop],
-                                     self.lift_speed)
-
-            # Process result during lift
+            # Process result at trigger point (before any lift)
             diff_z = abs(zendstop_p1[2] - zendstop_p[2])
             zendstop_p = zendstop_p1
 
@@ -114,17 +93,34 @@ class ZOffsetCalculator:
                 gcmd.respond_info("Tap OK (diff=%.4fmm, stable %d/%d)"
                                   % (diff_z, stable_count, self.samples))
                 if stable_count >= self.samples:
+                    # VALIDATED — set Z=0 here at trigger point
                     gcmd.respond_info("Z probe validated: %d stable samples"
                                       % self.samples)
                     logging.info("[ZOffsetCalculator] Pressure switch at Z=%.4f"
                                  " (%d stable samples)", zendstop_p[2], self.samples)
+                    # Apply compression_offset (positive = up)
+                    if self.compression_offset != 0:
+                        toolhead.manual_move(
+                            [None, None, toolhead.get_position()[2] + self.compression_offset],
+                            self.lift_speed)
+                        gcode.run_script_from_command("M400")
+                    # Z=0 at contact + compression
+                    gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
+                    gcmd.respond_info("Z=0 set at nozzle contact + %.2fmm offset"
+                                      % self.compression_offset)
+                    # Final lift from Z=0
+                    toolhead.manual_move([None, None, self.z_hop], self.lift_speed)
                     return
             else:
                 stable_count = 1
                 gcmd.respond_info("Tap drift (diff=%.4fmm) — reset"
                                   % diff_z)
 
-            # Wait for lift before next descent
+            # Not validated — z_hop for next attempt
+            if self.z_hop:
+                pos = toolhead.get_position()
+                toolhead.manual_move([None, None, pos[2] + self.z_hop],
+                                     self.lift_speed)
             gcode.run_script_from_command("M400")
 
         raise gcmd.error("Pressure probe failed: only %d/%d stable after %d taps"
