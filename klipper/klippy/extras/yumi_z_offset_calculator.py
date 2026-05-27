@@ -93,22 +93,23 @@ class ZOffsetCalculator:
                 gcmd.respond_info("Tap OK (diff=%.4fmm, stable %d/%d)"
                                   % (diff_z, stable_count, self.samples))
                 if stable_count >= self.samples:
-                    # VALIDATED — set Z=0 here at trigger point
+                    # VALIDATED
                     gcmd.respond_info("Z probe validated: %d stable samples"
                                       % self.samples)
-                    logging.info("[ZOffsetCalculator] Pressure switch at Z=%.4f"
-                                 " (%d stable samples)", zendstop_p[2], self.samples)
-                    # Apply compression_offset (positive = up)
-                    if self.compression_offset != 0:
-                        toolhead.manual_move(
-                            [None, None, toolhead.get_position()[2] + self.compression_offset],
-                            self.lift_speed)
-                        gcode.run_script_from_command("M400")
-                    # Z=0 at contact + compression
-                    gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
-                    gcmd.respond_info("Z=0 set at nozzle contact + %.2fmm offset"
-                                      % self.compression_offset)
-                    # Final lift from Z=0
+                    trigger_z = zendstop_p[2]
+                    current_z = toolhead.get_position()[2]
+                    # Z=0 = trigger point + compression_offset
+                    # Current position is (current_z - trigger_z - compression_offset) above Z=0
+                    z_above_zero = current_z - trigger_z - self.compression_offset
+                    gcode.run_script_from_command(
+                        "SET_KINEMATIC_POSITION Z=%.4f" % z_above_zero)
+                    logging.info("[ZOffsetCalculator] trigger=%.4f current=%.4f "
+                                 "offset=%.2f → Z set to %.4f",
+                                 trigger_z, current_z,
+                                 self.compression_offset, z_above_zero)
+                    gcmd.respond_info("Z=0 set (trigger=%.3f, compression=%.2f)"
+                                      % (trigger_z, self.compression_offset))
+                    # Lift to z_hop above Z=0
                     toolhead.manual_move([None, None, self.z_hop], self.lift_speed)
                     return
             else:
