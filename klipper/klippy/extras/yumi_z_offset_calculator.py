@@ -36,6 +36,10 @@ class ZOffsetCalculator:
         self.lift_speed = probe_pressure.get_lift_speed()
         self.travel_speed = 30.0  # XY travel speed
 
+        # Set Z to max position to give full travel range for probe
+        z_max = self.printer.lookup_object('configfile').get_status(0)['settings']['stepper_z']['position_max']
+        gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=%.1f" % z_max)
+
         # Move nozzle above pressure switch
         gcmd.respond_info("Moving to pressure switch position...")
         self._move_to_pressure_switch()
