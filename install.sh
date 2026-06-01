@@ -211,11 +211,16 @@ echo "Enable QRCODE ...[Done]"
 
 # Symlink klippy extras from yumi-config to klipper
 # Git pull on yumi-config automatically updates klipper modules
+# NOTE: motion_queuing.py is a PATCHED CORE klipper file (adds the extruder
+# lead_time / trapq time-shift). kin_extruder.c stays STOCK on purpose, so the
+# patch is pure-Python. If Klipper is updated upstream, rebase this file on the
+# new baseline (see klipper/_LEAD_PATCH.md) before relying on the symlink.
 YUMI_EXTRAS=(
   "filament_yumi_smart_motion_sensor.py"
   "yumi_z_offset_calculator.py"
   "probe_pressure.py"
   "gcode_shell_command.py"
+  "motion_queuing.py"
 )
 
 echo "Symlinking klippy extras..."
@@ -231,6 +236,26 @@ for module in "${YUMI_EXTRAS[@]}"; do
   fi
 done
 echo "Klippy extras symlinked ...[Done]"
+
+# Symlink patched klippy KINEMATICS (extruder lead_time). Same rebase caveat as
+# motion_queuing.py above — patched core file, kin_extruder.c remains stock.
+KLIPPER_KINEMATICS_DIR="$KLIPPER_DIR/klippy/kinematics"
+YUMI_KINEMATICS=(
+  "extruder.py"
+)
+echo "Symlinking klippy kinematics..."
+for module in "${YUMI_KINEMATICS[@]}"; do
+  SOURCE_FILE="$PROJECT_DIR/klipper/klippy/kinematics/$module"
+  TARGET_FILE="$KLIPPER_KINEMATICS_DIR/$module"
+  if [ -f "$SOURCE_FILE" ]; then
+    rm -f "$TARGET_FILE"
+    ln -sf "$SOURCE_FILE" "$TARGET_FILE"
+    echo "✅ kinematics/$module -> symlinked"
+  else
+    echo "⚠ kinematics/$module not found in yumi-config, skipping"
+  fi
+done
+echo "Klippy kinematics symlinked ...[Done]"
 
 # Restart Klipper only if the script is NOT called by Moonraker
 # Moonraker automatically restarts services via managed_services
