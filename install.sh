@@ -257,6 +257,17 @@ for module in "${YUMI_KINEMATICS[@]}"; do
 done
 echo "Klippy kinematics symlinked ...[Done]"
 
+# Purge stale Python bytecode so the freshly symlinked .py (extruder.py,
+# motion_queuing.py, extras) get recompiled. Without this, Python keeps loading
+# the old .pyc (compiled before the lead_time patch) and the new code is silently
+# ignored -> lead_time / patched modules appear "not to work". The symlink alone
+# does not reliably bump the source mtime that CPython uses to invalidate .pyc.
+echo "Purging klippy __pycache__ (force recompile of symlinked modules)..."
+if [ -d "$KLIPPER_DIR/klippy" ]; then
+    find "$KLIPPER_DIR/klippy" -name '__pycache__' -type d -prune -exec rm -rf {} +
+    echo "✅ klippy __pycache__ purged"
+fi
+
 # Restart Klipper only if the script is NOT called by Moonraker
 # Moonraker automatically restarts services via managed_services
 if [ -z "$MOONRAKER_PROCESS_UID" ]; then
