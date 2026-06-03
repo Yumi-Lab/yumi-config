@@ -217,7 +217,7 @@ echo "Enable QRCODE ...[Done]"
 # new baseline (see klipper/_LEAD_PATCH.md) before relying on the symlink.
 YUMI_EXTRAS=(
   "filament_yumi_smart_motion_sensor.py"
-  "yumi_z_offset_calculator.py"
+  "yumi_z_tap.py"
   "probe_pressure.py"
   "gcode_shell_command.py"
   "motion_queuing.py"

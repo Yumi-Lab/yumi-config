@@ -1,7 +1,12 @@
-# YUMI Z Offset Calculator
+# YUMI Z Tap
 
 Klipper module for precision Z=0 calibration via physical nozzle tap on a pressure switch.
 Inspired by Bambu Lab A1 nozzle-tap Z homing approach.
+
+> The module sets the kinematic Z origin (`SET_KINEMATIC_POSITION Z=...`) at the
+> nozzle/switch contact point. It is a **zero-setting** routine, not an offset
+> calculator — hence `yumi_z_tap` / `YUMI_Z_TAP` (the former
+> `yumi_z_offset_calculator` / `YUMI_CALCULATE_Z_OFFSET` names are removed, no alias).
 
 ## Dependencies
 
@@ -10,10 +15,10 @@ Inspired by Bambu Lab A1 nozzle-tap Z homing approach.
 
 ## G-code Command
 
-### YUMI_CALCULATE_Z_OFFSET
+### YUMI_Z_TAP
 
 ```
-YUMI_CALCULATE_Z_OFFSET [SAVE=0|1]
+YUMI_Z_TAP [SAVE=0|1]
 ```
 
 Sets Z=0 at the point where the nozzle physically contacts the pressure switch.
@@ -31,15 +36,17 @@ Sets Z=0 at the point where the nozzle physically contacts the pressure switch.
 ## Configuration
 
 ```ini
-[yumi_z_offset_calculator]
+[yumi_z_tap]
 pressure_switch_x: 49.5       # X position of pressure switch (mm)
 pressure_switch_y: 175.5      # Y position of pressure switch (mm)
+travel_speed: 70              # XY travel speed to reach the switch (mm/s)
 compression_offset: 0.3       # Offset after contact to compensate compression (mm)
 max_probe_times: 50           # Maximum tap attempts before failure
 z_hop: 3                      # Lift distance between taps (mm)
 samples: 3                    # Consecutive stable readings required to validate
 samples_tolerance: 0.01       # Max allowed deviation between consecutive taps (mm)
 probe_delay: 2                # Delay before first probe (ms)
+safe_z: 10                    # Final lift height above Z=0 after validation (mm)
 ```
 
 ### Parameter Reference
@@ -48,12 +55,14 @@ probe_delay: 2                # Delay before first probe (ms)
 |---|---|---|---|
 | `pressure_switch_x` | float | 30.0 | X coordinate of the pressure switch |
 | `pressure_switch_y` | float | 200.0 | Y coordinate of the pressure switch |
+| `travel_speed` | float | 30.0 | XY travel speed to reach the switch (mm/s) |
 | `compression_offset` | float | 0.2 | Z compensation after contact (mm). Positive = up |
 | `max_probe_times` | int | 6 | Total tap budget. Fails if no stable reading within this count |
 | `z_hop` | float | 10.0 | Lift distance between taps (mm) |
 | `samples` | int | 2 | Number of consecutive readings within tolerance to validate |
 | `samples_tolerance` | float | 0.02 | Maximum Z deviation between consecutive taps (mm) |
 | `probe_delay` | float | 1000.0 | Delay before first probe after positioning (ms) |
+| `safe_z` | float | 10.0 | Final lift height above Z=0 after validation (mm) |
 
 ### Speeds (from probe_pressure)
 
@@ -63,7 +72,7 @@ The module reads speeds directly from `[probe_pressure]`:
 |---|---|---|
 | `probe_pressure.speed` | `[probe_pressure] speed` | Probe descent (tap) |
 | `probe_pressure.lift_speed` | `[probe_pressure] lift_speed` | Z hop, final lift, compression offset |
-| `travel_speed` | Hardcoded 30 mm/s | XY move to switch position |
+| `travel_speed` | `[yumi_z_tap] travel_speed` (default 30 mm/s) | XY move to switch position |
 
 ## Probe Validation Logic
 
@@ -89,28 +98,28 @@ To use as Z homing in `[homing_override]` (replaces G28 Z):
 # After homing X and Y:
 {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}
 SET_KINEMATIC_POSITION Z={z_max}
-YUMI_CALCULATE_Z_OFFSET SAVE=0
+YUMI_Z_TAP SAVE=0
 ```
 
 `SET_KINEMATIC_POSITION Z={z_max}` gives the probe full Z travel range to reach the bed from any position.
 
-## CALCULATE_Z_OFFSET Wrapper Macro
+## Z_TAP Wrapper Macro
 
-The `CALCULATE_Z_OFFSET` macro auto-detects printing state:
+The `Z_TAP` macro auto-detects printing state:
 
 ```gcode
-[gcode_macro CALCULATE_Z_OFFSET]
+[gcode_macro Z_TAP]
 gcode:
     {% set is_printing = printer.idle_timeout.state == "Printing" %}
     {% if is_printing %}
         M109 S150           # Heat nozzle (thermal expansion accuracy)
         WIPE_NOZZLE         # Clean nozzle before tap
-        YUMI_CALCULATE_Z_OFFSET SAVE={params.SAVE|default(0)|int}
+        YUMI_Z_TAP SAVE={params.SAVE|default(0)|int}
         M104 S0
     {% else %}
         {% if printer.toolhead.homed_axes != "xyz" %}
             G28
         {% endif %}
-        YUMI_CALCULATE_Z_OFFSET SAVE={params.SAVE|default(0)|int}
+        YUMI_Z_TAP SAVE={params.SAVE|default(0)|int}
     {% endif %}
 ```

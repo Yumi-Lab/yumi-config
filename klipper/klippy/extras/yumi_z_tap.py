@@ -1,7 +1,7 @@
 import logging
 
 
-class ZOffsetCalculator:
+class ZTap:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
@@ -20,16 +20,16 @@ class ZOffsetCalculator:
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
-        gcode.register_command('YUMI_CALCULATE_Z_OFFSET', self.cmd_CALCULATE_Z_OFFSET,
+        gcode.register_command('YUMI_Z_TAP', self.cmd_Z_TAP,
                               desc="Set Z=0 at nozzle contact via pressure switch")
 
     def _check_homed(self, gcmd):
         toolhead = self.printer.lookup_object('toolhead')
         if 'xy' not in toolhead.get_status(0).get('homed_axes', ''):
-            raise gcmd.error("ZOffsetCalculator: X and Y must be homed first")
+            raise gcmd.error("ZTap: X and Y must be homed first")
 
-    def cmd_CALCULATE_Z_OFFSET(self, gcmd):
-        logging.info("[ZOffsetCalculator] Starting Z=0 calibration")
+    def cmd_Z_TAP(self, gcmd):
+        logging.info("[ZTap] Starting Z=0 calibration")
         self._check_homed(gcmd)
 
         gcode = self.printer.lookup_object('gcode')
@@ -53,14 +53,14 @@ class ZOffsetCalculator:
         self._probe_with_pressure_switch(gcmd)
 
         gcmd.respond_info("Z calibration complete!")
-        logging.info("[ZOffsetCalculator] Z=0 set at pressure switch contact")
+        logging.info("[ZTap] Z=0 set at pressure switch contact")
 
     def _move_to_pressure_switch(self):
         toolhead = self.printer.lookup_object('toolhead')
         # Move XY only — Z stays where it is, probe will descend
         toolhead.manual_move([self.pressure_switch_x, self.pressure_switch_y, None],
                              self.travel_speed)
-        logging.info("[ZOffsetCalculator] Moved to pressure switch: X=%.1f, Y=%.1f",
+        logging.info("[ZTap] Moved to pressure switch: X=%.1f, Y=%.1f",
                      self.pressure_switch_x, self.pressure_switch_y)
 
     def _probe_with_pressure_switch(self, gcmd):
@@ -132,4 +132,4 @@ class ZOffsetCalculator:
 
 
 def load_config(config):
-    return ZOffsetCalculator(config)
+    return ZTap(config)
