@@ -209,18 +209,18 @@ fi
 
 echo "Enable QRCODE ...[Done]"
 
-# Symlink klippy extras from yumi-config to klipper
-# Git pull on yumi-config automatically updates klipper modules
-# NOTE: motion_queuing.py is a PATCHED CORE klipper file (adds the extruder
-# lead_time / trapq time-shift). kin_extruder.c stays STOCK on purpose, so the
-# patch is pure-Python. If Klipper is updated upstream, rebase this file on the
-# new baseline (see klipper/_LEAD_PATCH.md) before relying on the symlink.
+# Symlink NEW klippy extras from yumi-config into klipper. These are ADDITIONS
+# (files that do not exist in stock klipper), so a symlink keeps klipper's git
+# working tree clean and does not interfere with Moonraker updates.
+# Git pull on yumi-config automatically updates these modules.
+# NOTE: motion_queuing.py is intentionally NOT in this list — it is a PATCHED
+# CORE klipper file and is deployed as a real COPY below (see deploy_patched_core).
+# A symlink over a git-tracked file makes the tree "dirty" and breaks update_manager.
 YUMI_EXTRAS=(
   "filament_yumi_smart_motion_sensor.py"
   "yumi_z_tap.py"
   "probe_pressure.py"
   "gcode_shell_command.py"
-  "motion_queuing.py"
 )
 
 echo "Symlinking klippy extras..."
@@ -237,32 +237,38 @@ for module in "${YUMI_EXTRAS[@]}"; do
 done
 echo "Klippy extras symlinked ...[Done]"
 
-# Symlink patched klippy KINEMATICS (extruder lead_time). Same rebase caveat as
-# motion_queuing.py above — patched core file, kin_extruder.c remains stock.
-KLIPPER_KINEMATICS_DIR="$KLIPPER_DIR/klippy/kinematics"
-YUMI_KINEMATICS=(
-  "extruder.py"
-)
-echo "Symlinking klippy kinematics..."
-for module in "${YUMI_KINEMATICS[@]}"; do
-  SOURCE_FILE="$PROJECT_DIR/klipper/klippy/kinematics/$module"
-  TARGET_FILE="$KLIPPER_KINEMATICS_DIR/$module"
-  if [ -f "$SOURCE_FILE" ]; then
-    rm -f "$TARGET_FILE"
-    ln -sf "$SOURCE_FILE" "$TARGET_FILE"
-    echo "✅ kinematics/$module -> symlinked"
+# Deploy PATCHED CORE klipper files as REAL COPIES (NOT symlinks).
+# extruder.py (kinematics) + motion_queuing.py (extras) REPLACE files that exist
+# in stock klipper. A symlink over a git-tracked file makes klipper's working tree
+# permanently "dirty": Moonraker's update_manager then flags it invalid and runs
+# a recovery (hard-reset / re-clone) that the symlink can break (we saw it fail on
+# a root-owned __pycache__). A plain copy lets git update/recover cleanly to stock;
+# yumi-sync (repair_klipper_lead) then re-copies our version on top, detecting the
+# drift by hash. kin_extruder.c stays STOCK (pure-Python patch). On upstream
+# Klipper update, rebase these files (see klipper/_LEAD_PATCH.md).
+deploy_patched_core() {
+  local src="$1" dst="$2"
+  if [ -f "$src" ]; then
+    rm -f "$dst"
+    cp -f "$src" "$dst"
+    echo "✅ $(basename "$dst") -> copied"
   else
-    echo "⚠ kinematics/$module not found in yumi-config, skipping"
+    echo "⚠ $(basename "$dst") source not found ($src), skipping"
   fi
-done
-echo "Klippy kinematics symlinked ...[Done]"
+}
+echo "Deploying patched core klipper files (copies)..."
+deploy_patched_core "$PROJECT_DIR/klipper/klippy/kinematics/extruder.py" \
+                    "$KLIPPER_DIR/klippy/kinematics/extruder.py"
+deploy_patched_core "$PROJECT_DIR/klipper/klippy/extras/motion_queuing.py" \
+                    "$KLIPPER_DIR/klippy/extras/motion_queuing.py"
+echo "Patched core klipper files deployed ...[Done]"
 
-# Purge stale Python bytecode so the freshly symlinked .py (extruder.py,
+# Purge stale Python bytecode so the freshly deployed .py (extruder.py,
 # motion_queuing.py, extras) get recompiled. Without this, Python keeps loading
 # the old .pyc (compiled before the lead_time patch) and the new code is silently
-# ignored -> lead_time / patched modules appear "not to work". The symlink alone
+# ignored -> lead_time / patched modules appear "not to work". A copy/symlink alone
 # does not reliably bump the source mtime that CPython uses to invalidate .pyc.
-echo "Purging klippy __pycache__ (force recompile of symlinked modules)..."
+echo "Purging klippy __pycache__ (force recompile of deployed modules)..."
 if [ -d "$KLIPPER_DIR/klippy" ]; then
     find "$KLIPPER_DIR/klippy" -name '__pycache__' -type d -prune -exec rm -rf {} +
     echo "✅ klippy __pycache__ purged"
