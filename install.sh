@@ -363,6 +363,31 @@ else
 fi
 echo "QC System ...[Done]"
 
+# === Generic DEVICE macro (reads YUMI_CONFIG burned into MCU firmware) ===
+echo "Installing generic DEVICE macro..."
+DEVICE_CFG="$PROJECT_DIR/smartpad-generic/yumi-device.cfg"
+if [ -f "$DEVICE_CFG" ]; then
+    # Symlink so yumi-sync propagates updates without recopying
+    rm -f "$KLIPPER_CONFIG_DIR/yumi-device.cfg"
+    ln -sf "$DEVICE_CFG" "$KLIPPER_CONFIG_DIR/yumi-device.cfg"
+    echo "Symlink created: yumi-device.cfg"
+
+    # Add include in printer.cfg if not present
+    if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
+        if ! grep -q "yumi-device.cfg" "$KLIPPER_CONFIG_DIR/printer.cfg"; then
+            # Prepend at line 1 — robust regardless of which includes a given config has
+            sed -i '1i [include yumi-device.cfg]' "$KLIPPER_CONFIG_DIR/printer.cfg"
+            chown "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/printer.cfg"
+            echo "Added [include yumi-device.cfg] to printer.cfg"
+        else
+            echo "[include yumi-device.cfg] already in printer.cfg"
+        fi
+    fi
+else
+    echo "yumi-device.cfg not found, skipping DEVICE macro installation."
+fi
+echo "Generic DEVICE macro ...[Done]"
+
 echo "Configuring Mainsail settings..."
 # Replace Mainsail config.json with Yumi template
 MAINSAIL_DIR="$USER_HOME/mainsail"
