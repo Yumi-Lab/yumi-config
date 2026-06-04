@@ -389,34 +389,14 @@ fi
 echo "Generic DEVICE macro ...[Done]"
 
 echo "Configuring Mainsail settings..."
-# Deploy Mainsail config.json from the Yumi template.
-# CRITICAL: Mainsail fetches /config.json at boot; a 0-byte or invalid file served
-# as HTTP 200 makes response.json() throw BEFORE vue-i18n initialises, so the whole
-# UI renders raw i18n keys (router.dashboard, panels.miniconsolePanel.headline, ...).
-# The old "rm then cp" left exactly that on any cp failure (disk full, interrupted
-# copy, source momentarily empty during a concurrent git pull) AND swallowed the
-# error with "|| echo". We now NEVER leave the destination empty/partial: validate
-# the source, stage to a temp file, re-validate, then atomically mv into place.
-# On any failure we abort LOUDLY and keep whatever valid file was already there.
-MAINSAIL_DIR="$USER_HOME/mainsail"
-MAINSAIL_CONFIG_SRC="$PROJECT_DIR/mainsail/config.json"
-if [ ! -d "$MAINSAIL_DIR" ]; then
-    echo "Mainsail not installed ($MAINSAIL_DIR missing), skipping config.json."
-elif [ ! -s "$MAINSAIL_CONFIG_SRC" ] || ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$MAINSAIL_CONFIG_SRC" 2>/dev/null; then
-    echo "ERROR: template $MAINSAIL_CONFIG_SRC missing/empty/invalid JSON — config.json NOT deployed (existing file kept)." >&2
-else
-    tmp_cfg="$MAINSAIL_DIR/.config.json.tmp.$$"
-    if cp "$MAINSAIL_CONFIG_SRC" "$tmp_cfg" \
-        && [ -s "$tmp_cfg" ] \
-        && python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp_cfg" 2>/dev/null; then
-        mv -f "$tmp_cfg" "$MAINSAIL_DIR/config.json"
-        chown "$OWNER:$OWNER" "$MAINSAIL_DIR/config.json"
-        echo "Yumi config.json deployed and validated ($(wc -c < "$MAINSAIL_DIR/config.json") bytes)."
-    else
-        rm -f "$tmp_cfg"
-        echo "ERROR: could not stage a valid config.json (disk full? interrupted copy?) — destination left unchanged." >&2
-    fi
-fi
+# NOTE: we deliberately do NOT deploy a config.json into ~/mainsail anymore.
+# Mainsail already ships its own valid config.json inside the release zip (re-extracted
+# on every update). Our old template was functionally identical to it — the only
+# difference was "defaultTheme": "yumi", a key Mainsail's code never reads (the theme
+# is delivered by .theme/default.json below). So the copy changed nothing about the UI
+# and only risked leaving a 0-byte file (served as HTTP 200) that breaks Mainsail's
+# i18n bootstrap -> the whole UI renders raw keys. Yumi branding lives in .theme/, the
+# proper update-safe place; the Mainsail project files are left untouched.
 
 # Copy default theme template for factory reset
 THEME_DIR="$USER_HOME/printer_data/config/.theme"
