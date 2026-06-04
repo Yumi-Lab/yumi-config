@@ -543,4 +543,15 @@ run_privileged udevadm trigger --subsystem-match=video4linux
 echo "Webcam udev symlinks installed"
 echo "Webcam udev rules ...[Done]"
 
+# === Bed mesh persist sans reboot (RUN_SHELL_COMMAND -> scripts/save_mesh.py) ===
+# Persiste le profil bed_mesh dans le bloc #*# de printer.cfg comme SAVE_CONFIG,
+# mais sans redemarrer Klipper. Deploye en symlink pour suivre les mises a jour git.
+echo "Installing bed mesh save script..."
+MESH_SCRIPTS_DIR="$KLIPPER_CONFIG_DIR/scripts"
+mkdir -p "$MESH_SCRIPTS_DIR"
+chmod +x "$PROJECT_DIR/scripts/save_mesh.py"
+ln -sf "$PROJECT_DIR/scripts/save_mesh.py" "$MESH_SCRIPTS_DIR/save_mesh.py"
+echo "Bed mesh save script symlinked -> $MESH_SCRIPTS_DIR/save_mesh.py"
+echo "Bed mesh save script ...[Done]"
+
 echo "Installation completed."
