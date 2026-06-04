@@ -62,15 +62,15 @@ function install {
   rm -f "$KLIPPER_CONFIG_DIR/crowsnest.conf" && echo "crowsnest.conf deleted successfully." || echo "Error deleting crowsnest.conf."
   cp "$PROJECT_DIR/smartpad-generic/crowsnest.conf" "$KLIPPER_CONFIG_DIR" && echo "crowsnest.conf copied successfully." || echo "Error copying crowsnest.conf."
 
-  # Check if the update_plr.cfg file exists
-  if [ -f $KLIPPER_CONFIG_DIR/update_yumi-config.cfg ]; then
-      echo "The file update_plr.cfg already exists, deleting the file..."
-      rm $KLIPPER_CONFIG_DIR/update_yumi-config.cfg
-  fi
-
-  # Create a new update_yumi-config.cfg file with cat EOF
-  echo "Creating a new update_yumi-config.cfg file with cat EOF..."
-  cat > $KLIPPER_CONFIG_DIR/update_yumi-config.cfg << EOF
+  # Generate update_yumi-config.cfg ATOMICALLY (temp file in the same dir + mv).
+  # The old code did `rm` then recreated the file: during that window a Moonraker
+  # config reload (install.sh restarts klipper/moonraker) could read the file as
+  # missing/partial, dropping [update_manager yumi-config] from the OTA list.
+  # An atomic rename removes that window; cmp avoids a needless mtime bump.
+  echo "Ensuring update_yumi-config.cfg is up to date (atomic write)..."
+  _umc_target="$KLIPPER_CONFIG_DIR/update_yumi-config.cfg"
+  _umc_tmp="$KLIPPER_CONFIG_DIR/.update_yumi-config.cfg.tmp"
+  cat > "$_umc_tmp" << EOF
 # yumi-config update_manager entry
 [update_manager yumi-config]
 type: git_repo
@@ -82,6 +82,13 @@ is_system_service: False
 managed_services: klipper
 
 EOF
+  if [ -f "$_umc_target" ] && cmp -s "$_umc_tmp" "$_umc_target"; then
+      echo "update_yumi-config.cfg already up to date, no change."
+      rm -f "$_umc_tmp"
+  else
+      mv "$_umc_tmp" "$_umc_target"
+      echo "update_yumi-config.cfg written atomically."
+  fi
 
 # Check if the string [include update_yumi-config.cfg] is already present in the file
   if grep -Fxq "[include update_yumi-config.cfg]" $KLIPPER_CONFIG_DIR/moonraker.conf; then
