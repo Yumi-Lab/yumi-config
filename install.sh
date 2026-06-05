@@ -226,6 +226,7 @@ echo "Enable QRCODE ...[Done]"
 YUMI_EXTRAS=(
   "filament_yumi_smart_motion_sensor.py"
   "yumi_z_tap.py"
+  "yumi_sensorless_homing.py"
   "probe_pressure.py"
   "gcode_shell_command.py"
 )
