@@ -122,23 +122,33 @@ class YumiSensorless:
                 cur[ai] = pos_endstop + away * self.retract
                 toolhead.manual_move(cur, self.travel_speed)
                 toolhead.wait_moves()
-                # Tap: commande AU-DELA du mur physique. raw_t inclut deja
-                # l'overshoot dans la direction de home -> on vise 'overshoot'
-                # mm au-dela de l'endstop. On NE clampe PAS sur la plage
-                # cinematique : un homing move ignore les limites, et clamper a
-                # pos_endstop ferait stopper le planner PILE sur la coordonnee
-                # -> StallGuard declenche sur l'arret de fin de course (faux
-                # tap deterministe, spread=0, "taps en l'air"). Cible au-dela =
-                # seul un contact reel peut arreter le chariot -> vrai stall,
-                # position mesuree avec son jitter naturel.
-                # check_movement=True rejette un trigger sans mouvement (DIAG
-                # deja arme) ; et une course libre sans contact leve une erreur
-                # ("no trigger") au lieu de valider un faux zero.
+                # Tap via l'astuce "forcepos" de Klipper. On NE PEUT PAS
+                # commander une cible > position_max (Klipper leve "Move out of
+                # range"), et viser PILE pos_endstop fait stopper le planner sur
+                # la coordonnee -> StallGuard declenche sur l'arret de fin de
+                # course (faux tap deterministe, spread=0, "taps en l'air").
+                # Solution : on decale le REFERENTIEL avec SET_KINEMATIC_POSITION
+                # pour faire croire au planner qu'on demarre 'overshoot' mm plus
+                # loin. La cible LOGIQUE reste = pos_endstop (donc dans la
+                # plage), mais le chariot PHYSIQUE surcourse de 'overshoot' dans
+                # le mur -> seul un contact reel l'arrete -> vrai stall a pleine
+                # vitesse, mesure avec son jitter naturel.
+                force = pos_endstop + away * (self.retract + self.overshoot)
+                gcode.run_script_from_command(
+                    "SET_KINEMATIC_POSITION %s=%.4f" % (axis, force))
                 target = list(toolhead.get_position())
-                target[ai] = pos_endstop - away * self.overshoot
+                target[ai] = pos_endstop
+                # check_movement=True : un trigger sans mouvement (DIAG deja
+                # arme) ou une course libre sans contact leve une erreur au lieu
+                # de valider un faux zero.
                 epos = phoming.probing_move(mcu_endstop, target, fine_speed,
                                             check_movement=True)
-                trig = epos[ai]
+                # epos est dans le referentiel decale : on retire le decalage
+                # (away*overshoot) pour revenir a la vraie position du mur.
+                trig = epos[ai] - away * self.overshoot
+                # Re-cale le referentiel reel : on est physiquement au mur.
+                gcode.run_script_from_command(
+                    "SET_KINEMATIC_POSITION %s=%.4f" % (axis, pos_endstop))
                 triggers.append(trig)
                 if len(triggers) >= 2:
                     diff = abs(triggers[-1] - triggers[-2])
