@@ -122,12 +122,22 @@ class YumiSensorless:
                 cur[ai] = pos_endstop + away * self.retract
                 toolhead.manual_move(cur, self.travel_speed)
                 toolhead.wait_moves()
-                # Tap: vers l'endstop (clampe dans la plage cinematique)
+                # Tap: commande AU-DELA du mur physique. raw_t inclut deja
+                # l'overshoot dans la direction de home -> on vise 'overshoot'
+                # mm au-dela de l'endstop. On NE clampe PAS sur la plage
+                # cinematique : un homing move ignore les limites, et clamper a
+                # pos_endstop ferait stopper le planner PILE sur la coordonnee
+                # -> StallGuard declenche sur l'arret de fin de course (faux
+                # tap deterministe, spread=0, "taps en l'air"). Cible au-dela =
+                # seul un contact reel peut arreter le chariot -> vrai stall,
+                # position mesuree avec son jitter naturel.
+                # check_movement=True rejette un trigger sans mouvement (DIAG
+                # deja arme) ; et une course libre sans contact leve une erreur
+                # ("no trigger") au lieu de valider un faux zero.
                 target = list(toolhead.get_position())
-                raw_t = pos_endstop - away * self.overshoot
-                target[ai] = max(pmin, min(pmax, raw_t))
+                target[ai] = pos_endstop - away * self.overshoot
                 epos = phoming.probing_move(mcu_endstop, target, fine_speed,
-                                            check_movement=False)
+                                            check_movement=True)
                 trig = epos[ai]
                 triggers.append(trig)
                 if len(triggers) >= 2:
