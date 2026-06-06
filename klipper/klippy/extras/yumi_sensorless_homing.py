@@ -150,6 +150,7 @@ class YumiSensorless:
         valid_count = 0  # taps valides (chauffe inclus)
         no_contact = 0   # rejets consecutifs "aucun contact" (home suspect)
         rehomes = 0
+        validated = False
         try:
             for attempt in range(1, max_taps + 1):
                 if len(triggers) >= samples:
@@ -227,14 +228,22 @@ class YumiSensorless:
                                       % (attempt, trig, gap))
                     continue
                 triggers.append(trig)
-                if len(triggers) >= 2:
-                    diff = abs(triggers[-1] - triggers[-2])
-                    gcmd.respond_info("tap %d: pos=%.4f gap=%.4f diff=%.4f (%d/%d)"
-                                      % (attempt, trig, gap, diff,
-                                         len(triggers), samples))
+                # Fenetre glissante : on valide des que les `samples` derniers
+                # taps concordent dans `tol` (chariot stabilise contre le mur).
+                # Les taps de tassement initiaux ne forment pas de fenetre
+                # stable -> ecartes automatiquement, sans nombre fixe de chauffe.
+                if len(triggers) >= samples:
+                    wspread = max(triggers[-samples:]) - min(triggers[-samples:])
+                    gcmd.respond_info(
+                        "tap %d: pos=%.4f gap=%.4f fenetre=%.4f/%.4f"
+                        % (attempt, trig, gap, wspread, tol))
+                    if wspread <= tol:
+                        validated = True
+                        break
                 else:
-                    gcmd.respond_info("tap %d: pos=%.4f gap=%.4f (ref)"
-                                      % (attempt, trig, gap))
+                    gcmd.respond_info("tap %d: pos=%.4f gap=%.4f (%d/%d)"
+                                      % (attempt, trig, gap,
+                                         len(triggers), samples))
         finally:
             gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.0f" % saved_accel)
@@ -268,17 +277,16 @@ class YumiSensorless:
                 "zero pose en butee" % (axis, len(triggers), samples, rejects))
             return
 
-        srt = sorted(triggers)
-        median = srt[len(srt) // 2]
-        kept = [t for t in triggers if abs(t - median) <= self.outlier_margin]
-        spread = (max(kept) - min(kept)) if len(kept) >= 2 else 0.0
-        mean = sum(kept) / len(kept)
-        ok = spread <= tol
+        # Fenetre finale = les `samples` derniers taps (stabilises si validated).
+        window = triggers[-samples:]
+        spread = max(window) - min(window)
+        mean = sum(window) / len(window)
+        ok = validated and spread <= tol
         gcmd.respond_info(
-            "YUMI_SENSORLESS_HOME %s %s: %d taps (%d gardes, %d rejetes) -> "
+            "YUMI_SENSORLESS_HOME %s %s: %d taps valides (%d rejetes) -> "
             "moyenne=%.4f spread=%.4fmm (tol=%.4f). Zero pose en butee=%.4f"
-            % (axis, "OK" if ok else "IMPRECIS", len(triggers), len(kept),
-               rejects, mean, spread, tol, pos_endstop))
+            % (axis, "OK" if ok else "IMPRECIS", len(triggers), rejects,
+               mean, spread, tol, pos_endstop))
 
 
 def load_config(config):
