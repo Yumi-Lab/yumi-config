@@ -27,6 +27,9 @@ class YumiSensorless:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.samples = config.getint('samples', 5, minval=2)
+        # Taps de chauffe ignores avant de mesurer : le 1er contact "tasse"
+        # systematiquement (jeu mecanique), il fausse le spread.
+        self.warmup_taps = config.getint('warmup_taps', 1, minval=0)
         self.samples_tolerance = config.getfloat('samples_tolerance', 0.10,
                                                   above=0.)
         self.max_taps = config.getint('max_taps', 15, minval=2)
@@ -92,8 +95,10 @@ class YumiSensorless:
         ai = AXIS_INDEX[axis]
         st = axis.lower()
         samples = gcmd.get_int('SAMPLES', self.samples, minval=2)
+        warmup = gcmd.get_int('WARMUP', self.warmup_taps, minval=0)
         tol = gcmd.get_float('TOLERANCE', self.samples_tolerance, above=0.)
-        max_taps = gcmd.get_int('MAX_TAPS', self.max_taps, minval=samples)
+        max_taps = gcmd.get_int('MAX_TAPS', self.max_taps,
+                                minval=samples + warmup)
         speed = gcmd.get_float('SPEED', self.tap_speed, above=0.)
         skip_base = gcmd.get_int('SKIP_BASE', 0)
 
@@ -142,6 +147,7 @@ class YumiSensorless:
 
         triggers = []
         rejects = 0
+        valid_count = 0  # taps valides (chauffe inclus)
         no_contact = 0   # rejets consecutifs "aucun contact" (home suspect)
         rehomes = 0
         try:
@@ -215,6 +221,11 @@ class YumiSensorless:
                     continue
 
                 no_contact = 0
+                valid_count += 1
+                if valid_count <= warmup:
+                    gcmd.respond_info("tap %d: pos=%.4f gap=%.4f (chauffe, ignore)"
+                                      % (attempt, trig, gap))
+                    continue
                 triggers.append(trig)
                 if len(triggers) >= 2:
                     diff = abs(triggers[-1] - triggers[-2])
