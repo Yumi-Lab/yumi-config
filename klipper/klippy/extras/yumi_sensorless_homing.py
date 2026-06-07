@@ -171,8 +171,14 @@ class YumiSensorless:
                 target[ai] = pos_endstop
                 reason = None
                 try:
-                    epos = phoming.probing_move(mcu_endstop, target, speed,
-                                                check_movement=True)
+                    # Stock probing_move suffit : homing_move(probe_pos=True)
+                    # leve un command_error "No trigger ... after full movement"
+                    # s'il n'y a AUCUN contact (-> branche except), et retourne
+                    # la position de trigger sinon (-> branche else, calcul gap).
+                    # NE PAS ajouter de kwarg (ex: check_movement) : il n'existe
+                    # pas dans le homing.py stock -> TypeError -> erreur interne
+                    # -> shutdown Klipper sur un pad non patche.
+                    epos = phoming.probing_move(mcu_endstop, target, speed)
                 except self.printer.command_error as e:
                     # Aucun trigger sur toute la course (retract + overshoot) :
                     # le chariot a parcouru PLUS que la distance de retraction
