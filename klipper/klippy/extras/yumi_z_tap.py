@@ -20,6 +20,19 @@ class ZTap:
         # Nb max de dwell pour attendre que le switch repasse OUVERT avant de
         # relancer une descente (anti "Probe triggered prior to movement").
         self.settle_retries = config.getint("settle_retries", 10)
+        # Tolerance de validation Z=0/maillage : a la fin du tap, on verifie
+        # que le maillage charge vaut ~0 a la coordonnee du tap (sinon Z=0 et
+        # le mesh sont decales). 0 = desactive la verif.
+        self.mesh_zero_tol = config.getfloat("mesh_zero_tol", 0.05, minval=0.)
+        # Tolerance XY (mm) pour comparer le point de tap au
+        # zero_reference_position du [bed_mesh] (verif statique, sans mesh charge).
+        self.mesh_zero_xy_tol = config.getfloat("mesh_zero_xy_tol", 1.0,
+                                                minval=0.)
+        # Si True, le point de tap par defaut = [bed_mesh]
+        # zero_reference_position (source unique, Z=0 pile sur le zero du mesh).
+        # False (defaut) = comportement historique (pressure_switch_x/y).
+        # A laisser False sur les machines a switch/fixture dedie hors plateau.
+        self.tap_at_mesh_zero = config.getboolean("tap_at_mesh_zero", False)
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
@@ -48,10 +61,26 @@ class ZTap:
                                               self.samples_tolerance, above=0.)
         # SPEED overrides the probe descent speed (mm/s) for this call.
         self.active_speed = gcmd.get_float('SPEED', None, above=0.)
-        # No X/Y given -> dedicated pressure switch. Explicit X/Y -> tap there
-        # (providing the coordinates is itself the intentional act).
-        self.tap_x = x_param if x_param is not None else self.pressure_switch_x
-        self.tap_y = y_param if y_param is not None else self.pressure_switch_y
+        # Point de tap par defaut :
+        #  - tap_at_mesh_zero=True -> [bed_mesh] zero_reference_position
+        #    (source unique, Z=0 pile sur le zero du mesh, pas de doublon),
+        #  - sinon -> pressure_switch_x/y (comportement historique).
+        # Un X/Y explicite a l'appel surcharge toujours.
+        default_x, default_y = self.pressure_switch_x, self.pressure_switch_y
+        if self.tap_at_mesh_zero:
+            zrp = self._get_mesh_zero_ref()
+            if zrp is None:
+                # Erreur dure (pas de fallback) : force la correction du
+                # printer.cfg quand on se declare aligne sur le mesh.
+                raise gcmd.error(
+                    "Z_TAP: tap_at_mesh_zero=True mais [bed_mesh] "
+                    "zero_reference_position est absent/illisible. "
+                    "Corrige le printer.cfg (definis [bed_mesh] "
+                    "zero_reference_position: X, Y), ou mets "
+                    "tap_at_mesh_zero: False dans [yumi_z_tap].")
+            default_x, default_y = zrp
+        self.tap_x = x_param if x_param is not None else default_x
+        self.tap_y = y_param if y_param is not None else default_y
 
         gcode = self.printer.lookup_object('gcode')
         toolhead = self.printer.lookup_object('toolhead')
@@ -106,8 +135,101 @@ class ZTap:
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
 
+        # Validation : le maillage charge doit valoir ~0 a la coordonnee du tap
+        self._validate_mesh_zero(gcmd)
+
         gcmd.respond_info("Z calibration complete!")
         logging.info("[ZTap] Z=0 set at pressure switch contact")
+
+    def _get_mesh_zero_ref(self):
+        # Retourne (x, y) de [bed_mesh] zero_reference_position, ou None si
+        # absent / illisible. Lu via la config Klipper (inclut l'autosave).
+        try:
+            settings = self.printer.lookup_object(
+                'configfile').get_status(0)['settings']
+            zrp = settings.get('bed_mesh', {}).get(
+                'zero_reference_position', None)
+            if zrp is None:
+                return None
+            return float(zrp[0]), float(zrp[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return None
+
+    def _validate_mesh_zero(self, gcmd):
+        # Valide que le point de tap (ou on pose Z=0) coincide avec le zero du
+        # maillage. mesh_zero_tol == 0 -> tout est desactive.
+        #
+        # 1) Verif CONFIG (statique, marche meme sans mesh charge, donc valable
+        #    quand BED_MESH_PROFILE LOAD est appele APRES YUMI_Z_TAP) :
+        #    [bed_mesh] zero_reference_position doit == (tap_x, tap_y).
+        # 2) Bonus : si un mesh est deja charge, on mesure calc_z au point de
+        #    tap (doit etre ~0). Absence de mesh charge = normal -> on se tait.
+        # Avertissements uniquement, ne bloque jamais le homing.
+        if not self.mesh_zero_tol:
+            return
+
+        # --- 1) Verif statique sur zero_reference_position ---
+        try:
+            settings = self.printer.lookup_object(
+                'configfile').get_status(0)['settings']
+            zrp = settings.get('bed_mesh', {}).get(
+                'zero_reference_position', None)
+        except Exception as e:
+            gcmd.respond_info("Maillage: lecture config impossible (%s)" % e)
+            zrp = None
+
+        if zrp is None:
+            gcmd.respond_info(
+                "ATTENTION maillage: pas de zero_reference_position dans "
+                "[bed_mesh] -> Z=0 (tap X%.1f Y%.1f) et mesh potentiellement "
+                "decales" % (self.tap_x, self.tap_y))
+        else:
+            try:
+                zx, zy = float(zrp[0]), float(zrp[1])
+            except (TypeError, ValueError, IndexError):
+                gcmd.respond_info(
+                    "Maillage: zero_reference_position illisible (%r)" % (zrp,))
+                zx = zy = None
+            if zx is not None:
+                if (abs(zx - self.tap_x) <= self.mesh_zero_xy_tol
+                        and abs(zy - self.tap_y) <= self.mesh_zero_xy_tol):
+                    gcmd.respond_info(
+                        "Maillage OK (config): zero_reference_position "
+                        "(%.1f, %.1f) ~ point de tap (%.1f, %.1f)"
+                        % (zx, zy, self.tap_x, self.tap_y))
+                else:
+                    gcmd.respond_info(
+                        "ATTENTION maillage: zero_reference_position "
+                        "(%.1f, %.1f) != point de tap (%.1f, %.1f) -> Z=0 et "
+                        "mesh DECALES. Mets [bed_mesh] zero_reference_position: "
+                        "%.1f, %.1f puis BED_MESH_CALIBRATE + sauvegarde du "
+                        "profil."
+                        % (zx, zy, self.tap_x, self.tap_y,
+                           self.tap_x, self.tap_y))
+
+        # --- 2) Bonus : verif sur le mesh reellement charge (s'il y en a un) ---
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        if bed_mesh is None:
+            return
+        z_mesh = bed_mesh.get_mesh()
+        if z_mesh is None:
+            return  # pas de mesh charge = normal dans la sequence -> silence
+        try:
+            mesh_z = z_mesh.calc_z(self.tap_x, self.tap_y)
+        except Exception as e:
+            gcmd.respond_info(
+                "Maillage: calc_z impossible au point de tap (%s)" % e)
+            return
+        if abs(mesh_z) <= self.mesh_zero_tol:
+            gcmd.respond_info(
+                "Maillage OK (charge): mesh=%.4f au point de tap X%.1f Y%.1f "
+                "(<= %.3f)" % (mesh_z, self.tap_x, self.tap_y,
+                               self.mesh_zero_tol))
+        else:
+            gcmd.respond_info(
+                "ATTENTION maillage: mesh=%.4f au point de tap X%.1f Y%.1f "
+                "(> %.3f) -> Z=0 et maillage charge DECALES de %.4f mm"
+                % (mesh_z, self.tap_x, self.tap_y, self.mesh_zero_tol, mesh_z))
 
     def _move_to_tap_point(self):
         toolhead = self.printer.lookup_object('toolhead')
