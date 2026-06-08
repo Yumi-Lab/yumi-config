@@ -32,7 +32,8 @@ class ZTap:
         # zero_reference_position (source unique, Z=0 pile sur le zero du mesh).
         # False (defaut) = comportement historique (pressure_switch_x/y).
         # A laisser False sur les machines a switch/fixture dedie hors plateau.
-        self.tap_at_mesh_zero = config.getboolean("tap_at_mesh_zero", False)
+        self.tap_at_bed_mesh_zero_position = config.getboolean(
+            "tap_at_bed_mesh_zero_position", False)
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
@@ -62,22 +63,23 @@ class ZTap:
         # SPEED overrides the probe descent speed (mm/s) for this call.
         self.active_speed = gcmd.get_float('SPEED', None, above=0.)
         # Point de tap par defaut :
-        #  - tap_at_mesh_zero=True -> [bed_mesh] zero_reference_position
-        #    (source unique, Z=0 pile sur le zero du mesh, pas de doublon),
+        #  - tap_at_bed_mesh_zero_position=True -> [bed_mesh]
+        #    zero_reference_position (source unique, Z=0 pile sur le zero du
+        #    mesh, pas de doublon),
         #  - sinon -> pressure_switch_x/y (comportement historique).
         # Un X/Y explicite a l'appel surcharge toujours.
         default_x, default_y = self.pressure_switch_x, self.pressure_switch_y
-        if self.tap_at_mesh_zero:
+        if self.tap_at_bed_mesh_zero_position:
             zrp = self._get_mesh_zero_ref()
             if zrp is None:
                 # Erreur dure (pas de fallback) : force la correction du
                 # printer.cfg quand on se declare aligne sur le mesh.
                 raise gcmd.error(
-                    "Z_TAP: tap_at_mesh_zero=True mais [bed_mesh] "
+                    "Z_TAP: tap_at_bed_mesh_zero_position=True mais [bed_mesh] "
                     "zero_reference_position est absent/illisible. "
                     "Corrige le printer.cfg (definis [bed_mesh] "
                     "zero_reference_position: X, Y), ou mets "
-                    "tap_at_mesh_zero: False dans [yumi_z_tap].")
+                    "tap_at_bed_mesh_zero_position: False dans [yumi_z_tap].")
             default_x, default_y = zrp
         self.tap_x = x_param if x_param is not None else default_x
         self.tap_y = y_param if y_param is not None else default_y
