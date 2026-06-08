@@ -28,12 +28,13 @@ class ZTap:
         # zero_reference_position du [bed_mesh] (verif statique, sans mesh charge).
         self.mesh_zero_xy_tol = config.getfloat("mesh_zero_xy_tol", 1.0,
                                                 minval=0.)
-        # Si True, le point de tap par defaut = [bed_mesh]
-        # zero_reference_position (source unique, Z=0 pile sur le zero du mesh).
-        # False (defaut) = comportement historique (pressure_switch_x/y).
-        # A laisser False sur les machines a switch/fixture dedie hors plateau.
+        # Si True (defaut), le point de tap par defaut = [bed_mesh]
+        # zero_reference_position (source unique, Z=0 pile sur le zero du mesh) ;
+        # erreur dure si zero_reference_position absent -> force la correction
+        # du printer.cfg. Mettre False sur les machines a switch/fixture dedie
+        # hors plateau (revient a pressure_switch_x/y).
         self.tap_at_bed_mesh_zero_position = config.getboolean(
-            "tap_at_bed_mesh_zero_position", False)
+            "tap_at_bed_mesh_zero_position", True)
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
