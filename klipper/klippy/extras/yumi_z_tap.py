@@ -29,12 +29,18 @@ class ZTap:
         self.mesh_zero_xy_tol = config.getfloat("mesh_zero_xy_tol", 1.0,
                                                 minval=0.)
         # Si True (defaut), le point de tap par defaut = [bed_mesh]
-        # zero_reference_position (source unique, Z=0 pile sur le zero du mesh) ;
-        # erreur dure si zero_reference_position absent -> force la correction
-        # du printer.cfg. Mettre False sur les machines a switch/fixture dedie
-        # hors plateau (revient a pressure_switch_x/y).
+        # zero_reference_position (source unique, Z=0 pile sur le zero du mesh).
+        # Mettre False sur les machines a switch/fixture dedie hors plateau
+        # (revient a pressure_switch_x/y).
         self.tap_at_bed_mesh_zero_position = config.getboolean(
             "tap_at_bed_mesh_zero_position", True)
+        # Distingue l'opt-in EXPLICITE du defaut. On ne fait planter (erreur
+        # dure, pour forcer la correction du printer.cfg) QUE si l'option est
+        # declaree explicitement a True mais sans zero_reference_position. Au
+        # defaut (non declare) sans zero_reference_position -> fallback doux sur
+        # pressure_switch, pour ne PAS casser les machines en prod.
+        self.tap_at_mesh_zero_explicit = (
+            config.get('tap_at_bed_mesh_zero_position', None) is not None)
 
         # Register gcode command
         gcode = self.printer.lookup_object('gcode')
@@ -72,16 +78,25 @@ class ZTap:
         default_x, default_y = self.pressure_switch_x, self.pressure_switch_y
         if self.tap_at_bed_mesh_zero_position:
             zrp = self._get_mesh_zero_ref()
-            if zrp is None:
-                # Erreur dure (pas de fallback) : force la correction du
-                # printer.cfg quand on se declare aligne sur le mesh.
+            if zrp is not None:
+                default_x, default_y = zrp
+            elif self.tap_at_mesh_zero_explicit:
+                # Opt-in volontaire mais config incomplete -> erreur dure pour
+                # forcer la correction du printer.cfg.
                 raise gcmd.error(
                     "Z_TAP: tap_at_bed_mesh_zero_position=True mais [bed_mesh] "
                     "zero_reference_position est absent/illisible. "
                     "Corrige le printer.cfg (definis [bed_mesh] "
                     "zero_reference_position: X, Y), ou mets "
                     "tap_at_bed_mesh_zero_position: False dans [yumi_z_tap].")
-            default_x, default_y = zrp
+            else:
+                # Defaut (non declare) sans zero_reference_position : on ne
+                # casse pas la prod -> fallback doux sur pressure_switch.
+                gcmd.respond_info(
+                    "Z_TAP: pas de [bed_mesh] zero_reference_position -> tap "
+                    "au pressure_switch (%.1f, %.1f). Definis "
+                    "zero_reference_position pour aligner Z=0 sur le mesh."
+                    % (self.pressure_switch_x, self.pressure_switch_y))
         self.tap_x = x_param if x_param is not None else default_x
         self.tap_y = y_param if y_param is not None else default_y
 
