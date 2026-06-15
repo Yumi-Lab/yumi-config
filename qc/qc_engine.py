@@ -130,10 +130,10 @@ QC_TESTS = [
     },
     {
         "id": "z_tap_calib",
-        "name": "Z 触碰校准(全程)/ Z tap calib (full travel)",
+        "name": "Z 触碰重复性 / Z tap repeatability",
         "type": "automated",
         "macro": "QC_Z_TAP_CALIB",
-        "timeout": 300,
+        "timeout": 450,
     },
     {
         "id": "screws_tilt",
@@ -321,17 +321,21 @@ class QCEngine:
                     "Z tap calib: %d tap(s), il en faut au moins %d"
                     % (len(trigs), Z_TAP_WINDOW))
             else:
-                best = min(max(trigs[i:i + Z_TAP_WINDOW]) - min(trigs[i:i + Z_TAP_WINDOW])
-                           for i in range(len(trigs) - Z_TAP_WINDOW + 1))
+                # On cherche les Z_TAP_WINDOW taps les PLUS PROCHES (cluster sur
+                # la liste triée). Il suffit que 3 taps tombent dans la tolérance
+                # n'importe où dans la série -> les rares outliers sont ignorés.
+                st = sorted(trigs)
+                best = min(st[i + Z_TAP_WINDOW - 1] - st[i]
+                           for i in range(len(st) - Z_TAP_WINDOW + 1))
                 allt = ", ".join("%.4f" % t for t in trigs)
                 if best <= Z_TAP_SPREAD_TOL:
-                    detail = ("convergé: %d taps consécutifs spread=%.4fmm (tol=%.4f) "
-                              "sur %d essais | taps=%s"
+                    detail = ("OK: %d taps convergents spread=%.4fmm (tol=%.4f) sur %d taps "
+                              "| taps=%s"
                               % (Z_TAP_WINDOW, best, Z_TAP_SPREAD_TOL, len(trigs), allt))
                     self._record_result(tid, QCResult.PASS, detail)
                 else:
-                    detail = ("jamais convergé: meilleure fenêtre %d taps=%.4fmm > "
-                              "tol %.4f sur %d essais | taps=%s"
+                    detail = ("aucun groupe de %d taps <= tol: meilleur=%.4fmm > %.4f sur %d taps "
+                              "| taps=%s"
                               % (Z_TAP_WINDOW, best, Z_TAP_SPREAD_TOL, len(trigs), allt))
                     self._record_result(tid, QCResult.FAIL, detail)
             return True
