@@ -440,11 +440,15 @@ class QCEngine:
                 "log": self._test_log.get(test["id"], []),
             })
 
-        # Identité firmware de la machine (gravée dans le MCU), si dispo dans
-        # le log du test MCU.
-        report["yumi_config"] = next(
-            (l for l in self._test_log.get("mcu_check", []) if "YUMI_CONFIG" in l.upper()),
+        # Identité firmware de la machine (YUMI_CONFIG gravé). Le macro mcu_check
+        # émet la constante comme "[mcu] board=... device=... lot=... uid=..."
+        # (la VALEUR, sans le mot "YUMI_CONFIG"). On capture la ligne qui porte
+        # device= et on retire le préfixe "[mcu name] " -> clé=valeur propres
+        # pour la ventilation modèle/lot/uid côté compteur.
+        _yc = next(
+            (l for l in self._test_log.get("mcu_check", []) if "device=" in l.lower()),
             "")
+        report["yumi_config"] = re.sub(r"^\s*\[[^\]]*\]\s*", "", _yc).strip()
 
         return report
 
