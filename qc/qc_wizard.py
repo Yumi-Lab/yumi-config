@@ -90,8 +90,9 @@ class Panel(ScreenPanel):
         # Info
         info_label = Gtk.Label()
         info_label.set_markup(
-            f"<span size='large'>{len(QC_TESTS)} tests — Ventilateurs, Cutter, "
-            f"Chauffe 220°C, Homing, Screws Tilt, Bed Mesh, Rotation E0/E1</span>"
+            f"<span size='large'>{len(QC_TESTS)} 项检测 / {len(QC_TESTS)} tests — "
+            f"风扇/Fans · 切刀/Cutter · 加热/Heat · 回零/Homing · "
+            f"调平/Tilt · 网格/Mesh · E0/E1</span>"
         )
         info_label.set_line_wrap(True)
         info_label.set_max_width_chars(50)
@@ -119,29 +120,27 @@ class Panel(ScreenPanel):
         # QC mode status + actions
         qc_mode = self._is_qc_mode()
         active_model = self._active_qc_model() if qc_mode else None
-        # En mode QC, le modèle chargé (gravé dans la cfg) fait foi -> on cale
-        # la sélection dessus pour que le bouton reflète la cfg réellement active.
+        # En mode QC, le modèle chargé (gravé dans la cfg) fait foi.
         if qc_mode and active_model:
             self._selected_size = active_model
 
         mode_label = Gtk.Label()
         if qc_mode:
             mode_label.set_markup(
-                f"<span size='large' foreground='#4CAF50'>Mode QC actif — modèle "
-                f"{active_model or '?'} (cfg production sauvegardée)</span>")
+                f"<span size='large' foreground='#4CAF50'>QC模式 已激活 — {active_model or '?'} / "
+                f"QC mode active</span>")
         else:
             mode_label.set_markup(
-                "<span size='large' foreground='#FF9800'>Cfg de production active — "
-                "choisissez le modèle puis activez le mode QC\n"
-                "(sauvegarde printer.cfg, installe la cfg QC, redémarre Klipper).</span>")
+                "<span size='large' foreground='#FF9800'>生产配置 — 触摸机型加载QC / "
+                "Production cfg — touch a model to load QC</span>")
         mode_label.set_justify(Gtk.Justification.CENTER)
+        mode_label.set_line_wrap(True)
         box.pack_start(mode_label, False, False, 5)
 
-        # Sélecteur de taille machine — TOUJOURS visible (avant ET pendant le QC).
-        # Chaque taille swappe sa propre cfg qc_printer_<TAILLE>.cfg.
+        # Sélecteur de taille machine — TOUJOURS visible et ACTIF : un appui sur
+        # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
         size_title = Gtk.Label()
-        size_title.set_markup(
-            "<span size='large' weight='bold'>机型 / Modèle machine</span>")
+        size_title.set_markup("<span size='large' weight='bold'>机型 / Model</span>")
         box.pack_start(size_title, False, False, 5)
 
         size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -149,7 +148,7 @@ class Panel(ScreenPanel):
         for size in QC_SIZES:
             avail = os.path.exists(self._qc_cfg_path(size))
             selected = (size == self._selected_size)
-            label = size if avail else f"{size}\n(à générer)"
+            label = size if avail else f"{size}\n待生成/TBD"
             style = "color3" if selected else ("color1" if avail else "color2")
             sbtn = self._gtk.Button(None, label, style)
             sbtn.set_size_request(120, 70)
@@ -158,33 +157,24 @@ class Panel(ScreenPanel):
             size_row.pack_start(sbtn, False, False, 0)
         box.pack_start(size_row, False, False, 5)
 
+        # Indique ce que fait un appui sur le modèle (bilingue CN/EN)
+        hint = Gtk.Label()
         if qc_mode:
-            # Si l'opérateur choisit une AUTRE taille que celle chargée -> bouton
-            # pour recharger cette cfg (re-swap + restart). Sinon START QC.
-            if active_model and self._selected_size != active_model:
-                load_btn = self._gtk.Button(
-                    "refresh", f"Charger {self._selected_size} (redémarre)", "color3",
-                    scale=self.bts * 1.5)
-                load_btn.connect("clicked", self._on_enter_qc_mode)
-                load_btn.set_size_request(300, 80)
-                box.pack_start(load_btn, False, False, 10)
-            else:
-                start_btn = self._gtk.Button("resume", _("开始检测 / START QC"), "color3",
-                                             scale=self.bts * 1.5)
-                start_btn.connect("clicked", self._on_start_clicked)
-                start_btn.set_size_request(300, 80)
-                box.pack_start(start_btn, False, False, 10)
+            hint.set_markup(
+                f"<span size='large' weight='bold'>触摸 {active_model or '机型'} 开始检测 / "
+                f"touch {active_model or 'model'} to START QC</span>")
+        else:
+            hint.set_markup(
+                "<span size='large' weight='bold'>触摸机型加载并重启 / "
+                "touch a model to load &amp; restart</span>")
+        hint.set_justify(Gtk.Justification.CENTER)
+        hint.set_line_wrap(True)
+        box.pack_start(hint, False, False, 10)
 
-            exit_btn = self._gtk.Button("cancel", "Quitter le mode QC (cfg prod)", "color2")
+        if qc_mode:
+            exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
             exit_btn.connect("clicked", self._on_exit_qc_mode)
             box.pack_start(exit_btn, False, False, 5)
-        else:
-            enter_btn = self._gtk.Button(
-                "refresh", f"启用QC模式 / Enable QC mode ({self._selected_size})",
-                "color3", scale=self.bts * 1.5)
-            enter_btn.connect("clicked", self._on_enter_qc_mode)
-            enter_btn.set_size_request(300, 80)
-            box.pack_start(enter_btn, False, False, 10)
 
         self.content.add(box)
         self.content.show_all()
@@ -226,9 +216,16 @@ class Panel(ScreenPanel):
                 pass
 
     def _on_size_selected(self, widget, size):
-        """Sélection de la taille machine : mémorise et rafraîchit l'écran."""
+        """Un appui sur un modèle EST l'action : si ce modèle est déjà chargé en
+        mode QC -> lance le QC ; sinon -> swap sa cfg + restart (= charge le QC du
+        modèle). C235/C335... non générés ont leur bouton désactivé."""
+        if not os.path.exists(self._qc_cfg_path(size)):
+            return
         self._selected_size = size
-        self._build_start_screen()
+        if self._is_qc_mode() and self._active_qc_model() == size:
+            self._on_start_clicked(widget)
+        else:
+            self._on_enter_qc_mode(widget)
 
     def _on_enter_qc_mode(self, widget):
         """Backup printer.cfg, install the QC config of the selected size,
@@ -236,8 +233,8 @@ class Panel(ScreenPanel):
         qc_cfg = self._qc_cfg_path(self._selected_size)
         if not os.path.exists(qc_cfg):
             self._screen.show_popup_message(
-                f"Cfg QC {self._selected_size} pas encore générée "
-                f"({os.path.basename(qc_cfg)}) — à générer sur une vraie machine",
+                f"{self._selected_size} 配置未生成 / cfg not generated yet "
+                f"({os.path.basename(qc_cfg)})",
                 level=3)
             return
         try:
@@ -248,27 +245,28 @@ class Panel(ScreenPanel):
             self._copy_cfg_content(qc_cfg, PROD_CFG)
         except Exception as e:
             logger.error(f"QC: cfg swap failed: {e}")
-            self._screen.show_popup_message(f"Echec swap cfg: {e}", level=3)
+            self._screen.show_popup_message(f"配置切换失败 / cfg swap failed: {e}", level=3)
             return
         self._screen.show_popup_message(
-            "Mode QC : redémarrage de Klipper...", level=1)
+            f"加载 {self._selected_size} QC配置，重启中… / Loading QC cfg, restarting…",
+            level=1)
         self._screen._ws.klippy.restart_firmware()
 
     def _on_exit_qc_mode(self, widget):
         """Restore the production printer.cfg and restart Klipper."""
         if not os.path.exists(BACKUP_CFG):
             self._screen.show_popup_message(
-                "Aucun backup trouvé (printer.cfg.qc-backup)", level=3)
+                "无备份 / No backup found (printer.cfg.qc-backup)", level=3)
             return
         try:
             self._copy_cfg_content(BACKUP_CFG, PROD_CFG)
             os.remove(BACKUP_CFG)
         except Exception as e:
             logger.error(f"QC: cfg restore failed: {e}")
-            self._screen.show_popup_message(f"Echec restauration cfg: {e}", level=3)
+            self._screen.show_popup_message(f"恢复失败 / Restore failed: {e}", level=3)
             return
         self._screen.show_popup_message(
-            "Cfg production restaurée : redémarrage de Klipper...", level=1)
+            "恢复生产配置，重启中… / Production cfg restored, restarting…", level=1)
         self._screen._ws.klippy.restart_firmware()
 
     def _build_running_screen(self):
@@ -497,12 +495,12 @@ class Panel(ScreenPanel):
     def _on_start_clicked(self, widget):
         if not self._is_qc_mode():
             self._screen.show_popup_message(
-                "Activez d'abord le mode QC (cfg dédiée)", level=2)
+                "请先激活QC模式 / Enable QC mode first", level=2)
             return
         printer_id = self.labels["printer_id"].get_text().strip()
         if not printer_id:
             self._screen.show_popup_message(
-                "Please enter a Printer ID", level=2
+                "请输入打印机ID / Enter a Printer ID", level=2
             )
             return
 
