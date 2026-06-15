@@ -4,6 +4,7 @@ Provides a step-by-step wizard with automated tests and visual confirmations.
 """
 import gi
 import logging
+import os
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
@@ -11,6 +12,13 @@ from gi.repository import Gtk, GLib, Pango
 from ks_includes.screen_panel import ScreenPanel
 
 logger = logging.getLogger("KlipperScreen.qc_wizard")
+
+# QC mode = printer.cfg swapped with the dedicated QC config.
+# The production cfg is kept in BACKUP_CFG until the QC is finished.
+CONFIG_DIR = os.path.expanduser("~/printer_data/config")
+PROD_CFG = os.path.join(CONFIG_DIR, "printer.cfg")
+QC_CFG = os.path.join(CONFIG_DIR, "qc_printer.cfg")
+BACKUP_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-backup")
 
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
@@ -25,7 +33,7 @@ except ImportError:
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
-        title = title or _("Quality Control")
+        title = title or _("质量检测 / Quality Control")
         super().__init__(screen, title)
 
         self.engine = QCEngine()
@@ -37,6 +45,7 @@ class Panel(ScreenPanel):
         )
         self._visual_dialog = None
         self._current_report = None
+        self._timeout_id = None
 
         # Build the UI
         self._build_start_screen()
@@ -59,8 +68,8 @@ class Panel(ScreenPanel):
         # Info
         info_label = Gtk.Label()
         info_label.set_markup(
-            f"<span size='large'>{len(QC_TESTS)} tests — Homing, Motors, Fans, "
-            f"Temperature, PID, Bed Mesh</span>"
+            f"<span size='large'>{len(QC_TESTS)} tests — Ventilateurs, Cutter, "
+            f"Chauffe 220°C, Homing, Screws Tilt, Bed Mesh, Rotation E0/E1</span>"
         )
         info_label.set_line_wrap(True)
         info_label.set_max_width_chars(50)
@@ -85,15 +94,106 @@ class Panel(ScreenPanel):
         id_box.pack_start(self.labels["printer_id"], False, False, 0)
         box.pack_start(id_box, False, False, 10)
 
-        # Start button
-        start_btn = self._gtk.Button("resume", _("START QC"), "color3",
-                                     scale=self.bts * 1.5)
-        start_btn.connect("clicked", self._on_start_clicked)
-        start_btn.set_size_request(300, 80)
-        box.pack_start(start_btn, False, False, 20)
+        # QC mode status + actions
+        qc_mode = self._is_qc_mode()
+        mode_label = Gtk.Label()
+        if qc_mode:
+            mode_label.set_markup(
+                "<span size='large' foreground='#4CAF50'>Mode QC actif "
+                "(cfg production sauvegardée)</span>"
+            )
+        else:
+            mode_label.set_markup(
+                "<span size='large' foreground='#FF9800'>Cfg de production active — "
+                "le mode QC sauvegarde printer.cfg, installe la cfg QC\n"
+                "et redémarre Klipper. Tout est restauré à la fin du QC.</span>"
+            )
+        mode_label.set_justify(Gtk.Justification.CENTER)
+        box.pack_start(mode_label, False, False, 5)
+
+        if qc_mode:
+            start_btn = self._gtk.Button("resume", _("开始检测 / START QC"), "color3",
+                                         scale=self.bts * 1.5)
+            start_btn.connect("clicked", self._on_start_clicked)
+            start_btn.set_size_request(300, 80)
+            box.pack_start(start_btn, False, False, 10)
+
+            exit_btn = self._gtk.Button("cancel", "Quitter le mode QC (cfg prod)", "color2")
+            exit_btn.connect("clicked", self._on_exit_qc_mode)
+            box.pack_start(exit_btn, False, False, 5)
+        else:
+            enter_btn = self._gtk.Button("refresh", "启用QC模式 / Enable QC mode", "color3",
+                                         scale=self.bts * 1.5)
+            enter_btn.connect("clicked", self._on_enter_qc_mode)
+            enter_btn.set_size_request(300, 80)
+            box.pack_start(enter_btn, False, False, 10)
 
         self.content.add(box)
         self.content.show_all()
+
+    # ─── QC MODE (swap printer.cfg <-> qc_printer.cfg) ─────────
+
+    def _is_qc_mode(self):
+        """True if the currently loaded Klipper config is the QC one
+        (detected via the [gcode_macro _QC_MODE] marker)."""
+        try:
+            return bool(self._screen.printer.get_config_section("gcode_macro _QC_MODE"))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _copy_cfg_content(src, dst):
+        """Copy file content. Writes in place so an existing destination
+        keeps its inode/ownership (Moonraker edits must keep working)."""
+        with open(src, "rb") as f:
+            data = f.read()
+        existed = os.path.exists(dst)
+        with open(dst, "wb") as f:
+            f.write(data)
+        if not existed:
+            try:
+                st = os.stat(src)
+                os.chown(dst, st.st_uid, st.st_gid)
+            except (PermissionError, OSError):
+                pass
+
+    def _on_enter_qc_mode(self, widget):
+        """Backup printer.cfg, install the QC config, restart Klipper."""
+        if not os.path.exists(QC_CFG):
+            self._screen.show_popup_message(
+                f"Fichier manquant: {QC_CFG} — copier la variante machine "
+                f"(qc/qc_printer_*.cfg) sous ce nom", level=3)
+            return
+        try:
+            # Never overwrite an existing backup: it is the real prod cfg
+            # from a previous QC that was not finished.
+            if not os.path.exists(BACKUP_CFG):
+                self._copy_cfg_content(PROD_CFG, BACKUP_CFG)
+            self._copy_cfg_content(QC_CFG, PROD_CFG)
+        except Exception as e:
+            logger.error(f"QC: cfg swap failed: {e}")
+            self._screen.show_popup_message(f"Echec swap cfg: {e}", level=3)
+            return
+        self._screen.show_popup_message(
+            "Mode QC : redémarrage de Klipper...", level=1)
+        self._screen._ws.klippy.restart_firmware()
+
+    def _on_exit_qc_mode(self, widget):
+        """Restore the production printer.cfg and restart Klipper."""
+        if not os.path.exists(BACKUP_CFG):
+            self._screen.show_popup_message(
+                "Aucun backup trouvé (printer.cfg.qc-backup)", level=3)
+            return
+        try:
+            self._copy_cfg_content(BACKUP_CFG, PROD_CFG)
+            os.remove(BACKUP_CFG)
+        except Exception as e:
+            logger.error(f"QC: cfg restore failed: {e}")
+            self._screen.show_popup_message(f"Echec restauration cfg: {e}", level=3)
+            return
+        self._screen.show_popup_message(
+            "Cfg production restaurée : redémarrage de Klipper...", level=1)
+        self._screen._ws.klippy.restart_firmware()
 
     def _build_running_screen(self):
         self._clear_content()
@@ -139,11 +239,11 @@ class Panel(ScreenPanel):
         # Bottom buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
-        abort_btn = self._gtk.Button("stop", _("Abort"), "color2")
+        abort_btn = self._gtk.Button("stop", _("中止 / Abort"), "color2")
         abort_btn.connect("clicked", self._on_abort_clicked)
         btn_box.pack_start(abort_btn, True, True, 0)
 
-        skip_btn = self._gtk.Button("arrow-right", _("Skip Test"), "color1")
+        skip_btn = self._gtk.Button("arrow-right", _("跳过 / Skip"), "color1")
         skip_btn.connect("clicked", self._on_skip_clicked)
         btn_box.pack_end(skip_btn, True, True, 0)
 
@@ -221,24 +321,35 @@ class Panel(ScreenPanel):
             row.pack_end(result_lbl, False, False, 0)
             results_box.pack_start(row, False, False, 0)
 
+            # Sous-ligne détails : la mesure la plus parlante du log capturé
+            # (distance feed, spread Z, corrections vis...) ou le champ details.
+            detail = test.get("details", "")
+            log = test.get("log", [])
+            info = detail or (log[-1] if log else "")
+            if info:
+                d = Gtk.Label()
+                d.set_markup(f"<span size='small' foreground='#9E9E9E'>    {GLib.markup_escape_text(info[:80])}</span>")
+                d.set_halign(Gtk.Align.START)
+                d.set_line_wrap(True)
+                results_box.pack_start(d, False, False, 0)
+
         scroll.add(results_box)
         main_box.pack_start(scroll, True, True, 5)
 
         # Bottom buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
-        # Show "Validate & Save Config" only if QC passed
-        overall = report.get("overall_result", "FAIL")
-        if overall == "PASS":
-            validate_btn = self._gtk.Button("complete", "Validate & Save Config", "color3")
-            validate_btn.connect("clicked", self._on_validate_save)
-            btn_box.pack_start(validate_btn, True, True, 0)
+        # Finish: save report + restore production cfg + restart Klipper
+        if os.path.exists(BACKUP_CFG):
+            finish_btn = self._gtk.Button("complete", "完成 / Finish", "color3")
+            finish_btn.connect("clicked", self._on_finish_qc)
+            btn_box.pack_start(finish_btn, True, True, 0)
 
-        save_btn = self._gtk.Button("sd", _("Save Report"), "color2")
+        save_btn = self._gtk.Button("sd", _("保存报告 / Save report"), "color2")
         save_btn.connect("clicked", self._on_save_report)
         btn_box.pack_start(save_btn, True, True, 0)
 
-        new_btn = self._gtk.Button("refresh", _("New QC"), "color1")
+        new_btn = self._gtk.Button("refresh", _("新检测 / New QC"), "color1")
         new_btn.connect("clicked", self._on_new_qc)
         btn_box.pack_start(new_btn, True, True, 0)
 
@@ -277,9 +388,9 @@ class Panel(ScreenPanel):
         content_box.pack_start(question_label, False, False, 20)
 
         buttons = [
-            {"name": _("YES"), "response": Gtk.ResponseType.YES,
+            {"name": _("是 / YES"), "response": Gtk.ResponseType.YES,
              "style": "color3"},
-            {"name": _("NO"), "response": Gtk.ResponseType.NO,
+            {"name": _("否 / NO"), "response": Gtk.ResponseType.NO,
              "style": "color2"},
         ]
 
@@ -294,12 +405,23 @@ class Panel(ScreenPanel):
         self._gtk.remove_dialog(dialog)
         self._visual_dialog = None
 
+        # Capture cleanup BEFORE recording (recording advances to next test)
+        test = self.engine.get_current_test()
+        cleanup = test.get("cleanup") if test else None
+
         passed = (response_id == Gtk.ResponseType.YES)
         self.engine.record_visual_result(passed)
+
+        if cleanup:
+            self._screen._ws.klippy.gcode_script(cleanup)
 
     # ─── EVENT HANDLERS ────────────────────────────────────────
 
     def _on_start_clicked(self, widget):
+        if not self._is_qc_mode():
+            self._screen.show_popup_message(
+                "Activez d'abord le mode QC (cfg dédiée)", level=2)
+            return
         printer_id = self.labels["printer_id"].get_text().strip()
         if not printer_id:
             self._screen.show_popup_message(
@@ -335,14 +457,18 @@ class Panel(ScreenPanel):
         if self._visual_dialog:
             self._gtk.remove_dialog(self._visual_dialog)
             self._visual_dialog = None
+        self._cancel_timeout()
+        test = self.engine.get_current_test()
+        cleanup = test.get("cleanup") if test else None
         self.engine.skip_current_test()
+        if cleanup:
+            self._screen._ws.klippy.gcode_script(cleanup)
 
-    def _on_validate_save(self, widget):
-        """Save report + SAVE_CONFIG (applies PID/mesh values, restarts Klipper)."""
+    def _on_finish_qc(self, widget):
+        """Save report, restore production printer.cfg, restart Klipper."""
         if self._current_report:
             self.engine.save_report(self._current_report)
-        self._screen.show_popup_message("Saving config & restarting Klipper...", level=1)
-        self._screen._ws.klippy.gcode_script("SAVE_CONFIG")
+        self._on_exit_qc_mode(widget)
 
     def _on_save_report(self, widget):
         if self._current_report:
@@ -382,6 +508,7 @@ class Panel(ScreenPanel):
         GLib.idle_add(self._update_status_label, new_state)
 
     def _on_test_complete(self, test_id, result):
+        self._cancel_timeout()
         GLib.idle_add(self._add_log_entry, test_id, result)
         # Run next test if available
         test = self.engine.get_current_test()
@@ -389,10 +516,12 @@ class Panel(ScreenPanel):
             GLib.idle_add(self._run_test, test)
 
     def _on_visual_prompt(self, test):
-        # Stop part fan after visual check (it was turned on by the macro)
+        # Operator response is unbounded: no timeout while the dialog is open
+        self._cancel_timeout()
         GLib.idle_add(self._show_visual_dialog, test)
 
     def _on_qc_complete(self, report):
+        self._cancel_timeout()
         self._current_report = report
         # Cleanup: stop heaters/fans/motors
         self._screen._ws.klippy.gcode_script("QC_CLEANUP")
@@ -403,9 +532,36 @@ class Panel(ScreenPanel):
     def _run_test(self, test):
         """Send the macro for the current test."""
         self._update_test_display(test)
+        self._cancel_timeout()
+        timeout = test.get("timeout", 0)
+        if timeout:
+            self._timeout_id = GLib.timeout_add_seconds(
+                timeout, self._on_test_timeout, test["id"]
+            )
         macro = test.get("macro", "")
         if macro:
             self._screen._ws.klippy.gcode_script(macro)
+
+    def _cancel_timeout(self):
+        if self._timeout_id:
+            GLib.source_remove(self._timeout_id)
+            self._timeout_id = None
+
+    def _on_test_timeout(self, test_id):
+        """Test exceeded its timeout (macro aborted by a Klipper error,
+        MCU stuck...) — send its cleanup (thermal safety) then record a
+        FAIL so the QC can move on."""
+        self._timeout_id = None
+        test = self.engine.get_current_test()
+        if (test and test["id"] == test_id
+                and self.engine.state in (QCState.RUNNING, QCState.WAITING_GCODE)):
+            logger.warning(f"QC: test {test_id} timed out")
+            # Cut whatever the test turned on (heater/bed/fan) before failing
+            cleanup = test.get("cleanup")
+            if cleanup:
+                self._screen._ws.klippy.gcode_script(cleanup)
+            self.engine.fail_current_test("Timeout: no result from printer")
+        return False
 
     def _update_test_display(self, test):
         current, total = self.engine.get_progress()

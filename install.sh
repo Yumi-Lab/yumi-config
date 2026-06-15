@@ -220,9 +220,11 @@ echo "Enable QRCODE ...[Done]"
 # (files that do not exist in stock klipper), so a symlink keeps klipper's git
 # working tree clean and does not interfere with Moonraker updates.
 # Git pull on yumi-config automatically updates these modules.
-# NOTE: motion_queuing.py is intentionally NOT in this list — it is a PATCHED
-# CORE klipper file and is deployed as a real COPY below (see deploy_patched_core).
-# A symlink over a git-tracked file makes the tree "dirty" and breaks update_manager.
+# NOTE: the extruder lead_time patch (extruder.py + motion_queuing.py) is NO LONGER
+# deployed here. It now lives as proper commits in the Yumi-Lab/klipper fork
+# (branch tracked by KLIPPER_REPO_BRANCH), rebased on upstream. The pad gets it via
+# the normal klipper git clone/pull — clean working tree, no copy-over, no pycache
+# hack, no update_manager drift.
 YUMI_EXTRAS=(
   "filament_yumi_smart_motion_sensor.py"
   "yumi_z_tap.py"
@@ -245,42 +247,13 @@ for module in "${YUMI_EXTRAS[@]}"; do
 done
 echo "Klippy extras symlinked ...[Done]"
 
-# Deploy PATCHED CORE klipper files as REAL COPIES (NOT symlinks).
-# extruder.py (kinematics) + motion_queuing.py (extras) REPLACE files that exist
-# in stock klipper. A symlink over a git-tracked file makes klipper's working tree
-# permanently "dirty": Moonraker's update_manager then flags it invalid and runs
-# a recovery (hard-reset / re-clone) that the symlink can break (we saw it fail on
-# a root-owned __pycache__). A plain copy lets git update/recover cleanly to stock;
-# yumi-sync (repair_klipper_lead) then re-copies our version on top, detecting the
-# drift by hash. kin_extruder.c stays STOCK (pure-Python patch). On upstream
-# Klipper update, rebase these files (see klipper/_LEAD_PATCH.md).
-deploy_patched_core() {
-  local src="$1" dst="$2"
-  if [ -f "$src" ]; then
-    rm -f "$dst"
-    cp -f "$src" "$dst"
-    echo "✅ $(basename "$dst") -> copied"
-  else
-    echo "⚠ $(basename "$dst") source not found ($src), skipping"
-  fi
-}
-echo "Deploying patched core klipper files (copies)..."
-deploy_patched_core "$PROJECT_DIR/klipper/klippy/kinematics/extruder.py" \
-                    "$KLIPPER_DIR/klippy/kinematics/extruder.py"
-deploy_patched_core "$PROJECT_DIR/klipper/klippy/extras/motion_queuing.py" \
-                    "$KLIPPER_DIR/klippy/extras/motion_queuing.py"
-echo "Patched core klipper files deployed ...[Done]"
-
-# Purge stale Python bytecode so the freshly deployed .py (extruder.py,
-# motion_queuing.py, extras) get recompiled. Without this, Python keeps loading
-# the old .pyc (compiled before the lead_time patch) and the new code is silently
-# ignored -> lead_time / patched modules appear "not to work". A copy/symlink alone
-# does not reliably bump the source mtime that CPython uses to invalidate .pyc.
-echo "Purging klippy __pycache__ (force recompile of deployed modules)..."
-if [ -d "$KLIPPER_DIR/klippy" ]; then
-    find "$KLIPPER_DIR/klippy" -name '__pycache__' -type d -prune -exec rm -rf {} +
-    echo "✅ klippy __pycache__ purged"
-fi
+# NOTE: extruder.py / motion_queuing.py are NO LONGER copied over here. The
+# extruder lead_time patch now ships as real commits in the Yumi-Lab/klipper fork
+# (rebased on upstream), so the pad receives it through the normal klipper git
+# clone/pull with a clean working tree. This removes the copy-over, the
+# __pycache__ purge, and the update_manager drift/recovery problems entirely.
+# kin_extruder.c stays STOCK (the patch is pure-Python). On upstream Klipper
+# update, rebase the fork's `yumi` branch (git rebase upstream/master).
 
 # Restart Klipper only if the script is NOT called by Moonraker
 # Moonraker automatically restarts services via managed_services
@@ -302,6 +275,14 @@ QC_DIR="$PROJECT_DIR/qc"
 if [ -d "$QC_DIR" ]; then
     # QC Macros for Klipper
     cp "$QC_DIR/qc_macros.cfg" "$KLIPPER_CONFIG_DIR/qc_macros.cfg" && echo "qc_macros.cfg copied successfully." || echo "Error copying qc_macros.cfg."
+
+    # QC dedicated printer.cfg (le panel le swappe en mode QC). Machine 2-YMS
+    # sans hyperdrive, généré depuis le backup de prod par generate_qc_cfg.py.
+    if [ -f "$QC_DIR/qc_printer.cfg" ]; then
+        cp "$QC_DIR/qc_printer.cfg" "$KLIPPER_CONFIG_DIR/qc_printer.cfg" \
+            && echo "qc_printer.cfg copied successfully." || echo "Error copying qc_printer.cfg."
+        chown pi:pi "$KLIPPER_CONFIG_DIR/qc_printer.cfg" 2>/dev/null || true
+    fi
 
     # Add include in printer.cfg if not present
     if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then

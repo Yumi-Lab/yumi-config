@@ -4,11 +4,16 @@ for Yumi Lab factory quality control protocol.
 """
 import json
 import os
+import re
 import logging
 from datetime import datetime
 from enum import Enum
 
 logger = logging.getLogger("KlipperScreen.qc_engine")
+
+# Tolérance de répétabilité du Z tap plein course (spread max-min des
+# trigger_z sur les taps de calibration). Au-delà -> FAIL.
+Z_TAP_SPREAD_TOL = 0.05
 
 
 class QCState(Enum):
@@ -27,135 +32,127 @@ class QCResult(Enum):
     SKIPPED = "skipped"
 
 
-# Ordered list of all QC tests
+# Ordered list of all QC tests — protocole usine C235 CHROMAX X12.
+# "cleanup" : gcode de sécurité envoyé par le wizard pour couper ce que le
+# test a allumé (heater/bed/fan). Appliqué après la réponse opérateur d'un
+# test visuel, sur un skip, et sur un timeout. Les tests automatisés qui
+# chauffent (screws_tilt/bed_mesh) le portent comme filet anti-surchauffe
+# en cas de timeout — en complétion normale leur macro coupe elle-même.
 QC_TESTS = [
     {
-        "id": "home_x",
-        "name": "X Axis Homing",
+        "id": "mcu_check",
+        "name": "主板 + 固件 / MCU + firmware",
         "type": "automated",
-        "macro": "QC_HOME_X",
-        "timeout": 30,
+        "macro": "QC_MCU_CHECK",
+        "timeout": 20,
     },
     {
-        "id": "home_y",
-        "name": "Y Axis Homing",
-        "type": "automated",
-        "macro": "QC_HOME_Y",
-        "timeout": 30,
-    },
-    {
-        "id": "home_z",
-        "name": "Z Axis Homing",
-        "type": "automated",
-        "macro": "QC_HOME_Z",
-        "timeout": 60,
-    },
-    {
-        "id": "motor_dir_x",
-        "name": "X Motor Direction",
+        "id": "fan_motherboard",
+        "name": "主板风扇 / Motherboard fan",
         "type": "visual",
-        "macro": "QC_MOTOR_DIR_X",
-        "prompt": "L'axe X s'est-il déplacé vers la DROITE ?",
-        "timeout": 30,
-    },
-    {
-        "id": "motor_dir_y",
-        "name": "Y Motor Direction",
-        "type": "visual",
-        "macro": "QC_MOTOR_DIR_Y",
-        "prompt": "L'axe Y s'est-il déplacé vers l'ARRIÈRE ?",
-        "timeout": 30,
-    },
-    {
-        "id": "motor_dir_z",
-        "name": "Z Motor Direction",
-        "type": "visual",
-        "macro": "QC_MOTOR_DIR_Z",
-        "prompt": "L'axe Z est-il monté vers le HAUT ?",
-        "timeout": 60,
-    },
-    {
-        "id": "travel_x",
-        "name": "X Full Travel",
-        "type": "visual",
-        "macro": "QC_TRAVEL_X",
-        "prompt": "L'axe X a-t-il parcouru toute sa course sans blocage ?",
-        "timeout": 60,
-    },
-    {
-        "id": "travel_y",
-        "name": "Y Full Travel",
-        "type": "visual",
-        "macro": "QC_TRAVEL_Y",
-        "prompt": "L'axe Y a-t-il parcouru toute sa course sans blocage ?",
-        "timeout": 60,
-    },
-    {
-        "id": "travel_z",
-        "name": "Z Full Travel",
-        "type": "visual",
-        "macro": "QC_TRAVEL_Z",
-        "prompt": "L'axe Z a-t-il parcouru toute sa course sans blocage ?",
-        "timeout": 120,
-    },
-    {
-        "id": "probe_check",
-        "name": "BLTouch Probe",
-        "type": "visual",
-        "macro": "QC_PROBE_CHECK",
-        "prompt": "Le BLTouch s'est-il déployé et rétracté correctement ?",
+        "macro": "QC_FAN_MOTHERBOARD",
+        "prompt": "主板风扇在转吗？\nIs the motherboard fan spinning?",
         "timeout": 30,
     },
     {
         "id": "fan_part",
-        "name": "Part Cooling Fan",
+        "name": "模型冷却风扇 / Part cooling fan",
         "type": "visual",
         "macro": "QC_FAN_PART",
-        "prompt": "Le ventilateur de refroidissement pièce tourne-t-il ?",
-        "timeout": 15,
+        "prompt": "模型冷却风扇在转吗？\nIs the part cooling fan spinning?",
+        "cleanup": "M106 S0",
+        "timeout": 20,
     },
     {
         "id": "fan_hotend",
-        "name": "Hotend Fan",
+        "name": "热端风扇 / Hotend fan",
         "type": "visual",
         "macro": "QC_FAN_HOTEND",
-        "prompt": "Le ventilateur du hotend tourne-t-il ?",
-        "timeout": 30,
+        "prompt": "热端风扇在转吗？\nIs the hotend fan spinning?",
+        "timeout": 20,
     },
     {
+        # Auto : la buse atteint 220C -> validé. Reste chaude pour le cutter.
         "id": "heat_extruder",
-        "name": "Extruder Heating",
+        "name": "喷头加热 220°C / Hotend heat 220°C",
         "type": "automated",
         "macro": "QC_HEAT_EXTRUDER",
-        "timeout": 180,
+        "timeout": 300,
     },
     {
+        # Auto : le plateau atteint 60C -> validé.
         "id": "heat_bed",
-        "name": "Bed Heating",
+        "name": "热床加热 60°C / Bed heat 60°C",
         "type": "automated",
         "macro": "QC_HEAT_BED",
         "timeout": 300,
     },
     {
-        "id": "bed_mesh",
-        "name": "Bed Mesh",
-        "type": "automated",
-        "macro": "QC_BED_MESH",
-        "timeout": 600,
-    },
-    {
-        "id": "pid_extruder",
-        "name": "PID Extruder",
-        "type": "automated",
-        "macro": "QC_PID_EXTRUDER",
+        # APRES la chauffe : le cutter coince a froid, il faut une tete chaude.
+        "id": "cutter",
+        "name": "切刀(热端)/ Cutter (hot)",
+        "type": "visual",
+        "macro": "QC_CUTTER",
+        "prompt": "切刀正常动作了吗（热端）？\nDid the cutter actuate correctly (hot)?",
+        "cleanup": "M104 S0",
         "timeout": 300,
     },
     {
-        "id": "pid_bed",
-        "name": "PID Bed",
+        "id": "home_x",
+        "name": "X 轴归位 / Home X",
         "type": "automated",
-        "macro": "QC_PID_BED",
-        "timeout": 600,
+        "macro": "QC_HOME_X",
+        "timeout": 60,
+    },
+    {
+        "id": "home_y",
+        "name": "Y 轴归位 / Home Y",
+        "type": "automated",
+        "macro": "QC_HOME_Y",
+        "timeout": 60,
+    },
+    {
+        "id": "z_tap_home",
+        "name": "Z 触碰归位 + 升至最高 / Z tap home + Zmax",
+        "type": "visual",
+        "macro": "QC_Z_TAP_HOME",
+        "prompt": "喷头已升到最高（Zmax）且第一次触碰正常？\nNozzle at top (Zmax) and first tap OK?",
+        "timeout": 120,
+    },
+    {
+        "id": "z_tap_calib",
+        "name": "Z 触碰校准(全程)/ Z tap calib (full travel)",
+        "type": "automated",
+        "macro": "QC_Z_TAP_CALIB",
+        "timeout": 300,
+    },
+    {
+        "id": "screws_tilt",
+        "name": "螺丝调平 / Screws tilt adjust",
+        "type": "automated",
+        "macro": "QC_SCREWS_TILT",
+        "timeout": 300,
+    },
+    {
+        "id": "bed_mesh",
+        "name": "热床网格 / Bed mesh",
+        "type": "automated",
+        "macro": "QC_BED_MESH",
+        "timeout": 900,
+    },
+    {
+        "id": "e0_head",
+        "name": "YMS-1 传感器 + 送料到头 / YMS-1 sensor + feed to head",
+        "type": "automated",
+        "macro": "QC_HEAD_FEED TOOL=1",
+        "timeout": 300,
+    },
+    {
+        "id": "e1_head",
+        "name": "YMS-2 传感器 + 送料到头 / YMS-2 sensor + feed to head",
+        "type": "automated",
+        "macro": "QC_HEAD_FEED TOOL=2",
+        "timeout": 300,
     },
 ]
 
@@ -173,6 +170,8 @@ class QCEngine:
         self._on_test_complete = None
         self._on_visual_prompt = None
         self._on_qc_complete = None
+        self._ztap_triggers = []  # trigger_z collectés pendant z_tap_calib
+        self._test_log = {}       # lignes d'info/erreur capturées par test (rapport)
 
     def set_callbacks(self, on_state_change=None, on_test_complete=None,
                       on_visual_prompt=None, on_qc_complete=None):
@@ -187,6 +186,8 @@ class QCEngine:
         self.start_time = datetime.now()
         self.current_test_index = -1
         self.results = {}
+        self._ztap_triggers = []
+        self._test_log = {}
         for test in QC_TESTS:
             self.results[test["id"]] = {
                 "result": QCResult.PENDING,
@@ -217,7 +218,27 @@ class QCEngine:
         return (self.current_test_index + 1, len(QC_TESTS))
 
     def process_gcode_response(self, message):
-        """Parse QC: prefixed gcode responses. Returns True if handled."""
+        """Parse QC: prefixed gcode responses + captures trigger_z des taps."""
+        cur = self.get_current_test()
+
+        # Log par test : capture les lignes d'info (// ...) et erreurs (!! ...)
+        # pour le rapport (distances feed, spread Z, corrections vis, mesh...).
+        if cur and (message.startswith("// ") or message.startswith("!! ")):
+            line = message[3:].strip()
+            if line:
+                buf = self._test_log.setdefault(cur["id"], [])
+                if len(buf) < 40 and line not in buf:
+                    buf.append(line)
+
+        # Capture des trigger_z (YUMI_Z_TAP "VALIDATED: trigger_z=X.XXXX")
+        # pendant le test de calibration Z plein course.
+        if (cur and cur.get("id") == "z_tap_calib" and "trigger_z=" in message):
+            m = re.search(r"trigger_z=(-?\d+\.?\d*)", message)
+            if m:
+                self._ztap_triggers.append(float(m.group(1)))
+                logger.info(f"QC: z_tap trigger_z={m.group(1)}")
+            return True
+
         if not message.startswith("QC:") and not message.startswith("echo: QC:"):
             return False
 
@@ -230,24 +251,47 @@ class QCEngine:
         test_id = parts[1]
         status = parts[2]
 
+        # Marqueur de progression interne (QC:ZTAP_ITER:i/n) — ignoré
+        if test_id.upper() == "ZTAP_ITER":
+            return True
+
         test = self.get_current_test()
         if not test or test["id"].lower() != test_id.lower():
             logger.warning(f"QC: Received response for {test_id} but current test is {test['id'] if test else 'none'}")
             return True
 
+        # IMPORTANT : enregistrer sous l'id de QC_TESTS (test["id"], minuscule),
+        # pas sous l'id du signal (test_id, majuscule) — sinon le rapport ne
+        # retrouve pas le résultat (clés results != ids QC_TESTS).
+        tid = test["id"]
         if status == "START":
             self._set_state(QCState.WAITING_GCODE)
             return True
         elif status == "PASS":
-            self._record_result(test_id, QCResult.PASS)
+            self._record_result(tid, QCResult.PASS)
             return True
         elif status == "FAIL":
-            self._record_result(test_id, QCResult.FAIL, "Automated check failed")
+            self._record_result(tid, QCResult.FAIL, "Automated check failed")
             return True
         elif status == "VISUAL":
             self._set_state(QCState.WAITING_VISUAL)
             if self._on_visual_prompt and "prompt" in test:
                 self._on_visual_prompt(test)
+            return True
+        elif status == "DONE" and tid == "z_tap_calib":
+            # Fin des taps de calibration : calcule le spread plein course.
+            trigs = self._ztap_triggers
+            if len(trigs) < 2:
+                self._record_result(
+                    tid, QCResult.FAIL,
+                    "Z tap calib: %d tap(s) capturé(s), insuffisant" % len(trigs))
+            else:
+                spread = max(trigs) - min(trigs)
+                detail = ("spread=%.4fmm sur %d taps (tol=%.4f) | taps=%s"
+                          % (spread, len(trigs), Z_TAP_SPREAD_TOL,
+                             ", ".join("%.4f" % t for t in trigs)))
+                result = QCResult.PASS if spread <= Z_TAP_SPREAD_TOL else QCResult.FAIL
+                self._record_result(tid, result, detail)
             return True
 
         return False
@@ -267,6 +311,12 @@ class QCEngine:
         test = self.get_current_test()
         if test:
             self._record_result(test["id"], QCResult.SKIPPED, "Skipped by operator")
+
+    def fail_current_test(self, details=""):
+        """Fail the current test (e.g. timeout, Klipper error aborted the macro)."""
+        test = self.get_current_test()
+        if test:
+            self._record_result(test["id"], QCResult.FAIL, details)
 
     def abort(self):
         """Abort the entire QC process."""
@@ -339,7 +389,16 @@ class QCEngine:
                 "result": r.get("result", QCResult.PENDING).value if isinstance(r.get("result"), QCResult) else str(r.get("result", "pending")),
                 "timestamp": r.get("timestamp", ""),
                 "details": r.get("details", ""),
+                # Log capturé pendant le test : distances feed, spread Z,
+                # corrections de vis, mesh complete, erreurs... (mesures riches)
+                "log": self._test_log.get(test["id"], []),
             })
+
+        # Identité firmware de la machine (gravée dans le MCU), si dispo dans
+        # le log du test MCU.
+        report["yumi_config"] = next(
+            (l for l in self._test_log.get("mcu_check", []) if "YUMI_CONFIG" in l.upper()),
+            "")
 
         return report
 
