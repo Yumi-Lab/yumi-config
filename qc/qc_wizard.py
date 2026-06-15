@@ -17,8 +17,21 @@ logger = logging.getLogger("KlipperScreen.qc_wizard")
 # The production cfg is kept in BACKUP_CFG until the QC is finished.
 CONFIG_DIR = os.path.expanduser("~/printer_data/config")
 PROD_CFG = os.path.join(CONFIG_DIR, "printer.cfg")
-QC_CFG = os.path.join(CONFIG_DIR, "qc_printer.cfg")
 BACKUP_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-backup")
+
+# Tailles machine sélectionnables AVANT le QC. Chaque taille a sa propre cfg
+# qc_printer_<TAILLE>.cfg (géométrie/course différentes), déployée par install.sh.
+# C335/C435 sont à générer sur une vraie machine (le sélecteur les marque "à
+# générer" tant que leur cfg n'existe pas). C235 retombe sur le legacy
+# qc_printer.cfg si qc_printer_C235.cfg n'est pas encore déployé.
+QC_SIZES = ["C235", "C335", "C435"]
+QC_CFG_LEGACY = os.path.join(CONFIG_DIR, "qc_printer.cfg")
+
+# Compteur QC central (qc.yumi-lab.com). Le rapport JSON est posté ici en fin
+# de QC. Le token (= /opt/yumi-qc/secret_token côté serveur) est placé
+# MANUELLEMENT sur le pad usine dans QC_TOKEN_FILE — il n'est pas dans le repo.
+QC_COUNTER_URL = "https://qc.yumi-lab.com/api/qc/report"
+QC_TOKEN_FILE = os.path.join(CONFIG_DIR, "qc_token")
 
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
@@ -46,9 +59,18 @@ class Panel(ScreenPanel):
         self._visual_dialog = None
         self._current_report = None
         self._timeout_id = None
+        self._selected_size = QC_SIZES[0]
 
         # Build the UI
         self._build_start_screen()
+
+    def _qc_cfg_path(self, size):
+        """Chemin de la cfg QC pour une taille machine. Fallback sur le legacy
+        qc_printer.cfg pour C235 si la cfg suffixée n'est pas encore déployée."""
+        p = os.path.join(CONFIG_DIR, f"qc_printer_{size}.cfg")
+        if not os.path.exists(p) and size == "C235" and os.path.exists(QC_CFG_LEGACY):
+            return QC_CFG_LEGACY
+        return p
 
     # ─── UI BUILDERS ────────────────────────────────────────────
 
@@ -122,8 +144,30 @@ class Panel(ScreenPanel):
             exit_btn.connect("clicked", self._on_exit_qc_mode)
             box.pack_start(exit_btn, False, False, 5)
         else:
-            enter_btn = self._gtk.Button("refresh", "启用QC模式 / Enable QC mode", "color3",
-                                         scale=self.bts * 1.5)
+            # Sélecteur de taille machine (AVANT d'activer le mode QC) — chaque
+            # taille swappe sa propre cfg qc_printer_<TAILLE>.cfg.
+            size_title = Gtk.Label()
+            size_title.set_markup(
+                "<span size='large' weight='bold'>机型 / Modèle machine</span>")
+            box.pack_start(size_title, False, False, 5)
+
+            size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            size_row.set_halign(Gtk.Align.CENTER)
+            for size in QC_SIZES:
+                avail = os.path.exists(self._qc_cfg_path(size))
+                selected = (size == self._selected_size)
+                label = size if avail else f"{size}\n(à générer)"
+                style = "color3" if selected else ("color1" if avail else "color2")
+                sbtn = self._gtk.Button(None, label, style)
+                sbtn.set_size_request(120, 70)
+                sbtn.set_sensitive(avail)
+                sbtn.connect("clicked", self._on_size_selected, size)
+                size_row.pack_start(sbtn, False, False, 0)
+            box.pack_start(size_row, False, False, 5)
+
+            enter_btn = self._gtk.Button(
+                "refresh", f"启用QC模式 / Enable QC mode ({self._selected_size})",
+                "color3", scale=self.bts * 1.5)
             enter_btn.connect("clicked", self._on_enter_qc_mode)
             enter_btn.set_size_request(300, 80)
             box.pack_start(enter_btn, False, False, 10)
@@ -157,19 +201,27 @@ class Panel(ScreenPanel):
             except (PermissionError, OSError):
                 pass
 
+    def _on_size_selected(self, widget, size):
+        """Sélection de la taille machine : mémorise et rafraîchit l'écran."""
+        self._selected_size = size
+        self._build_start_screen()
+
     def _on_enter_qc_mode(self, widget):
-        """Backup printer.cfg, install the QC config, restart Klipper."""
-        if not os.path.exists(QC_CFG):
+        """Backup printer.cfg, install the QC config of the selected size,
+        restart Klipper."""
+        qc_cfg = self._qc_cfg_path(self._selected_size)
+        if not os.path.exists(qc_cfg):
             self._screen.show_popup_message(
-                f"Fichier manquant: {QC_CFG} — copier la variante machine "
-                f"(qc/qc_printer_*.cfg) sous ce nom", level=3)
+                f"Cfg QC {self._selected_size} pas encore générée "
+                f"({os.path.basename(qc_cfg)}) — à générer sur une vraie machine",
+                level=3)
             return
         try:
             # Never overwrite an existing backup: it is the real prod cfg
             # from a previous QC that was not finished.
             if not os.path.exists(BACKUP_CFG):
                 self._copy_cfg_content(PROD_CFG, BACKUP_CFG)
-            self._copy_cfg_content(QC_CFG, PROD_CFG)
+            self._copy_cfg_content(qc_cfg, PROD_CFG)
         except Exception as e:
             logger.error(f"QC: cfg swap failed: {e}")
             self._screen.show_popup_message(f"Echec swap cfg: {e}", level=3)
@@ -282,7 +334,8 @@ class Panel(ScreenPanel):
         secs = duration % 60
         info_label = Gtk.Label()
         info_label.set_markup(
-            f"<span size='large'>Printer: {report.get('printer_id', '?')} — "
+            f"<span size='large'>{report.get('qc_model', '?')} — "
+            f"Printer: {report.get('printer_id', '?')} — "
             f"Duration: {mins}m {secs}s</span>"
         )
         main_box.pack_start(info_label, False, False, 5)
@@ -464,10 +517,45 @@ class Panel(ScreenPanel):
         if cleanup:
             self._screen._ws.klippy.gcode_script(cleanup)
 
+    def _qc_token(self):
+        """Token X-QC-Token, posé manuellement sur le pad usine (hors repo)."""
+        try:
+            with open(QC_TOKEN_FILE) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    def _upload_report(self, report):
+        """POST le rapport JSON sur le compteur central qc.yumi-lab.com.
+        Renvoie (ok: bool, message: str). N'utilise que la stdlib (urllib)."""
+        token = self._qc_token()
+        if not token:
+            return False, f"Token QC manquant : {QC_TOKEN_FILE}"
+        import json
+        import urllib.request
+        import urllib.error
+        data = json.dumps(report).encode("utf-8")
+        req = urllib.request.Request(
+            QC_COUNTER_URL, data=data, method="POST",
+            headers={"Content-Type": "application/json", "X-QC-Token": token},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    return True, "Rapport QC envoyé ✓"
+                return False, f"Envoi échoué : HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            hint = " (token invalide ?)" if e.code == 401 else ""
+            return False, f"Envoi refusé : HTTP {e.code}{hint}"
+        except Exception as e:
+            return False, f"Erreur réseau : {e}"
+
     def _on_finish_qc(self, widget):
-        """Save report, restore production printer.cfg, restart Klipper."""
+        """Save report, push au compteur central, restore prod cfg, restart."""
         if self._current_report:
             self.engine.save_report(self._current_report)
+            ok, msg = self._upload_report(self._current_report)
+            self._screen.show_popup_message(msg, level=1 if ok else 3)
         self._on_exit_qc_mode(widget)
 
     def _on_save_report(self, widget):
@@ -480,23 +568,9 @@ class Panel(ScreenPanel):
     def _on_upload_report(self, widget):
         if not self._current_report:
             return
-        # Save first, then upload
-        path = self.engine.save_report(self._current_report)
-        try:
-            import requests
-            r = requests.post(
-                "https://app.yumi-lab.com/api/qc/report",
-                json=self._current_report,
-                timeout=15,
-            )
-            if r.status_code == 200:
-                self._screen.show_popup_message("Report uploaded!", level=1)
-            else:
-                self._screen.show_popup_message(
-                    f"Upload failed: HTTP {r.status_code}", level=3
-                )
-        except Exception as e:
-            self._screen.show_popup_message(f"Upload error: {e}", level=3)
+        self.engine.save_report(self._current_report)  # sauvegarde locale d'abord
+        ok, msg = self._upload_report(self._current_report)
+        self._screen.show_popup_message(msg, level=1 if ok else 3)
 
     def _on_new_qc(self, widget):
         self._current_report = None
@@ -522,6 +596,9 @@ class Panel(ScreenPanel):
 
     def _on_qc_complete(self, report):
         self._cancel_timeout()
+        # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide) —
+        # exploité par le compteur qc.yumi-lab.com (segmentation par modèle).
+        report["qc_model"] = self._selected_size
         self._current_report = report
         # Cleanup: stop heaters/fans/motors
         self._screen._ws.klippy.gcode_script("QC_CLEANUP")

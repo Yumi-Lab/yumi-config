@@ -276,13 +276,16 @@ if [ -d "$QC_DIR" ]; then
     # QC Macros for Klipper
     cp "$QC_DIR/qc_macros.cfg" "$KLIPPER_CONFIG_DIR/qc_macros.cfg" && echo "qc_macros.cfg copied successfully." || echo "Error copying qc_macros.cfg."
 
-    # QC dedicated printer.cfg (le panel le swappe en mode QC). Machine 2-YMS
-    # sans hyperdrive, généré depuis le backup de prod par generate_qc_cfg.py.
-    if [ -f "$QC_DIR/qc_printer.cfg" ]; then
-        cp "$QC_DIR/qc_printer.cfg" "$KLIPPER_CONFIG_DIR/qc_printer.cfg" \
-            && echo "qc_printer.cfg copied successfully." || echo "Error copying qc_printer.cfg."
-        chown pi:pi "$KLIPPER_CONFIG_DIR/qc_printer.cfg" 2>/dev/null || true
-    fi
+    # QC dedicated printer.cfg PAR TAILLE machine (le panel swappe celle choisie
+    # via le sélecteur C235/C335/C435). Machine 2-YMS sans hyperdrive, générée
+    # depuis le backup de prod par generate_qc_cfg.py -> qc_printer_<TAILLE>.cfg.
+    for qccfg in "$QC_DIR"/qc_printer_*.cfg; do
+        [ -f "$qccfg" ] || continue
+        name="$(basename "$qccfg")"
+        cp "$qccfg" "$KLIPPER_CONFIG_DIR/$name" \
+            && echo "$name copied successfully." || echo "Error copying $name."
+        chown pi:pi "$KLIPPER_CONFIG_DIR/$name" 2>/dev/null || true
+    done
 
     # Add include in printer.cfg if not present
     if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
