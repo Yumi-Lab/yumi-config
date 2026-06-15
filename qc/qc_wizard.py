@@ -618,9 +618,15 @@ class Panel(ScreenPanel):
 
     def _on_qc_complete(self, report):
         self._cancel_timeout()
-        # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide) —
-        # exploité par le compteur qc.yumi-lab.com (segmentation par modèle).
+        # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
+        # Le compteur qc.yumi-lab.com ventile par modèle via "device=" dans
+        # yumi_config. Si le firmware n'a pas gravé de device (pad non gravé),
+        # on injecte le modèle choisi à l'écran -> ventilation correcte. Le
+        # firmware gravé reste PRIORITAIRE (on n'injecte que si device= absent).
+        yc = (report.get("yumi_config") or "").strip()
+        if "device=" not in yc:
+            report["yumi_config"] = (yc + " device=" + self._selected_size).strip()
         self._current_report = report
         # Cleanup: stop heaters/fans/motors
         self._screen._ws.klippy.gcode_script("QC_CLEANUP")
