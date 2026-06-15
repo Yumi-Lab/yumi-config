@@ -46,6 +46,10 @@ def parse_sections(text):
 
 def main():
     ref_path, out_path = sys.argv[1], sys.argv[2]
+    # Taille machine déduite du nom de sortie (qc_printer_<TAILLE>.cfg) — gravée
+    # dans le marqueur _QC_MODE pour que le panel détecte le modèle chargé.
+    _b = out_path.rsplit("/", 1)[-1]
+    qc_model = _b[11:-4] if _b.startswith("qc_printer_") and _b.endswith(".cfg") else ""
     with open(ref_path) as f:
         text = f.read()
     sections = parse_sections(text)
@@ -153,10 +157,12 @@ def main():
         "#####################################################################\n\n")
 
     out.append(
-        "# Marqueur lu par le panel QC pour détecter que la cfg QC est active\n"
+        "# Marqueur lu par le panel QC pour détecter que la cfg QC est active.\n"
+        "# variable_model = taille machine (sélecteur du panel), gravée ici.\n"
         "[gcode_macro _QC_MODE]\n"
         "description: Marqueur mode QC actif\n"
         "variable_active: 1\n"
+        f'variable_model: "{qc_model}"\n'
         "gcode:\n"
         '    RESPOND MSG="QC mode actif"\n\n')
 

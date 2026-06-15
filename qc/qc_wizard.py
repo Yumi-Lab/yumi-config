@@ -118,53 +118,67 @@ class Panel(ScreenPanel):
 
         # QC mode status + actions
         qc_mode = self._is_qc_mode()
+        active_model = self._active_qc_model() if qc_mode else None
+        # En mode QC, le modèle chargé (gravé dans la cfg) fait foi -> on cale
+        # la sélection dessus pour que le bouton reflète la cfg réellement active.
+        if qc_mode and active_model:
+            self._selected_size = active_model
+
         mode_label = Gtk.Label()
         if qc_mode:
             mode_label.set_markup(
-                "<span size='large' foreground='#4CAF50'>Mode QC actif "
-                "(cfg production sauvegardée)</span>"
-            )
+                f"<span size='large' foreground='#4CAF50'>Mode QC actif — modèle "
+                f"{active_model or '?'} (cfg production sauvegardée)</span>")
         else:
             mode_label.set_markup(
                 "<span size='large' foreground='#FF9800'>Cfg de production active — "
-                "le mode QC sauvegarde printer.cfg, installe la cfg QC\n"
-                "et redémarre Klipper. Tout est restauré à la fin du QC.</span>"
-            )
+                "choisissez le modèle puis activez le mode QC\n"
+                "(sauvegarde printer.cfg, installe la cfg QC, redémarre Klipper).</span>")
         mode_label.set_justify(Gtk.Justification.CENTER)
         box.pack_start(mode_label, False, False, 5)
 
+        # Sélecteur de taille machine — TOUJOURS visible (avant ET pendant le QC).
+        # Chaque taille swappe sa propre cfg qc_printer_<TAILLE>.cfg.
+        size_title = Gtk.Label()
+        size_title.set_markup(
+            "<span size='large' weight='bold'>机型 / Modèle machine</span>")
+        box.pack_start(size_title, False, False, 5)
+
+        size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        size_row.set_halign(Gtk.Align.CENTER)
+        for size in QC_SIZES:
+            avail = os.path.exists(self._qc_cfg_path(size))
+            selected = (size == self._selected_size)
+            label = size if avail else f"{size}\n(à générer)"
+            style = "color3" if selected else ("color1" if avail else "color2")
+            sbtn = self._gtk.Button(None, label, style)
+            sbtn.set_size_request(120, 70)
+            sbtn.set_sensitive(avail)
+            sbtn.connect("clicked", self._on_size_selected, size)
+            size_row.pack_start(sbtn, False, False, 0)
+        box.pack_start(size_row, False, False, 5)
+
         if qc_mode:
-            start_btn = self._gtk.Button("resume", _("开始检测 / START QC"), "color3",
-                                         scale=self.bts * 1.5)
-            start_btn.connect("clicked", self._on_start_clicked)
-            start_btn.set_size_request(300, 80)
-            box.pack_start(start_btn, False, False, 10)
+            # Si l'opérateur choisit une AUTRE taille que celle chargée -> bouton
+            # pour recharger cette cfg (re-swap + restart). Sinon START QC.
+            if active_model and self._selected_size != active_model:
+                load_btn = self._gtk.Button(
+                    "refresh", f"Charger {self._selected_size} (redémarre)", "color3",
+                    scale=self.bts * 1.5)
+                load_btn.connect("clicked", self._on_enter_qc_mode)
+                load_btn.set_size_request(300, 80)
+                box.pack_start(load_btn, False, False, 10)
+            else:
+                start_btn = self._gtk.Button("resume", _("开始检测 / START QC"), "color3",
+                                             scale=self.bts * 1.5)
+                start_btn.connect("clicked", self._on_start_clicked)
+                start_btn.set_size_request(300, 80)
+                box.pack_start(start_btn, False, False, 10)
 
             exit_btn = self._gtk.Button("cancel", "Quitter le mode QC (cfg prod)", "color2")
             exit_btn.connect("clicked", self._on_exit_qc_mode)
             box.pack_start(exit_btn, False, False, 5)
         else:
-            # Sélecteur de taille machine (AVANT d'activer le mode QC) — chaque
-            # taille swappe sa propre cfg qc_printer_<TAILLE>.cfg.
-            size_title = Gtk.Label()
-            size_title.set_markup(
-                "<span size='large' weight='bold'>机型 / Modèle machine</span>")
-            box.pack_start(size_title, False, False, 5)
-
-            size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            size_row.set_halign(Gtk.Align.CENTER)
-            for size in QC_SIZES:
-                avail = os.path.exists(self._qc_cfg_path(size))
-                selected = (size == self._selected_size)
-                label = size if avail else f"{size}\n(à générer)"
-                style = "color3" if selected else ("color1" if avail else "color2")
-                sbtn = self._gtk.Button(None, label, style)
-                sbtn.set_size_request(120, 70)
-                sbtn.set_sensitive(avail)
-                sbtn.connect("clicked", self._on_size_selected, size)
-                size_row.pack_start(sbtn, False, False, 0)
-            box.pack_start(size_row, False, False, 5)
-
             enter_btn = self._gtk.Button(
                 "refresh", f"启用QC模式 / Enable QC mode ({self._selected_size})",
                 "color3", scale=self.bts * 1.5)
@@ -184,6 +198,16 @@ class Panel(ScreenPanel):
             return bool(self._screen.printer.get_config_section("gcode_macro _QC_MODE"))
         except Exception:
             return False
+
+    def _active_qc_model(self):
+        """Taille machine gravée dans la cfg QC active (variable_model du marqueur
+        _QC_MODE), ou None si absente/illisible."""
+        try:
+            sec = self._screen.printer.get_config_section("gcode_macro _QC_MODE") or {}
+            val = str(sec.get("variable_model", "")).strip().strip('"').strip("'")
+            return val or None
+        except Exception:
+            return None
 
     @staticmethod
     def _copy_cfg_content(src, dst):
