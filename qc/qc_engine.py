@@ -39,38 +39,9 @@ class QCResult(Enum):
 # chauffent (screws_tilt/bed_mesh) le portent comme filet anti-surchauffe
 # en cas de timeout — en complétion normale leur macro coupe elle-même.
 QC_TESTS = [
-    {
-        "id": "mcu_check",
-        "name": "主板 + 固件 / MCU + firmware",
-        "type": "automated",
-        "macro": "QC_MCU_CHECK",
-        "timeout": 20,
-    },
-    # ── PREP AUTO (= vrais tests) : prépare le bloc visuel sans redondance ──
-    {
-        # Chauffe 220C, AUTO. Reste chaude -> le cutter (visuel) coupe à chaud.
-        "id": "heat_extruder",
-        "name": "喷头加热 220°C / Hotend heat 220°C",
-        "type": "automated",
-        "macro": "QC_HEAT_EXTRUDER",
-        "timeout": 300,
-    },
-    {
-        # Home X/Y AUTO -> la machine reste homée pour le Z tap (visuel).
-        "id": "home_x",
-        "name": "X 轴归位 / Home X",
-        "type": "automated",
-        "macro": "QC_HOME_X",
-        "timeout": 60,
-    },
-    {
-        "id": "home_y",
-        "name": "Y 轴归位 / Home Y",
-        "type": "automated",
-        "macro": "QC_HOME_Y",
-        "timeout": 60,
-    },
-    # ── BLOC VISUEL GROUPÉ : toutes les validations manuelles d'un coup ──
+    # ── BLOC VISUEL AU TOUT DÉBUT : toutes les validations manuelles d'un coup.
+    #    Chaque test visuel est auto-contenu (le cutter home X + chauffe + feed,
+    #    le Z tap home). L'opérateur fait ses confirmations puis s'en va. ──
     {
         "id": "fan_motherboard",
         "name": "主板风扇 / Motherboard fan",
@@ -97,26 +68,54 @@ QC_TESTS = [
         "timeout": 20,
     },
     {
-        # Cutter à chaud : la buse est déjà à 220C (heat_extruder l'a laissée
-        # chaude). M109 instantané, coupe, puis M104 S0.
+        # Cutter : home X + chauffe 220 + insere le filament YMS-1 jusqu'a la
+        # tete, extrude 60mm doucement, coupe, retracte 120mm. ~2-3min.
         "id": "cutter",
-        "name": "切刀(热端)/ Cutter (hot)",
+        "name": "切刀 (送料+挤出+切断) / Cutter (feed+extrude+cut)",
         "type": "visual",
         "macro": "QC_CUTTER",
-        "prompt": "切刀正常动作了吗（热端）？\nDid the cutter actuate correctly (hot)?",
+        "prompt": "切刀正常切断了挤出的料吗？\nDid the cutter cleanly cut the extruded filament?",
         "cleanup": "M104 S0",
-        "timeout": 300,
+        "timeout": 400,
     },
     {
-        # Z tap : la machine est déjà homée (home_x/y). Tap + montée Zmax.
+        # Z tap : home (auto-contenu) + tap + montee Zmax.
         "id": "z_tap_home",
         "name": "Z 触碰归位 + 升至最高 / Z tap home + Zmax",
         "type": "visual",
         "macro": "QC_Z_TAP_HOME",
         "prompt": "喷头已升到最高（Zmax）且第一次触碰正常？\nNozzle at top (Zmax) and first tap OK?",
-        "timeout": 120,
+        "timeout": 180,
     },
     # ── RESTE 100% AUTO : opérateur parti, plus aucune validation manuelle ──
+    {
+        "id": "mcu_check",
+        "name": "主板 + 固件 / MCU + firmware",
+        "type": "automated",
+        "macro": "QC_MCU_CHECK",
+        "timeout": 20,
+    },
+    {
+        "id": "heat_extruder",
+        "name": "喷头加热 220°C / Hotend heat 220°C",
+        "type": "automated",
+        "macro": "QC_HEAT_EXTRUDER",
+        "timeout": 300,
+    },
+    {
+        "id": "home_x",
+        "name": "X 轴归位 / Home X",
+        "type": "automated",
+        "macro": "QC_HOME_X",
+        "timeout": 60,
+    },
+    {
+        "id": "home_y",
+        "name": "Y 轴归位 / Home Y",
+        "type": "automated",
+        "macro": "QC_HOME_Y",
+        "timeout": 60,
+    },
     {
         # Auto : le plateau atteint 60C -> validé.
         "id": "heat_bed",
