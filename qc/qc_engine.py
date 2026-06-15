@@ -11,9 +11,13 @@ from enum import Enum
 
 logger = logging.getLogger("KlipperScreen.qc_engine")
 
-# Tolérance de répétabilité du Z tap plein course (spread max-min des
-# trigger_z sur les taps de calibration). Au-delà -> FAIL.
+# Répétabilité du Z tap plein course. Comme le homing : on retape plusieurs
+# fois et on valide dès que Z_TAP_WINDOW taps CONSECUTIFS convergent dans la
+# fenêtre Z_TAP_SPREAD_TOL (fenêtre glissante). Ça écarte le tassement/jeu des
+# premiers contacts (le Z dérive au 1er contact en arrivant de tout en haut,
+# puis se stabilise) — sinon le spread brut des 1ers taps fait échouer à tort.
 Z_TAP_SPREAD_TOL = 0.05
+Z_TAP_WINDOW = 3
 
 
 class QCState(Enum):
@@ -306,19 +310,30 @@ class QCEngine:
                 self._on_visual_prompt(test)
             return True
         elif status == "DONE" and tid == "z_tap_calib":
-            # Fin des taps de calibration : calcule le spread plein course.
+            # Fin des taps de calibration. Comme le homing : on cherche une
+            # fenêtre de Z_TAP_WINDOW taps CONSECUTIFS qui convergent <= tol.
+            # Dès qu'une fenêtre converge -> PASS (la machine SAIT taper au
+            # même Z, le tassement des 1ers contacts est écarté).
             trigs = self._ztap_triggers
-            if len(trigs) < 2:
+            if len(trigs) < Z_TAP_WINDOW:
                 self._record_result(
                     tid, QCResult.FAIL,
-                    "Z tap calib: %d tap(s) capturé(s), insuffisant" % len(trigs))
+                    "Z tap calib: %d tap(s), il en faut au moins %d"
+                    % (len(trigs), Z_TAP_WINDOW))
             else:
-                spread = max(trigs) - min(trigs)
-                detail = ("spread=%.4fmm sur %d taps (tol=%.4f) | taps=%s"
-                          % (spread, len(trigs), Z_TAP_SPREAD_TOL,
-                             ", ".join("%.4f" % t for t in trigs)))
-                result = QCResult.PASS if spread <= Z_TAP_SPREAD_TOL else QCResult.FAIL
-                self._record_result(tid, result, detail)
+                best = min(max(trigs[i:i + Z_TAP_WINDOW]) - min(trigs[i:i + Z_TAP_WINDOW])
+                           for i in range(len(trigs) - Z_TAP_WINDOW + 1))
+                allt = ", ".join("%.4f" % t for t in trigs)
+                if best <= Z_TAP_SPREAD_TOL:
+                    detail = ("convergé: %d taps consécutifs spread=%.4fmm (tol=%.4f) "
+                              "sur %d essais | taps=%s"
+                              % (Z_TAP_WINDOW, best, Z_TAP_SPREAD_TOL, len(trigs), allt))
+                    self._record_result(tid, QCResult.PASS, detail)
+                else:
+                    detail = ("jamais convergé: meilleure fenêtre %d taps=%.4fmm > "
+                              "tol %.4f sur %d essais | taps=%s"
+                              % (Z_TAP_WINDOW, best, Z_TAP_SPREAD_TOL, len(trigs), allt))
+                    self._record_result(tid, QCResult.FAIL, detail)
             return True
 
         return False
