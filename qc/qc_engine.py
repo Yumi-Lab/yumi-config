@@ -46,6 +46,31 @@ QC_TESTS = [
         "macro": "QC_MCU_CHECK",
         "timeout": 20,
     },
+    # ── PREP AUTO (= vrais tests) : prépare le bloc visuel sans redondance ──
+    {
+        # Chauffe 220C, AUTO. Reste chaude -> le cutter (visuel) coupe à chaud.
+        "id": "heat_extruder",
+        "name": "喷头加热 220°C / Hotend heat 220°C",
+        "type": "automated",
+        "macro": "QC_HEAT_EXTRUDER",
+        "timeout": 300,
+    },
+    {
+        # Home X/Y AUTO -> la machine reste homée pour le Z tap (visuel).
+        "id": "home_x",
+        "name": "X 轴归位 / Home X",
+        "type": "automated",
+        "macro": "QC_HOME_X",
+        "timeout": 60,
+    },
+    {
+        "id": "home_y",
+        "name": "Y 轴归位 / Home Y",
+        "type": "automated",
+        "macro": "QC_HOME_Y",
+        "timeout": 60,
+    },
+    # ── BLOC VISUEL GROUPÉ : toutes les validations manuelles d'un coup ──
     {
         "id": "fan_motherboard",
         "name": "主板风扇 / Motherboard fan",
@@ -72,23 +97,8 @@ QC_TESTS = [
         "timeout": 20,
     },
     {
-        # Auto : la buse atteint 220C -> validé. Reste chaude pour le cutter.
-        "id": "heat_extruder",
-        "name": "喷头加热 220°C / Hotend heat 220°C",
-        "type": "automated",
-        "macro": "QC_HEAT_EXTRUDER",
-        "timeout": 300,
-    },
-    {
-        # Auto : le plateau atteint 60C -> validé.
-        "id": "heat_bed",
-        "name": "热床加热 60°C / Bed heat 60°C",
-        "type": "automated",
-        "macro": "QC_HEAT_BED",
-        "timeout": 300,
-    },
-    {
-        # APRES la chauffe : le cutter coince a froid, il faut une tete chaude.
+        # Cutter à chaud : la buse est déjà à 220C (heat_extruder l'a laissée
+        # chaude). M109 instantané, coupe, puis M104 S0.
         "id": "cutter",
         "name": "切刀(热端)/ Cutter (hot)",
         "type": "visual",
@@ -98,26 +108,22 @@ QC_TESTS = [
         "timeout": 300,
     },
     {
-        "id": "home_x",
-        "name": "X 轴归位 / Home X",
-        "type": "automated",
-        "macro": "QC_HOME_X",
-        "timeout": 60,
-    },
-    {
-        "id": "home_y",
-        "name": "Y 轴归位 / Home Y",
-        "type": "automated",
-        "macro": "QC_HOME_Y",
-        "timeout": 60,
-    },
-    {
+        # Z tap : la machine est déjà homée (home_x/y). Tap + montée Zmax.
         "id": "z_tap_home",
         "name": "Z 触碰归位 + 升至最高 / Z tap home + Zmax",
         "type": "visual",
         "macro": "QC_Z_TAP_HOME",
         "prompt": "喷头已升到最高（Zmax）且第一次触碰正常？\nNozzle at top (Zmax) and first tap OK?",
         "timeout": 120,
+    },
+    # ── RESTE 100% AUTO : opérateur parti, plus aucune validation manuelle ──
+    {
+        # Auto : le plateau atteint 60C -> validé.
+        "id": "heat_bed",
+        "name": "热床加热 60°C / Bed heat 60°C",
+        "type": "automated",
+        "macro": "QC_HEAT_BED",
+        "timeout": 300,
     },
     {
         "id": "z_tap_calib",
