@@ -178,7 +178,10 @@ _QC_ORDER = [
     "cutter",                                        # insere filament + coupe (tête
                                                      # déjà validée chaude)
     "z_tap_home",
-    "z_tap_calib", "screws_tilt", "bed_mesh",
+    "z_tap_calib", "screws_tilt",
+    # bed_mesh retiré : palpeur inductif galère (7min de retries) + BED_MESH_PROFILE
+    # SAVE déclenche le prompt SAVE_CONFIG qui bloque l'écran, et le mesh est jeté
+    # (cfg QC swappée après). screws_tilt valide déjà le palpeur/bed.
     # e0_head retiré : le cutter feed déjà YMS-1 jusqu'à la tête (E0 validé là).
     "e1_head",
 ]
