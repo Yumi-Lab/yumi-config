@@ -620,17 +620,30 @@ class Panel(ScreenPanel):
         self._cancel_timeout()
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
-        # Le compteur qc.yumi-lab.com ventile par modèle via "device=" dans
-        # yumi_config. Si le firmware n'a pas gravé de device (pad non gravé),
-        # on injecte le modèle choisi à l'écran -> ventilation correcte. Le
-        # firmware gravé reste PRIORITAIRE (on n'injecte que si device= absent).
-        yc = (report.get("yumi_config") or "").strip()
+        # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
+        # par "device=" en découpant sur les espaces -> on normalise les ';'.
+        yc = (report.get("yumi_config") or "").replace(";", " ").strip()
+        # Si le firmware n'a pas gravé de device (pad non gravé), on injecte le
+        # modèle choisi à l'écran. Le firmware gravé reste PRIORITAIRE.
         if "device=" not in yc:
-            report["yumi_config"] = (yc + " device=" + self._selected_size).strip()
+            yc = (yc + " device=" + self._selected_size).strip()
+        report["yumi_config"] = yc
         self._current_report = report
         # Cleanup: stop heaters/fans/motors
         self._screen._ws.klippy.gcode_script("QC_CLEANUP")
         GLib.idle_add(self._build_summary_screen, report)
+        # Envoi AUTOMATIQUE au compteur en fin de QC — indépendant du bouton
+        # Terminer et de la présence d'un backup (qui le masquait sur le banc).
+        GLib.idle_add(self._auto_upload)
+
+    def _auto_upload(self):
+        """Sauvegarde + envoie le rapport au compteur, automatiquement en fin de
+        QC. Affiche le résultat. One-shot pour GLib.idle_add."""
+        if self._current_report:
+            self.engine.save_report(self._current_report)
+            ok, msg = self._upload_report(self._current_report)
+            self._screen.show_popup_message(msg, level=1 if ok else 3)
+        return False
 
     # ─── TEST EXECUTION ────────────────────────────────────────
 
