@@ -175,9 +175,13 @@ _QC_ORDER = [
                                                      # déjà validée chaude)
     "z_tap_home",
     "z_tap_calib", "screws_tilt", "bed_mesh",
-    "e0_head", "e1_head",
+    # e0_head retiré : le cutter feed déjà YMS-1 jusqu'à la tête (E0 validé là).
+    "e1_head",
 ]
-QC_TESTS = sorted(QC_TESTS, key=lambda t: _QC_ORDER.index(t["id"]))
+# Construit la séquence depuis _QC_ORDER (ordre + inclusion). Un id défini mais
+# absent de _QC_ORDER (ex: e0_head) est simplement non exécuté.
+_QC_BY_ID = {t["id"]: t for t in QC_TESTS}
+QC_TESTS = [_QC_BY_ID[i] for i in _QC_ORDER if i in _QC_BY_ID]
 
 
 class QCEngine:
