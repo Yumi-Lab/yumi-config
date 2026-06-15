@@ -168,10 +168,12 @@ QC_TESTS = [
 _QC_ORDER = [
     "mcu_check",
     "home_x", "home_y",                              # + lance chauffe tête/plateau
-    "fan_motherboard", "fan_part", "fan_hotend",     # ┐
-    "cutter",                                        # ├ bloc visuel (sans attendre)
-    "z_tap_home",                                    # ┘
-    "heat_extruder", "heat_bed",                     # confirme les températures
+    "fan_motherboard", "fan_part", "fan_hotend",     # ventilos (visuel)
+    "heat_extruder", "heat_bed",                     # confirme les temps EN AUTO
+                                                     # avant d'inserer le filament
+    "cutter",                                        # insere filament + coupe (tête
+                                                     # déjà validée chaude)
+    "z_tap_home",
     "z_tap_calib", "screws_tilt", "bed_mesh",
     "e0_head", "e1_head",
 ]
