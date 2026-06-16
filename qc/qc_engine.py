@@ -413,12 +413,18 @@ class QCEngine:
         failed = [tid for tid, r in self.results.items() if r["result"] == QCResult.FAIL]
         skipped = [tid for tid, r in self.results.items() if r["result"] == QCResult.SKIPPED]
 
+        # PASS UNIQUEMENT si TOUS les tests de la séquence sont en PASS. Un test
+        # non exécuté (pending, absent de results) ou skippé -> PARTIAL, JAMAIS
+        # PASS — sinon un QC quitté tôt (aucun test déroulé) passerait pour validé.
+        all_pass = all(
+            self.results.get(t["id"], {}).get("result") == QCResult.PASS
+            for t in QC_TESTS)
         if failed:
             overall = "FAIL"
-        elif skipped:
-            overall = "PARTIAL"
-        else:
+        elif all_pass:
             overall = "PASS"
+        else:
+            overall = "PARTIAL"
 
         report = {
             "version": "1.0",
