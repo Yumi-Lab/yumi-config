@@ -453,6 +453,14 @@ class QCEngine:
             "")
         report["yumi_config"] = re.sub(r"^\s*\[[^\]]*\]\s*", "", _yc).strip()
 
+        # ID matériel unique de la carte (STM32 UID lu via debug_read, loggé par
+        # QC_MCU_CHECK sous "MCU_UID=..."). Identifiant MACHINE fiable pour le
+        # compteur : unique par carte mère, indépendant du pad QC réutilisé.
+        report["machine_uid"] = next(
+            (l.split("MCU_UID=", 1)[1].strip()
+             for l in self._test_log.get("mcu_check", []) if "MCU_UID=" in l),
+            "")
+
         return report
 
     def save_report(self, report=None):

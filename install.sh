@@ -231,6 +231,7 @@ YUMI_EXTRAS=(
   "yumi_sensorless_homing.py"
   "probe_pressure.py"
   "gcode_shell_command.py"
+  "mcu_uid.py"
 )
 
 echo "Symlinking klippy extras..."
