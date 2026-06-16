@@ -176,14 +176,18 @@ _QC_ORDER = [
     "heat_extruder", "heat_bed",                     # confirme les temps EN AUTO
                                                      # avant d'inserer le filament
     "cutter",                                        # insere filament + coupe (tête
-                                                     # déjà validée chaude)
+                                                     # déjà validée chaude). Finit par
+                                                     # M104 S130 -> la buse descend vers 130.
+    "e1_head",                                       # enchaîne E1 PENDANT la descente 220->130 :
+                                                     # le feed E1 (YMS-2) pousse jusqu'au capteur
+                                                     # tête, pas besoin de 220 -> temps gagné
+                                                     # (au lieu de tenir 130 tout le z_tap puis E1).
     "z_tap_home",
     "z_tap_calib", "screws_tilt",
     # bed_mesh retiré : palpeur inductif galère (7min de retries) + BED_MESH_PROFILE
     # SAVE déclenche le prompt SAVE_CONFIG qui bloque l'écran, et le mesh est jeté
     # (cfg QC swappée après). screws_tilt valide déjà le palpeur/bed.
     # e0_head retiré : le cutter feed déjà YMS-1 jusqu'à la tête (E0 validé là).
-    "e1_head",
 ]
 # Construit la séquence depuis _QC_ORDER (ordre + inclusion). Un id défini mais
 # absent de _QC_ORDER (ex: e0_head) est simplement non exécuté.
