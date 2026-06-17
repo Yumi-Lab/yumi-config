@@ -77,45 +77,28 @@ class Panel(ScreenPanel):
     def _build_start_screen(self):
         self._clear_content()
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_valign(Gtk.Align.CENTER)
         box.set_halign(Gtk.Align.CENTER)
         box.set_vexpand(True)
 
-        # Title
+        # Title (compact pour tenir sur l'écran 480px)
         title_label = Gtk.Label()
-        title_label.set_markup("<span size='xx-large' weight='bold'>YUMI Quality Control</span>")
-        box.pack_start(title_label, False, False, 10)
+        title_label.set_markup("<span size='large' weight='bold'>YUMI Quality Control</span>")
+        box.pack_start(title_label, False, False, 2)
 
-        # Info
-        info_label = Gtk.Label()
-        info_label.set_markup(
-            f"<span size='large'>{len(QC_TESTS)} 项检测 / {len(QC_TESTS)} tests — "
-            f"风扇/Fans · 切刀/Cutter · 加热/Heat · 回零/Homing · "
-            f"调平/Tilt · 网格/Mesh · E0/E1</span>"
-        )
-        info_label.set_line_wrap(True)
-        info_label.set_max_width_chars(50)
-        info_label.set_justify(Gtk.Justification.CENTER)
-        box.pack_start(info_label, False, False, 5)
-
-        # Printer ID — auto-filled from YUMI ID (ETH0 MAC)
+        # Printer ID (YUMI ID = MAC ETH0) — entrée cachée + petite ligne
         try:
             with open("/sys/class/net/end0/address") as f:
                 yumi_id = f.read().strip().replace(":", "").upper()
         except Exception:
             yumi_id = "UNKNOWN"
-        id_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        id_box.set_halign(Gtk.Align.CENTER)
-        id_label = Gtk.Label()
-        id_label.set_markup(f"<span size='large'>Printer ID: {yumi_id}</span>")
         self.labels["printer_id"] = Gtk.Entry()
         self.labels["printer_id"].set_text(yumi_id)
-        self.labels["printer_id"].set_editable(False)
         self.labels["printer_id"].set_visible(False)
-        id_box.pack_start(id_label, False, False, 0)
-        id_box.pack_start(self.labels["printer_id"], False, False, 0)
-        box.pack_start(id_box, False, False, 10)
+        id_label = Gtk.Label()
+        id_label.set_markup(f"<span size='small' foreground='#9E9E9E'>ID: {yumi_id}</span>")
+        box.pack_start(id_label, False, False, 2)
 
         # QC mode status + actions
         qc_mode = self._is_qc_mode()
@@ -157,36 +140,18 @@ class Panel(ScreenPanel):
             size_row.pack_start(sbtn, False, False, 0)
         box.pack_start(size_row, False, False, 5)
 
-        # Aide : sélectionner le modèle puis appuyer sur le GROS bouton.
+        # Aide : un APPUI sur le modèle LANCE directement (entre en QC / START).
         hint = Gtk.Label()
         if qc_mode:
-            hint.set_markup("<span size='large'>选择机型 → 按 开始检测 / "
-                            "select model → press START QC</span>")
+            hint.set_markup(f"<span size='large' weight='bold' foreground='#4CAF50'>"
+                            f"▶ 触摸 {active_model or 'C235'} 开始检测 / "
+                            f"touch {active_model or 'C235'} to START QC</span>")
         else:
-            hint.set_markup("<span size='large'>选择机型 → 按 进入QC模式 / "
-                            "select model → press Enter QC mode</span>")
+            hint.set_markup("<span size='large' weight='bold' foreground='#4CAF50'>"
+                            "▶ 触摸 C235 进入QC模式 / touch C235 to enter QC mode</span>")
         hint.set_justify(Gtk.Justification.CENTER)
         hint.set_line_wrap(True)
-        box.pack_start(hint, False, False, 8)
-
-        # GROS bouton d'action principal : ENTRER en mode QC (prod) / LANCER (qc)
-        if not qc_mode:
-            primary = self._gtk.Button(
-                "resume", f"▶ 进入QC模式 / Enter QC mode ({self._selected_size})",
-                "color3", scale=self.bts * 1.4)
-            primary.connect("clicked", self._on_enter_qc_mode)
-        elif active_model and self._selected_size != active_model:
-            primary = self._gtk.Button(
-                "refresh", f"加载 {self._selected_size} / Load (redémarre)",
-                "color3", scale=self.bts * 1.4)
-            primary.connect("clicked", self._on_enter_qc_mode)
-        else:
-            primary = self._gtk.Button(
-                "resume", f"▶ 开始检测 / START QC ({self._selected_size})",
-                "color3", scale=self.bts * 1.4)
-            primary.connect("clicked", self._on_start_clicked)
-        primary.set_size_request(330, 80)
-        box.pack_start(primary, False, False, 8)
+        box.pack_start(hint, False, False, 5)
 
         # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
         ztap_btn = self._gtk.Button("refresh", "校准 Z TAP / Calibrate Z TAP", "color1")
@@ -239,12 +204,15 @@ class Panel(ScreenPanel):
                 pass
 
     def _on_size_selected(self, widget, size):
-        """Sélectionne le modèle (le surligne). L'ACTION (entrer en mode QC ou
-        lancer le QC) est sur le gros bouton dédié en dessous."""
+        """Un APPUI sur le modèle = L'ACTION directe : entre en mode QC (depuis
+        prod) ou LANCE le QC (si déjà en mode QC pour ce modèle)."""
         if not os.path.exists(self._qc_cfg_path(size)):
             return
         self._selected_size = size
-        self._build_start_screen()
+        if self._is_qc_mode() and self._active_qc_model() == size:
+            self._on_start_clicked(widget)
+        else:
+            self._on_enter_qc_mode(widget)
 
     def _on_ztap_calibrate(self, widget):
         """Bouton Calibration Z TAP : envoie juste la séquence
