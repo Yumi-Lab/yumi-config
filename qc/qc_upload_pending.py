@@ -3,8 +3,12 @@
 
 Filet de sécurité : si l'upload en fin de QC échoue (réseau coupé), le rapport
 reste dans qc_reports/ SANS marqueur ".sent". Ce script (lancé par un timer
-systemd toutes les 2 min + au boot) renvoie tous les rapports non confirmés
-jusqu'à obtenir un 200, puis pose le marqueur ".sent". Aucun rapport perdu.
+systemd toutes les 2 min + au boot) renvoie tous les rapports non confirmés et
+ne pose le marqueur ".sent" QUE sur un HTTP 200 (succès serveur).
+
+RETRY INFINI : aucune limite de tentatives ni de nombre de rapports. Tant qu'un
+rapport n'a pas son ".sent", il est retenté à chaque tick, indéfiniment. "200"
+ci-dessous = code HTTP de succès, PAS un plafond de tentatives.
 
 Stdlib uniquement (urllib). Idempotent côté serveur (dédup printer_id+date).
 """
