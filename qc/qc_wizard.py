@@ -171,6 +171,12 @@ class Panel(ScreenPanel):
         hint.set_line_wrap(True)
         box.pack_start(hint, False, False, 10)
 
+        # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
+        ztap_btn = self._gtk.Button("refresh", "校准 Z TAP / Calibrate Z TAP", "color1")
+        ztap_btn.connect("clicked", self._on_ztap_calibrate)
+        ztap_btn.set_size_request(300, 60)
+        box.pack_start(ztap_btn, False, False, 5)
+
         if qc_mode:
             exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
             exit_btn.connect("clicked", self._on_exit_qc_mode)
@@ -226,6 +232,11 @@ class Panel(ScreenPanel):
             self._on_start_clicked(widget)
         else:
             self._on_enter_qc_mode(widget)
+
+    def _on_ztap_calibrate(self, widget):
+        """Bouton Calibration Z TAP : envoie juste la séquence
+        (G28 -> Z max -> tap), sans capture de log ni rapport."""
+        self._screen._ws.klippy.gcode_script("QC_ZTAP_CALIBRATE")
 
     def _on_enter_qc_mode(self, widget):
         """Backup printer.cfg, install the QC config of the selected size,

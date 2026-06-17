@@ -283,6 +283,10 @@ def main():
     out.append(qc_macros.rstrip() + "\n")
 
     text = "".join(out)
+    # Point de tap QC (zero_reference_position du bed_mesh) déplacé en Y212
+    # (était Y202 dans le backup) — le Z tap se fait à X31 Y212.
+    text = re.sub(r"(?m)^zero_reference_position:.*$",
+                  "zero_reference_position: 31, 212", text)
     # Garde-fou : un cfg QC monolithique ne doit contenir AUCUN [include].
     includes = re.findall(r'(?m)^\[include .*\]', text)
     if includes:
