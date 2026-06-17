@@ -471,10 +471,14 @@ class QCEngine:
              for l in self._test_log.get("mcu_check", []) if "MCU_UID=" in l),
             "")
 
+        # pad_mac = MAC ETH0 du pad QC : identifie le PAD qui a réalisé le QC
+        # (traçabilité). self.printer_id vaut encore la MAC à ce stade.
+        report["pad_mac"] = self.printer_id
         # IDENTIFIANT MACHINE = UID STM32 gravé dans YUMI_CONFIG (uid=...), PAS la
-        # MAC du pad : l'UID identifie la carte mère testée (1 par machine), la
-        # MAC identifie le pad QC (réutilisé pour plusieurs machines). On bascule
-        # printer_id (donc nom de fichier + URL /report/<id> + dédup compteur).
+        # MAC du pad : l'UID identifie la CARTE MÈRE testée (et tout ce qui y est
+        # branché dans l'imprimante), 1 par machine ; la MAC n'identifie que le
+        # pad QC (réutilisé pour plusieurs machines). On bascule printer_id
+        # (donc nom de fichier + URL /report/<id> + dédup compteur).
         _uid = re.search(r"uid=([0-9A-Za-z]+)", report.get("yumi_config", ""))
         if _uid:
             self.printer_id = _uid.group(1).upper()
