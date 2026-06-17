@@ -157,24 +157,41 @@ class Panel(ScreenPanel):
             size_row.pack_start(sbtn, False, False, 0)
         box.pack_start(size_row, False, False, 5)
 
-        # Indique ce que fait un appui sur le modèle (bilingue CN/EN)
+        # Aide : sélectionner le modèle puis appuyer sur le GROS bouton.
         hint = Gtk.Label()
         if qc_mode:
-            hint.set_markup(
-                f"<span size='large' weight='bold'>触摸 {active_model or '机型'} 开始检测 / "
-                f"touch {active_model or 'model'} to START QC</span>")
+            hint.set_markup("<span size='large'>选择机型 → 按 开始检测 / "
+                            "select model → press START QC</span>")
         else:
-            hint.set_markup(
-                "<span size='large' weight='bold'>触摸机型加载并重启 / "
-                "touch a model to load &amp; restart</span>")
+            hint.set_markup("<span size='large'>选择机型 → 按 进入QC模式 / "
+                            "select model → press Enter QC mode</span>")
         hint.set_justify(Gtk.Justification.CENTER)
         hint.set_line_wrap(True)
-        box.pack_start(hint, False, False, 10)
+        box.pack_start(hint, False, False, 8)
+
+        # GROS bouton d'action principal : ENTRER en mode QC (prod) / LANCER (qc)
+        if not qc_mode:
+            primary = self._gtk.Button(
+                "resume", f"▶ 进入QC模式 / Enter QC mode ({self._selected_size})",
+                "color3", scale=self.bts * 1.4)
+            primary.connect("clicked", self._on_enter_qc_mode)
+        elif active_model and self._selected_size != active_model:
+            primary = self._gtk.Button(
+                "refresh", f"加载 {self._selected_size} / Load (redémarre)",
+                "color3", scale=self.bts * 1.4)
+            primary.connect("clicked", self._on_enter_qc_mode)
+        else:
+            primary = self._gtk.Button(
+                "resume", f"▶ 开始检测 / START QC ({self._selected_size})",
+                "color3", scale=self.bts * 1.4)
+            primary.connect("clicked", self._on_start_clicked)
+        primary.set_size_request(330, 80)
+        box.pack_start(primary, False, False, 8)
 
         # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
         ztap_btn = self._gtk.Button("refresh", "校准 Z TAP / Calibrate Z TAP", "color1")
         ztap_btn.connect("clicked", self._on_ztap_calibrate)
-        ztap_btn.set_size_request(300, 60)
+        ztap_btn.set_size_request(300, 55)
         box.pack_start(ztap_btn, False, False, 5)
 
         if qc_mode:
@@ -222,16 +239,12 @@ class Panel(ScreenPanel):
                 pass
 
     def _on_size_selected(self, widget, size):
-        """Un appui sur un modèle EST l'action : si ce modèle est déjà chargé en
-        mode QC -> lance le QC ; sinon -> swap sa cfg + restart (= charge le QC du
-        modèle). C235/C335... non générés ont leur bouton désactivé."""
+        """Sélectionne le modèle (le surligne). L'ACTION (entrer en mode QC ou
+        lancer le QC) est sur le gros bouton dédié en dessous."""
         if not os.path.exists(self._qc_cfg_path(size)):
             return
         self._selected_size = size
-        if self._is_qc_mode() and self._active_qc_model() == size:
-            self._on_start_clicked(widget)
-        else:
-            self._on_enter_qc_mode(widget)
+        self._build_start_screen()
 
     def _on_ztap_calibrate(self, widget):
         """Bouton Calibration Z TAP : envoie juste la séquence
