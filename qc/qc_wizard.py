@@ -648,12 +648,21 @@ class Panel(ScreenPanel):
         GLib.idle_add(self._auto_upload)
 
     def _auto_upload(self):
-        """Sauvegarde + envoie le rapport au compteur, automatiquement en fin de
-        QC. Affiche le résultat. One-shot pour GLib.idle_add."""
+        """Sauvegarde + envoie le rapport au compteur en fin de QC. Si l'envoi
+        échoue (réseau coupé), le rapport reste SANS marqueur .sent -> le daemon
+        de retry (timer systemd qc-upload, toutes les 2 min) le renverra jusqu'au
+        200. Aucun rapport perdu. One-shot pour GLib.idle_add."""
         if self._current_report:
-            self.engine.save_report(self._current_report)
+            path = self.engine.save_report(self._current_report)
             ok, msg = self._upload_report(self._current_report)
-            self._screen.show_popup_message(msg, level=1 if ok else 3)
+            if ok and path:
+                try:
+                    open(path + ".sent", "w").close()
+                except OSError:
+                    pass
+            elif not ok:
+                msg += " — renvoi auto en arrière-plan jusqu'à reprise réseau"
+            self._screen.show_popup_message(msg, level=1 if ok else 2)
         return False
 
     # ─── TEST EXECUTION ────────────────────────────────────────

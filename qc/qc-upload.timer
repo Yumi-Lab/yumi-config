@@ -1,0 +1,13 @@
+[Unit]
+Description=Retry envoi des rapports QC au compteur (jusqu'au succes)
+
+[Timer]
+# Relance au boot puis toutes les 2 min -> retry infini tant qu'un rapport
+# n'est pas confirme envoye (sans marqueur .sent). Persistent rattrape les
+# tics manques (pad eteint).
+OnBootSec=60
+OnUnitActiveSec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Renvoi des rapports QC au compteur (retry jusqu'au succes)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+ExecStart=/usr/bin/python3 /home/pi/yumi-config/qc/qc_upload_pending.py
