@@ -267,7 +267,20 @@ def main():
     out.append(
         "[filament_switch_sensor head_sensor]\n"
         "switch_pin: !PA8\n"
-        "pause_on_runout: False\n")
+        "pause_on_runout: False\n\n")
+
+    # ── UID matériel unique de la carte mère (STM32 96 bits) ──
+    # Lu via debug_read sur la connexion MCU principale (AUCUN second MCU, AUCUNE
+    # modif firmware). QUERY_MCU_UID -> "MCU_UID=<24 hex>". C'est l'identité
+    # UNIQUE par imprimante utilisée par le QC (printer_id côté compteur).
+    out.append(
+        "#####################################################################\n"
+        "# UID STM32 unique (debug_read sur le MCU principal) -> QUERY_MCU_UID\n"
+        "#####################################################################\n"
+        "[mcu_uid]\n"
+        "# mcu: mcu          # MCU interrogé (défaut: mcu principal RJ11)\n"
+        "# addr: 0x1FFF7A10  # base UID STM32F4 (défaut)\n"
+        "# words: 3          # 96 bits = 3 mots de 32 bits\n")
 
     # ── Macros QC inlinées (cfg MONOLITHIQUE : aucun [include]) ──
     # Source de vérité = qc_macros.cfg (éditable) ; on l'embarque ici pour

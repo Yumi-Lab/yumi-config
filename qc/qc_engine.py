@@ -474,17 +474,24 @@ class QCEngine:
         # pad_mac = MAC ETH0 du pad QC : identifie le PAD qui a réalisé le QC
         # (traçabilité). self.printer_id vaut encore la MAC à ce stade.
         report["pad_mac"] = self.printer_id
-        # IDENTIFIANT MACHINE = UID STM32 gravé dans YUMI_CONFIG (uid=...), PAS la
-        # MAC du pad : l'UID identifie la CARTE MÈRE testée (et tout ce qui y est
-        # branché dans l'imprimante), 1 par machine ; la MAC n'identifie que le
-        # pad QC (réutilisé pour plusieurs machines). On bascule printer_id
-        # (donc nom de fichier + URL /report/<id> + dédup compteur).
-        _uid = re.search(r"uid=([0-9A-Za-z]+)", report.get("yumi_config", ""))
-        if _uid:
-            self.printer_id = _uid.group(1).upper()
+        # IDENTIFIANT MACHINE = UID STM32 UNIQUE de la carte mère (96 bits, 24 hex,
+        # ex 2D0046000D51353234323830), lu via debug_read par QUERY_MCU_UID. C'est
+        # la seule identité VRAIMENT unique par imprimante : le QC contrôle tout ce
+        # qui est branché sur cette carte mère. Le uid= de YUMI_CONFIG est un
+        # hash(config+lot) -> il COLLISIONNE entre machines identiques du même lot,
+        # donc inutilisable comme identifiant machine (gardé seulement dans
+        # yumi_config pour la ventilation modèle/lot).
+        if report.get("machine_uid"):
+            self.printer_id = report["machine_uid"].upper()
             report["printer_id"] = self.printer_id
-            if not report.get("machine_uid"):
-                report["machine_uid"] = self.printer_id
+        else:
+            # Garde-fou si la lecture UID a échoué : on retombe sur le hash uid=
+            # plutôt que sur la MAC du pad, en signalant l'absence d'UID réel.
+            _uid = re.search(r"uid=([0-9A-Za-z]+)", report.get("yumi_config", ""))
+            if _uid:
+                self.printer_id = _uid.group(1).upper()
+                report["printer_id"] = self.printer_id
+            report["machine_uid_missing"] = True
 
         return report
 
