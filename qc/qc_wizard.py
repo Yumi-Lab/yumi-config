@@ -100,30 +100,69 @@ class Panel(ScreenPanel):
         id_label.set_markup(f"<span size='small' foreground='#9E9E9E'>ID: {yumi_id}</span>")
         box.pack_start(id_label, False, False, 2)
 
-        # ── SIMPLE : un seul bouton QC ──────────────────────────────
-        # Chaque pad est dédié à SA machine : la config QC est déjà active
-        # (pas de swap printer.cfg à la volée, pas de FIRMWARE_RESTART intempestif
-        #  qui mettrait KlipperScreen en vrac). Le bouton lance directement le test.
+        # QC mode status + actions
         qc_mode = self._is_qc_mode()
-        if not qc_mode:
-            warn = Gtk.Label()
-            warn.set_markup("<span size='large' foreground='#FF9800'>此平板未激活QC配置 / "
-                            "Config QC non active sur ce pad</span>")
-            warn.set_justify(Gtk.Justification.CENTER)
-            warn.set_line_wrap(True)
-            box.pack_start(warn, False, False, 5)
+        active_model = self._active_qc_model() if qc_mode else None
+        # En mode QC, le modèle chargé (gravé dans la cfg) fait foi.
+        if qc_mode and active_model:
+            self._selected_size = active_model
 
-        # Bouton UNIQUE : démarrer le contrôle qualité (bilingue 中文 / FR)
-        start_btn = self._gtk.Button("resume", "开始质检 / Démarrer QC", "color3")
-        start_btn.set_size_request(340, 100)
-        start_btn.connect("clicked", self._on_start_clicked)
-        box.pack_start(start_btn, False, False, 12)
+        mode_label = Gtk.Label()
+        if qc_mode:
+            mode_label.set_markup(
+                f"<span size='large' foreground='#4CAF50'>QC模式 已激活 — {active_model or '?'} / "
+                f"QC mode active</span>")
+        else:
+            mode_label.set_markup(
+                "<span size='large' foreground='#FF9800'>生产配置 — 触摸机型加载QC / "
+                "Production cfg — touch a model to load QC</span>")
+        mode_label.set_justify(Gtk.Justification.CENTER)
+        mode_label.set_line_wrap(True)
+        box.pack_start(mode_label, False, False, 5)
+
+        # Sélecteur de taille machine — TOUJOURS visible et ACTIF : un appui sur
+        # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
+        size_title = Gtk.Label()
+        size_title.set_markup("<span size='large' weight='bold'>机型 / Model</span>")
+        box.pack_start(size_title, False, False, 5)
+
+        size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        size_row.set_halign(Gtk.Align.CENTER)
+        for size in QC_SIZES:
+            avail = os.path.exists(self._qc_cfg_path(size))
+            selected = (size == self._selected_size)
+            label = size if avail else f"{size}\n待生成/TBD"
+            style = "color3" if selected else ("color1" if avail else "color2")
+            sbtn = self._gtk.Button(None, label, style)
+            sbtn.set_size_request(120, 70)
+            sbtn.set_sensitive(avail)
+            sbtn.connect("clicked", self._on_size_selected, size)
+            size_row.pack_start(sbtn, False, False, 0)
+        box.pack_start(size_row, False, False, 5)
+
+        # Aide : un APPUI sur le modèle LANCE directement (entre en QC / START).
+        hint = Gtk.Label()
+        if qc_mode:
+            hint.set_markup(f"<span size='large' weight='bold' foreground='#4CAF50'>"
+                            f"▶ 触摸 {active_model or 'C235'} 开始检测 / "
+                            f"touch {active_model or 'C235'} to START QC</span>")
+        else:
+            hint.set_markup("<span size='large' weight='bold' foreground='#4CAF50'>"
+                            "▶ 触摸 C235 进入QC模式 / touch C235 to enter QC mode</span>")
+        hint.set_justify(Gtk.Justification.CENTER)
+        hint.set_line_wrap(True)
+        box.pack_start(hint, False, False, 5)
 
         # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
         ztap_btn = self._gtk.Button("refresh", "校准 Z TAP / Calibrate Z TAP", "color1")
         ztap_btn.connect("clicked", self._on_ztap_calibrate)
         ztap_btn.set_size_request(300, 55)
         box.pack_start(ztap_btn, False, False, 5)
+
+        if qc_mode:
+            exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
+            exit_btn.connect("clicked", self._on_exit_qc_mode)
+            box.pack_start(exit_btn, False, False, 5)
 
         self.content.add(box)
         self.content.show_all()
