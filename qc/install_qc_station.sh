@@ -58,7 +58,10 @@ fi
 
 echo "== 4/7  cfg QC + passage en MODE QC =="
 mkdir -p "$CFG/qc_reports"
-cp "$QC/qc_printer_C235.cfg" "$CFG/qc_printer_C235.cfg"
+# Copier TOUTES les cfg QC modele (C235, C335, ...) en local sur le pad, pour que
+# tous les boutons du selecteur fonctionnent meme SANS connexion reseau.
+cp "$QC"/qc_printer_*.cfg "$CFG"/ 2>/dev/null
+echo "  cfg QC modeles copiees : $(ls "$QC"/qc_printer_*.cfg 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
 # Backup de la cfg courante (nom attendu par le panel pour 'Exit QC mode'),
 # une seule fois pour ne pas écraser un vrai backup de prod existant.
 if [ ! -f "$CFG/printer.cfg.qc-backup" ]; then
