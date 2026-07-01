@@ -129,18 +129,26 @@ class ZTap:
         settings = self.printer.lookup_object('configfile').get_status(0)['settings']
         z_max = settings['stepper_z']['position_max']
         self.z_max = z_max
-        # z_offset du palpeur de reference [probe], ajoute au calcul du Z=0.
+        # z_offset du palpeur de reference [probe], SOUSTRAIT au calcul du Z=0
+        # (convention Klipper standard, celle qu'ecrit Z_OFFSET_APPLY_PROBE :
+        # z_offset POSITIF = buse plus PROCHE du plateau). Ainsi le workflow
+        # client babystep + "Save Z offset" s'applique dans le bon sens.
         # IMPORTANT : on le recupere via l'OBJET probe de Klipper
         # (probe.get_offsets()), qui contient la valeur EFFECTIVE incluant le
         # bloc SAVE_CONFIG (#*# [probe] z_offset = ...). Lire le texte du
         # printer.cfg donnerait la valeur de base (souvent 0), pas la sauvegarde.
-        # Surchargeable par Z_OFFSET= a l'appel.
+        # Surchargeable par Z_OFFSET= a l'appel (meme convention).
         probe = self.printer.lookup_object('probe', None)
         if probe is not None:
             cfg_z_offset = probe.get_offsets()[2]
         else:
             cfg_z_offset = settings.get('probe', {}).get('z_offset', 0.0)
         self.active_z_offset = gcmd.get_float('Z_OFFSET', cfg_z_offset)
+        if abs(self.active_z_offset) > 0.5:
+            gcmd.respond_info(
+                "ATTENTION: z_offset=%.3f anormalement grand (>0.5mm) -> "
+                "Z=0 sera decale d'autant. Verifie #*# [probe] z_offset "
+                "dans printer.cfg." % self.active_z_offset)
         z_start = z_max - self.z_hop - 1.0
         gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=%.1f" % z_start)
 
@@ -357,24 +365,23 @@ class ZTap:
             if stable_count >= self.samples:
                 # VALIDE
                 trigger_z = zendstop_p[2]
-                current_z = toolhead.get_position()[2]
-                trigger_z = zendstop_p[2]
-                # 1) Au point de contact, on est a 0 mesure.
-                gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
-                # 2) On remonte la buse de la compression (le nez s'est enfonce
-                #    dans le switch -> on detecte plus bas que la surface reelle)
-                #    + le z_offset[probe]. Deux offsets vers le haut => que des +.
-                #    (z_offset peut etre +/- selon la config, on l'additionne tel quel)
-                lift = self.active_compression + self.active_z_offset
-                pos = toolhead.get_position()
-                toolhead.manual_move([None, None, pos[2] + lift],
-                                     self.lift_speed)
-                gcode.run_script_from_command("M400")
-                # 3) Ce point (compression + z_offset au-dessus du tap) = vrai Z=0
-                gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
+                # Le vrai Z=0 (surface libre) est `lift` AU-DESSUS du contact :
+                #  - compression : le nez s'est enfonce dans le switch -> on
+                #    detecte plus bas que la surface reelle -> compense vers
+                #    le haut,
+                #  - z_offset [probe] : convention Klipper standard (celle
+                #    qu'ecrit Z_OFFSET_APPLY_PROBE apres un babystep) ->
+                #    POSITIF = buse plus PROCHE -> se SOUSTRAIT.
+                # On pose le zero arithmetiquement (pas de mouvement) : le
+                # point de contact vaut -lift. Un lift negatif (z_offset >
+                # compression) marche donc sans jamais presser la buse dans
+                # le plateau.
+                lift = self.active_compression - self.active_z_offset
+                gcode.run_script_from_command(
+                    "SET_KINEMATIC_POSITION Z=%.6f" % -lift)
                 gcmd.respond_info(
                     "VALIDATED: trigger_z=%.4f -> Z=0 pose %.4f au-dessus du tap "
-                    "(compression=%.4f + z_offset=%.4f)"
+                    "(compression=%.4f - z_offset=%.4f)"
                     % (trigger_z, lift, self.active_compression,
                        self.active_z_offset))
                 # Lift to safe_z above Z=0
