@@ -96,9 +96,12 @@ class Panel(ScreenPanel):
         self.labels["printer_id"] = Gtk.Entry()
         self.labels["printer_id"].set_text(yumi_id)
         self.labels["printer_id"].set_visible(False)
-        id_label = Gtk.Label()
-        id_label.set_markup(f"<span size='small' foreground='#9E9E9E'>ID: {yumi_id}</span>")
-        box.pack_start(id_label, False, False, 2)
+        # On AFFICHE l'UID STM32 (= N° de série gravé sur l'étiquette) pour pouvoir
+        # confronter l'étiquette imprimée à l'imprimante branchée. Repli sur la MAC end0.
+        self.labels["id_display"] = Gtk.Label()
+        self.labels["id_display"].set_markup(f"<span size='small' foreground='#9E9E9E'>ID: {yumi_id}</span>")
+        box.pack_start(self.labels["id_display"], False, False, 2)
+        self._load_mcu_uid()
 
         # QC mode status + actions
         qc_mode = self._is_qc_mode()
@@ -154,10 +157,18 @@ class Panel(ScreenPanel):
         box.pack_start(hint, False, False, 5)
 
         # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
-        ztap_btn = self._gtk.Button("refresh", "校准 Z TAP / Calibrate Z TAP", "color1")
+        # Z TAP + Imprimer etiquette M3 cote a cote (tenir sur 800x480)
+        action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        action_row.set_halign(Gtk.Align.CENTER)
+        ztap_btn = self._gtk.Button("refresh", "Z TAP", "color1")
         ztap_btn.connect("clicked", self._on_ztap_calibrate)
-        ztap_btn.set_size_request(300, 55)
-        box.pack_start(ztap_btn, False, False, 5)
+        ztap_btn.set_size_request(180, 60)
+        action_row.pack_start(ztap_btn, False, False, 0)
+        plaque_btn = self._gtk.Button("print", "标签 / Etiquette M3", "color1")
+        plaque_btn.connect("clicked", self._on_print_plaque)
+        plaque_btn.set_size_request(280, 60)
+        action_row.pack_start(plaque_btn, False, False, 0)
+        box.pack_start(action_row, False, False, 5)
 
         if qc_mode:
             exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
@@ -166,6 +177,44 @@ class Panel(ScreenPanel):
 
         self.content.add(box)
         self.content.show_all()
+
+    # ─── UID STM32 affiché (confrontation étiquette ↔ imprimante) ──────────
+
+    def _load_mcu_uid(self):
+        """Affiche l'UID STM32 (identique au N° de série de l'étiquette) à la place
+        de la MAC. Essai immédiat via l'objet KlipperScreen, sinon lecture Moonraker
+        en tâche de fond (QUERY_MCU_UID puis query) pour ne pas bloquer l'UI."""
+        try:
+            uid = (self._screen.printer.get_stat("mcu_uid", "uid") or "").strip().upper()
+        except Exception:
+            uid = ""
+        if uid:
+            self._set_mcu_uid(uid)
+            return
+        import threading
+        threading.Thread(target=self._worker_mcu_uid, daemon=True).start()
+
+    def _worker_mcu_uid(self):
+        import urllib.request, urllib.parse, json
+        uid = ""
+        try:
+            urllib.request.urlopen(
+                "http://localhost:7125/printer/gcode/script?script=QUERY_MCU_UID", timeout=4).read()
+            raw = urllib.request.urlopen(
+                "http://localhost:7125/printer/objects/query?mcu_uid", timeout=4).read()
+            uid = (json.loads(raw)["result"]["status"]["mcu_uid"]["uid"] or "").strip().upper()
+        except Exception as e:
+            logging.warning("qc_wizard: lecture UID MCU echouee: %s", e)
+        if uid:
+            GLib.idle_add(self._set_mcu_uid, uid)
+
+    def _set_mcu_uid(self, uid):
+        try:
+            self.labels["id_display"].set_markup(
+                f"<span size='small' foreground='#9E9E9E'>MCU UID: {uid}</span>")
+        except Exception:
+            pass
+        return False
 
     # ─── QC MODE (swap printer.cfg <-> qc_printer.cfg) ─────────
 
@@ -426,6 +475,13 @@ class Panel(ScreenPanel):
         self.content.show_all()
 
     # ─── VISUAL CONFIRMATION DIALOG ────────────────────────────
+
+    def _on_print_plaque(self, widget):
+        try:
+            self._screen._ws.klippy.gcode_script("QC_PRINT_PLAQUE")
+            self._screen.show_popup_message(_("打印标签中… / Impression etiquette…"), level=1)
+        except Exception as e:
+            self._screen.show_popup_message("Print label failed: %s" % e, level=3)
 
     def _show_visual_dialog(self, test):
         """Show a full-screen Yes/No dialog for visual confirmation."""
