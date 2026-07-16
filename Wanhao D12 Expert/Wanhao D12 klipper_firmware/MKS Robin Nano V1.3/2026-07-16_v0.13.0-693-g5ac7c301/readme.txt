@@ -4,6 +4,16 @@ Version: v0.13.0-693-g5ac7c301
 Built:   2026-07-16 (Yumi-Lab internal builder)
 SHA256:  ee04b9e35bf99c44719d2d805eb59e101c6a389fbf4d0bb8f2b462b3bd2d6cf6
 
+TARGET BOARD
+------------
+For MKS Robin Nano V1.3 ONLY.
+How to check: board silkscreen "MKS Robin Nano V1.3" and main chip marked
+STM32F407 - despite the V1.x name this is NOT an F103 board.
+NOT for Robin Nano V1.2 / V2.0 / V2.1 (STM32F103, 28KiB - use the V1.2 build).
+NOT for Robin Nano V3.x (48KiB offset - use the V3.0-3.1 or V3.2 build).
+Flashing the wrong build leaves the board unresponsive (recoverable by
+flashing the correct file).
+
 FLASH
 -----
 1. Download MKS1.3.bin (named after the board so you cannot mix up builds).
