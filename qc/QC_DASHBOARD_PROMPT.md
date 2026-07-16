@@ -99,7 +99,7 @@ motion sensor, corrections de vis du screws tilt (ex "CW 02:08"), `YUMI_CONFIG`.
 
 ## 6. Parsing de l'identité (`yumi_config` + `printer_id`)
 
-`yumi_config` est la constante gravée dans le MCU par firmware.yumi-lab.com, sous forme
+`yumi_config` est la constante gravée dans le MCU par le builder firmware Yumi, sous forme
 `clé=valeur` séparées par des espaces. En extraire (tolérant aux clés absentes) :
 - **`device` / `model`** → modèle machine (C235, C335, C435…) → segmentation "par modèle".
 - **`lot`** → lot de fabrication → segmentation "par lot".
