@@ -6,8 +6,10 @@ SHA256:  d120d6b3ecd3b488138fe11714c29e90b8a0ea6cfff5fac487cce98f19fe623e
 
 FLASH
 -----
-Copy Robin_nano_v3.bin to the root of a FAT32 SD card (max 32GB),
-insert it in the BOARD SD slot, power-cycle, wait ~30s.
+1. Download MKS3.0-3.1.bin (named after the board so you cannot mix up builds).
+2. Rename it to Robin_nano_v3.bin.
+3. Copy it to the root of a FAT32 SD card (max 32GB), insert it in the
+   BOARD SD slot, power-cycle, wait ~30s.
 Serial: /dev/serial/by-id/usb-Klipper_stm32f407xx_* (native USB, ttyACM).
 
 BUILD DETAILS

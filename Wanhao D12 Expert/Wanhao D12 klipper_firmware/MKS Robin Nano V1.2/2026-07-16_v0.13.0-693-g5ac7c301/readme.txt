@@ -6,8 +6,10 @@ SHA256:  d59cc9fae017bc8dc281391a0e9d3094e2cdcec261a5e31142f4039b8b2c969a
 
 FLASH
 -----
-Copy Robin_nano35.bin to the root of a FAT32 SD card (max 32GB),
-insert it in the BOARD SD slot, power-cycle, wait ~30s.
+1. Download MKS1.2.bin (named after the board so you cannot mix up builds).
+2. Rename it to Robin_nano35.bin.
+3. Copy it to the root of a FAT32 SD card (max 32GB), insert it in the
+   BOARD SD slot, power-cycle, wait ~30s.
 If the board ignores it, rename the SAME file Robin_nano.bin, then
 Robin_nano43.bin (bootloader flavor varies by factory batch).
 The stock MKS touchscreen stays black under Klipper (normal).

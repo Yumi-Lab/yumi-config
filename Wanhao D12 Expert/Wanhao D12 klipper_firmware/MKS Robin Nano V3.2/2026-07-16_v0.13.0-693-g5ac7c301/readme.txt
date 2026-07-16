@@ -6,8 +6,10 @@ SHA256:  8cabb5932382f1ca2fa400936a9cea0845e797dde53b1adefbf6f77289125115
 
 FLASH
 -----
-Copy Robin_nano_v3.bin to the root of a FAT32 SD card (max 32GB),
-insert it in the BOARD SD slot, power-cycle, wait ~30s.
+1. Download MKS3.2.bin (named after the board so you cannot mix up builds).
+2. Rename it to Robin_nano_v3.bin.
+3. Copy it to the root of a FAT32 SD card (max 32GB), insert it in the
+   BOARD SD slot, power-cycle, wait ~30s.
 Same F407/48KiB family as V3.0/V3.1 - the ONLY difference is communication:
 USART3 via onboard CH340 (/dev/serial/by-id/usb-1a86_USB_Serial-*, ttyUSB).
 

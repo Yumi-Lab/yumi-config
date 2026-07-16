@@ -6,8 +6,10 @@ SHA256:  ee04b9e35bf99c44719d2d805eb59e101c6a389fbf4d0bb8f2b462b3bd2d6cf6
 
 FLASH
 -----
-Copy Robin_nano35.bin to the root of a FAT32 SD card (max 32GB),
-insert it in the BOARD SD slot, power-cycle, wait ~30s.
+1. Download MKS1.3.bin (named after the board so you cannot mix up builds).
+2. Rename it to Robin_nano35.bin.
+3. Copy it to the root of a FAT32 SD card (max 32GB), insert it in the
+   BOARD SD slot, power-cycle, wait ~30s.
 WARNING: despite the V1.x name, V1.3 is STM32F407 with a UNIQUE 32KiB offset -
 not the F103 build (V1.2/V2), not the 48KiB V3 build.
 Serial: /dev/serial/by-id/usb-1a86_USB_Serial-* (CH340 ttyUSB, baud 250000).
