@@ -351,6 +351,23 @@ QCMENU
     mkdir -p "$KLIPPER_CONFIG_DIR/qc_reports"
     chown -R "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/qc_reports"
     echo "QC reports directory ready."
+
+    # QC upload retry timer (systemd) — retry INFINI des rapports non envoyes.
+    # Installe ici en plus de install_qc_station.sh pour AUTO-GUERIR les pads
+    # deployes avant que le timer soit systematise : sans lui, un envoi rate
+    # n'est jamais retente -> QC bloques a vie (constate sur les pads Chine, 07/2026).
+    # qc_upload_pending.py no-op sans token, donc sans effet sur un pad non-QC.
+    if [ -f "$QC_DIR/qc-upload.timer" ] && [ -f "$QC_DIR/qc-upload.service" ]; then
+        if ! systemctl is-enabled qc-upload.timer >/dev/null 2>&1; then
+            run_privileged cp "$QC_DIR/qc-upload.service" /etc/systemd/system/qc-upload.service
+            run_privileged cp "$QC_DIR/qc-upload.timer"   /etc/systemd/system/qc-upload.timer
+            run_privileged systemctl daemon-reload
+            run_privileged systemctl enable --now qc-upload.timer
+            echo "qc-upload.timer installed + enabled (auto-heal)."
+        else
+            echo "qc-upload.timer already installed."
+        fi
+    fi
 else
     echo "QC directory not found, skipping QC installation."
 fi
