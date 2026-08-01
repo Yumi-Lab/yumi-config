@@ -150,8 +150,10 @@ class Panel(ScreenPanel):
                             f"▶ 触摸 {active_model or 'C235'} 开始检测 / "
                             f"touch {active_model or 'C235'} to START QC</span>")
         else:
+            # Générique : les trois modèles ont leur cfg, plus de raison de
+            # nommer C235 en dur.
             hint.set_markup("<span size='large' weight='bold' foreground='#4CAF50'>"
-                            "▶ 触摸 C235 进入QC模式 / touch C235 to enter QC mode</span>")
+                            "▶ 触摸机型 进入QC模式 / touch a model to enter QC mode</span>")
         hint.set_justify(Gtk.Justification.CENTER)
         hint.set_line_wrap(True)
         box.pack_start(hint, False, False, 5)
@@ -730,12 +732,22 @@ class Panel(ScreenPanel):
         test = self.engine.get_current_test()
         if (test and test["id"] == test_id
                 and self.engine.state in (QCState.RUNNING, QCState.WAITING_GCODE)):
-            logger.warning(f"QC: test {test_id} timed out")
+            # Le budget écoulé EST la valeur configurée du test : on la met dans
+            # le rapport et le log pour savoir tout de suite laquelle relever
+            # (qc_engine.QC_TESTS) sans avoir à chronométrer à la main.
+            budget = test.get("timeout", 0)
+            logger.warning(
+                f"QC: test {test_id} timed out after {budget}s "
+                f"(macro '{test.get('macro', '?')}' n'a pas repondu)")
             # Cut whatever the test turned on (heater/bed/fan) before failing
             cleanup = test.get("cleanup")
             if cleanup:
                 self._screen._ws.klippy.gcode_script(cleanup)
-            self.engine.fail_current_test("Timeout: no result from printer")
+            self.engine.fail_current_test(
+                "Timeout %ss depasse sur %s : la macro %s n'a pas repondu "
+                "(relever le timeout de ce test dans qc_engine.QC_TESTS si la "
+                "machine fonctionne)"
+                % (budget, test_id, test.get("macro", "?")))
         return False
 
     def _update_test_display(self, test):

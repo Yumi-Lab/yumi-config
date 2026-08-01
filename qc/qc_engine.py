@@ -42,6 +42,17 @@ class QCResult(Enum):
 # test visuel, sur un skip, et sur un timeout. Les tests automatisés qui
 # chauffent (screws_tilt/bed_mesh) le portent comme filet anti-surchauffe
 # en cas de timeout — en complétion normale leur macro coupe elle-même.
+#
+# "timeout" : budget en SECONDES, armé quand la macro est ENVOYÉE et annulé
+# à l'arrivée de son RESPOND final. C'est un simple FILET DE SÉCURITÉ contre
+# une macro morte (erreur Klipper, MCU figé) : un test se termine dès que sa
+# macro répond, donc un budget large ne ralentit JAMAIS un QC qui se passe
+# bien. Les valeurs sont dimensionnées sur la plus GRANDE machine (C435 :
+# axes ~2x plus longs qu'une C235, plateau 435x435, course Z 500) — sinon le
+# timeout tombe avant la fin de la macro, l'engine enchaîne la suivante alors
+# que la précédente tourne encore, et le prompt visuel arrive trop tard pour
+# être affiché. La sécurité thermique reste portée par les [verify_heater]
+# de la cfg (check_gain_time/max_error) et par les "cleanup" ci-dessous.
 QC_TESTS = [
     # ── BLOC VISUEL AU TOUT DÉBUT : toutes les validations manuelles d'un coup.
     #    Chaque test visuel est auto-contenu (le cutter home X + chauffe + feed,
@@ -52,7 +63,7 @@ QC_TESTS = [
         "type": "visual",
         "macro": "QC_FAN_MOTHERBOARD",
         "prompt": "主板风扇在转吗？\nIs the motherboard fan spinning?",
-        "timeout": 30,
+        "timeout": 90,   # message visuel derrière une file gcode chargée
     },
     {
         "id": "fan_part",
@@ -61,7 +72,7 @@ QC_TESTS = [
         "macro": "QC_FAN_PART",
         "prompt": "模型冷却风扇在转吗？\nIs the part cooling fan spinning?",
         "cleanup": "M106 S0",
-        "timeout": 20,
+        "timeout": 90,
     },
     {
         "id": "fan_hotend",
@@ -69,7 +80,7 @@ QC_TESTS = [
         "type": "visual",
         "macro": "QC_FAN_HOTEND",
         "prompt": "热端风扇在转吗？\nIs the hotend fan spinning?",
-        "timeout": 20,
+        "timeout": 90,
     },
     {
         # Cutter : home X + chauffe 220 + insere le filament YMS-1 jusqu'a la
@@ -80,7 +91,7 @@ QC_TESTS = [
         "macro": "QC_CUTTER",
         "prompt": "切刀正常切断了挤出的料吗？\nDid the cutter cleanly cut the extruded filament?",
         "cleanup": "M104 S0",
-        "timeout": 400,
+        "timeout": 900,  # feed + extrusion 60mm + coupe + rétraction 120mm
     },
     {
         # Z tap : home (auto-contenu) + tap + montee Zmax.
@@ -89,7 +100,7 @@ QC_TESTS = [
         "type": "visual",
         "macro": "QC_Z_TAP_HOME",
         "prompt": "喷头已升到最高（Zmax）且第一次触碰正常？\nNozzle at top (Zmax) and first tap OK?",
-        "timeout": 180,
+        "timeout": 900,  # refroidissement 220->135 + G28 complet + montée Zmax (495mm)
     },
     # ── RESTE 100% AUTO : opérateur parti, plus aucune validation manuelle ──
     {
@@ -97,28 +108,28 @@ QC_TESTS = [
         "name": "主板 + 固件 / MCU + firmware",
         "type": "automated",
         "macro": "QC_MCU_CHECK",
-        "timeout": 20,
+        "timeout": 60,
     },
     {
         "id": "heat_extruder",
         "name": "喷头加热 220°C / Hotend heat 220°C",
         "type": "automated",
         "macro": "QC_HEAT_EXTRUDER",
-        "timeout": 300,
+        "timeout": 600,
     },
     {
         "id": "home_x",
         "name": "X 轴归位 / Home X",
         "type": "automated",
         "macro": "QC_HOME_X",
-        "timeout": 60,
+        "timeout": 240,  # sensorless multi-tap sur un axe C435 (467mm)
     },
     {
         "id": "home_y",
         "name": "Y 轴归位 / Home Y",
         "type": "automated",
         "macro": "QC_HOME_Y",
-        "timeout": 60,
+        "timeout": 240,  # sensorless multi-tap sur un axe C435 (455mm)
     },
     {
         # Auto : le plateau atteint 60C -> validé.
@@ -126,42 +137,42 @@ QC_TESTS = [
         "name": "热床加热 60°C / Bed heat 60°C",
         "type": "automated",
         "macro": "QC_HEAT_BED",
-        "timeout": 300,
+        "timeout": 900,  # plateau C435 435x435 jusqu'à 60°C
     },
     {
         "id": "z_tap_calib",
         "name": "Z 触碰重复性 / Z tap repeatability",
         "type": "automated",
         "macro": "QC_Z_TAP_CALIB",
-        "timeout": 450,
+        "timeout": 1200, # 15 taps
     },
     {
         "id": "screws_tilt",
         "name": "螺丝调平 / Screws tilt adjust",
         "type": "automated",
         "macro": "QC_SCREWS_TILT",
-        "timeout": 300,
+        "timeout": 900,  # 5 vis, samples 3, samples_tolerance_retries 20
     },
     {
         "id": "bed_mesh",
         "name": "热床网格 / Bed mesh",
         "type": "automated",
         "macro": "QC_BED_MESH",
-        "timeout": 900,
+        "timeout": 1800,
     },
     {
         "id": "e0_head",
         "name": "YMS-1 传感器 + 送料到头 / YMS-1 sensor + feed to head",
         "type": "automated",
         "macro": "QC_HEAD_FEED TOOL=1",
-        "timeout": 300,
+        "timeout": 600,
     },
     {
         "id": "e1_head",
         "name": "YMS-2 传感器 + 送料到头 / YMS-2 sensor + feed to head",
         "type": "automated",
         "macro": "QC_HEAD_FEED TOOL=2",
-        "timeout": 300,
+        "timeout": 600,
     },
 ]
 
