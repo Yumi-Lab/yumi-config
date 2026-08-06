@@ -371,6 +371,21 @@ QCMENU
 else
     echo "QC directory not found, skipping QC installation."
 fi
+
+# Timezone Chine pour les STATIONS QC (usine). Un pad qui a un qc_token est une
+# station QC d'usine (Chine) -> on force Asia/Shanghai. Corrige le decalage des
+# timestamps QC : les pads etaient en UTC, donc un test du soir CST etait
+# comptabilise la veille cote compteur. Garde-fou : ne touche PAS les pads
+# clients (pas de token) qui doivent rester dans leur fuseau local.
+if [ -f "$KLIPPER_CONFIG_DIR/qc_token" ]; then
+    current_tz="$(timedatectl show -p Timezone --value 2>/dev/null)"
+    if [ "$current_tz" != "Asia/Shanghai" ]; then
+        run_privileged timedatectl set-timezone Asia/Shanghai
+        echo "QC station: timezone set to Asia/Shanghai (was ${current_tz:-unknown})."
+    else
+        echo "QC station: timezone already Asia/Shanghai."
+    fi
+fi
 echo "QC System ...[Done]"
 
 # === Generic DEVICE macro (reads YUMI_CONFIG burned into MCU firmware) ===
