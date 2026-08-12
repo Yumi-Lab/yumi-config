@@ -716,8 +716,52 @@ class Panel(ScreenPanel):
                     pass
             elif not ok:
                 msg += " — renvoi auto en arrière-plan jusqu'à reprise réseau"
+            # Étiquette QC auto sur la POS80L branchée au pad (silencieux si absente)
+            lok, lmsg = self._print_qc_label(self._current_report)
+            if lok:
+                msg += " — 标签已打印 / étiquette imprimée"
+            elif "absente" not in lmsg:
+                msg += " — " + lmsg
             self._screen.show_popup_message(msg, level=1 if ok else 2)
         return False
+
+    # ─── ÉTIQUETTE QC (POS80L branchée au pad, TSPL brut) ──────────────
+    # v1 locale : texte + QR vers la page rapport. Le format définitif
+    # viendra de label.yumi-lab.com (lien avec variables -> document à
+    # imprimer) : remplacer le corps de _print_qc_label par le fetch du
+    # document + conversion BITMAP (cf. pos80l/bridge du repo POS-Printer).
+
+    POS80L_DEV = "/dev/usb/lp0"
+
+    def _print_qc_label(self, report):
+        """Imprime l'étiquette QC (58x37, gap+peel natifs TSPL). Renvoie
+        (ok, message). Ne bloque jamais le QC : imprimante absente = no-op."""
+        if not os.path.exists(self.POS80L_DEV):
+            return False, "POS80L absente"
+        overall = report.get("overall_result", "?")
+        batch = report.get("printer_id", "?")
+        url = "https://qc.yumi-lab.com/report/%s" % batch
+        date = (report.get("date_end") or "")[:16].replace("T", " ")
+        lines = [
+            "SIZE 58 mm,37 mm",
+            "GAP 2 mm,0 mm",
+            "DIRECTION 1",
+            "SET PEEL ON",
+            "CLS",
+            'TEXT 16,16,"4",0,1,1,"QC %s"' % overall,
+            'TEXT 16,64,"2",0,1,1,"%s"' % report.get("qc_model", ""),
+            'TEXT 16,96,"2",0,1,1,"%s"' % date,
+            'TEXT 16,200,"1",0,1,1,"%s"' % batch,
+            'QRCODE 290,40,M,4,A,0,"%s"' % url,
+            "PRINT 1,1",
+        ]
+        try:
+            with open(self.POS80L_DEV, "wb") as f:
+                f.write(("\r\n".join(lines) + "\r\n").encode("ascii", "replace"))
+            return True, "étiquette imprimée"
+        except OSError as e:
+            logger.warning("QC: impression étiquette POS80L: %s", e)
+            return False, "étiquette: %s" % e
 
     # ─── TEST EXECUTION ────────────────────────────────────────
 
