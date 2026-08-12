@@ -613,18 +613,57 @@ class Panel(ScreenPanel):
             return
 
         if self._selected_size.upper().startswith("YMS"):
-            # Banc YMS : allocation groupée des codes AVANT de démarrer.
-            # Échec réseau/serveur = la séquence ne démarre pas (contrat v1.1).
-            self._screen.show_popup_message(
-                "分配编号中… / Allocation des codes YMS…", level=1)
-            threading.Thread(target=self._yms_alloc_worker,
-                             args=(printer_id,), daemon=True).start()
+            # Banc YMS : choix du modèle AVANT l'allocation groupée.
+            self._show_yms_model_selector(printer_id)
             return
 
         self._build_running_screen()
         test = self.engine.start(printer_id, model=self._selected_size)
         if test:
             self._run_test(test)
+
+    def _show_yms_model_selector(self, printer_id):
+        """Dialogue 2 gros boutons LIGHT / PRO avant allocation YMS."""
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        content.set_valign(Gtk.Align.CENTER)
+
+        title = Gtk.Label()
+        title.set_markup("<span size='x-large' weight='bold'>选择型号 / Select model</span>")
+        content.pack_start(title, False, False, 10)
+
+        hint = Gtk.Label()
+        hint.set_markup("<span size='large'>YMS 型号 / YMS model</span>")
+        content.pack_start(hint, False, False, 5)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        btn_box.set_halign(Gtk.Align.CENTER)
+
+        light_btn = self._gtk.Button(None, "LIGHT", "color3")
+        light_btn.set_size_request(160, 120)
+        light_btn.connect("clicked", self._on_yms_model_selected, printer_id, "light")
+        btn_box.pack_start(light_btn, False, False, 0)
+
+        pro_btn = self._gtk.Button(None, "PRO", "color1")
+        pro_btn.set_size_request(160, 120)
+        pro_btn.connect("clicked", self._on_yms_model_selected, printer_id, "pro")
+        btn_box.pack_start(pro_btn, False, False, 0)
+
+        content.pack_start(btn_box, False, False, 10)
+
+        self._gtk.Dialog(
+            _("YMS Model"),
+            [],
+            content,
+            lambda *args: None,
+        )
+
+    def _on_yms_model_selected(self, widget, printer_id, model):
+        """Le modèle est choisi : ferme le dialogue et lance l'allocation."""
+        self._yms_model = model
+        self._screen.show_popup_message(
+            "分配编号中… / Allocation des codes YMS (%s)…" % model.upper(), level=1)
+        threading.Thread(target=self._yms_alloc_worker,
+                         args=(printer_id,), daemon=True).start()
 
     # ─── BANC YMS : allocation groupée + démarrage ─────────────
 
