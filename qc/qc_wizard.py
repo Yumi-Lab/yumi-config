@@ -64,10 +64,12 @@ try:
         allocate_yms_codes,
         build_box_report,
         build_label_tspl,
+        build_retest_sequence,
         build_yms_tests,
         enabled_positions,
         extract_measures,
         load_disabled_positions,
+        position_from_test_id,
         test_id_for_position,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -84,10 +86,12 @@ except ImportError:
         allocate_yms_codes,
         build_box_report,
         build_label_tspl,
+        build_retest_sequence,
         build_yms_tests,
         enabled_positions,
         extract_measures,
         load_disabled_positions,
+        position_from_test_id,
         test_id_for_position,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -470,11 +474,17 @@ class Panel(ScreenPanel):
 
         results_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         for test in report.get("tests", []):
+            tid = test.get("id", "")
+            result = test.get("result", "pending")
+            is_yms_fail = (
+                tid.startswith("e") and tid.endswith("_head")
+                and result == "fail"
+            )
+
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             row.set_margin_start(10)
             row.set_margin_end(10)
 
-            result = test.get("result", "pending")
             if result == "pass":
                 mark = "<span foreground='#4CAF50' size='large' weight='bold'>  PASS</span>"
             elif result == "fail":
@@ -495,7 +505,16 @@ class Panel(ScreenPanel):
 
             row.pack_start(name_label, True, True, 0)
             row.pack_end(result_lbl, False, False, 0)
-            results_box.pack_start(row, False, False, 0)
+
+            # Re-test unitaire : une ligne YMS en FAIL est cliquable.
+            if is_yms_fail:
+                event_box = Gtk.EventBox()
+                event_box.add(row)
+                event_box.connect("button-press-event", self._on_yms_fail_row_clicked, tid)
+                event_box.get_style_context().add_class("button")
+                results_box.pack_start(event_box, False, False, 0)
+            else:
+                results_box.pack_start(row, False, False, 0)
 
             # Sous-ligne détails : la mesure la plus parlante du log capturé
             # (distance feed, spread Z, corrections vis...) ou le champ details.
@@ -712,6 +731,92 @@ class Panel(ScreenPanel):
             self._run_test(test)
         return False
 
+    # ─── RE-TEST UNITAIRE D'UN BOÎTIER YMS EN FAIL ─────────────────
+
+    def _on_yms_fail_row_clicked(self, widget, event, test_id):
+        """Ligne YMS FAIL touchée sur l'écran résumé : propose le re-test."""
+        pos = position_from_test_id(test_id)
+        label = Gtk.Label()
+        label.set_markup(
+            "<span size='large'>重新测试 YMS-%d ?\nRe-test YMS-%d ?</span>" % (pos, pos))
+        buttons = [
+            {"name": _("是 / YES"), "response": Gtk.ResponseType.YES,
+             "style": "color3"},
+            {"name": _("否 / NO"), "response": Gtk.ResponseType.NO,
+             "style": "color2"},
+        ]
+        self._gtk.Dialog(
+            _("Re-test YMS-%d") % pos,
+            buttons,
+            label,
+            lambda dialog, resp: self._on_yms_retest_confirmed(dialog, resp, test_id),
+        )
+
+    def _on_yms_retest_confirmed(self, dialog, response_id, test_id):
+        self._gtk.remove_dialog(dialog)
+        if response_id != Gtk.ResponseType.YES:
+            return
+        printer_id = self.labels["printer_id"].get_text().strip()
+        self._yms_retest_test_id = test_id
+        self._screen.show_popup_message(
+            "分配编号中… / Allocation code re-test…", level=1)
+        threading.Thread(
+            target=self._yms_retest_alloc_worker,
+            args=(printer_id,), daemon=True).start()
+
+    def _yms_retest_alloc_worker(self, printer_id):
+        """Thread : alloue UN nouveau code pour le re-test."""
+        ids, err = self._allocate_yms_codes(1, self._yms_model)
+        GLib.idle_add(self._yms_retest_alloc_done, printer_id, ids, err)
+
+    def _yms_retest_alloc_done(self, printer_id, ids, err):
+        """Main thread : démarre le re-test du seul e<n>_head."""
+        if not ids:
+            self._screen.show_popup_message(
+                "无法开始 / Re-test NON démarré — " + err, level=3)
+            return False
+        self._yms_retest_id = ids[0]
+        logger.info("QC YMS: code re-test alloué %s pour %s",
+                    self._yms_retest_id, self._yms_retest_test_id)
+        self._build_running_screen()
+        self.engine.start(printer_id, model=self._selected_size)
+        pos = position_from_test_id(self._yms_retest_test_id)
+        self.engine.tests = build_retest_sequence(pos)
+        self.engine.results = {}
+        self.engine._test_log = {}
+        for test in self.engine.tests:
+            self.engine.results[test["id"]] = {
+                "result": QCResult.PENDING,
+                "timestamp": None,
+                "details": "",
+            }
+        self.engine.current_test_index = -1
+        test = self.engine.next_test()
+        if test:
+            self._run_test(test)
+        return False
+
+    def _build_retest_box_report(self, test_id, result):
+        """Rapport d'un re-test unitaire YMS (code unique alloué)."""
+        passed = (result == QCResult.PASS)
+        return build_box_report(
+            test_id=test_id,
+            result="PASS" if passed else "FAIL",
+            yms_ids=[self._yms_retest_id],
+            session=self._bench_session,
+            pad_mac=self.labels["printer_id"].get_text().strip(),
+            technician=self.engine.technician,
+            test_log=self.engine._test_log,
+            engine_results=self.engine.results,
+            model=self._yms_model,
+            bench_total=YMS_BENCH_TOTAL,
+            bench_slots=YMS_BENCH_SLOTS,
+            started=self._box_started.get(test_id) or datetime.now(),
+            now=datetime.now(),
+            disabled_positions=self._disabled_positions,
+            retest=True,
+        )
+
     def _on_abort_clicked(self, widget):
         # Confirm abort
         label = Gtk.Label()
@@ -812,11 +917,16 @@ class Panel(ScreenPanel):
         # Banc YMS : rapport PAR BOÎTIER envoyé au fil de la séquence (l'envoi
         # et l'étiquette partent en thread, le test suivant démarre sans
         # attendre). Un boîtier SKIPPÉ = code brûlé, pas de rapport.
-        if (self._selected_size.upper().startswith("YMS") and self._yms_ids
-                and re.fullmatch(r"e\d+_head", test_id)
+        is_yms_head = re.fullmatch(r"e\d+_head", test_id)
+        if (self._selected_size.upper().startswith("YMS")
+                and is_yms_head
                 and result in (QCResult.PASS, QCResult.FAIL)):
             try:
-                box_report = self._build_box_report(test_id, result)
+                # Re-test unitaire : code unique alloué à la volée.
+                if getattr(self, "_yms_retest_test_id", None) == test_id:
+                    box_report = self._build_retest_box_report(test_id, result)
+                else:
+                    box_report = self._build_box_report(test_id, result)
                 threading.Thread(target=self._dispatch_box_report,
                                  args=(box_report,), daemon=True).start()
             except Exception as e:

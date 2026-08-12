@@ -167,6 +167,33 @@ def build_yms_tests(disabled_positions=None):
     return tests
 
 
+def build_retest_sequence(position):
+    """Mini-séquence pour re-tester un seul boîtier YMS en échec.
+
+    Le mcu_check est inclus comme skipped (déjà validé en séquence principale)
+    pour conserver la structure du rapport ; seul e<n>_head est réellement
+    exécuté.
+    """
+    test_id = test_id_for_position(position)
+    return [
+        {
+            "id": "mcu_check",
+            "name": "主板×3 + 固件 / MCUs + firmware",
+            "type": "automated",
+            "macro": "",
+            "timeout": 0,
+            "skipped": True,
+        },
+        {
+            "id": test_id,
+            "name": "YMS-%d 送料+传感器 / feed+sensor" % position,
+            "type": "automated",
+            "macro": "QC_HEAD_FEED TOOL=%d" % position,
+            "timeout": 420,
+        },
+    ]
+
+
 def position_from_test_id(test_id):
     """e<n>_head -> position banc (n+1)."""
     m = re.fullmatch(r"e(\d+)_head", test_id)
@@ -185,13 +212,15 @@ def yms_code_for_position(pos, yms_ids, disabled=None):
 def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
-                     started=None, now=None, disabled_positions=None):
+                     started=None, now=None, disabled_positions=None,
+                     retest=False):
     """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.1).
 
     Args:
         test_id: identifiant du test (ex: "e5_head").
         result: résultat brut du test (passé à la fonction : "PASS" ou "FAIL").
-        yms_ids: liste des codes alloués par le serveur (ordre des positions actives).
+        yms_ids: liste des codes alloués par le serveur. En séquence, ordre
+            des positions actives ; en re-test, liste à un seul élément.
         session: identifiant de session banc.
         pad_mac: adresse MAC / identifiant du pad QC.
         technician: nom de l'opérateur.
@@ -203,12 +232,16 @@ def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
         started: datetime de début du test.
         now: datetime de fin du test.
         disabled_positions: liste des positions désactivées (pour le mapping code).
+        retest: True si c'est un re-test unitaire (yms_ids contient 1 code).
 
     Returns:
         dict conforme au contrat v1.1.
     """
     pos = position_from_test_id(test_id)
-    yms_id = yms_code_for_position(pos, yms_ids, disabled_positions)
+    if retest:
+        yms_id = yms_ids[0]
+    else:
+        yms_id = yms_code_for_position(pos, yms_ids, disabled_positions)
     logs = list(test_log.get(test_id, []))
     passed = (result == "PASS")
     res = engine_results.get(test_id, {})
