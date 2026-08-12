@@ -5,6 +5,7 @@ Provides a step-by-step wizard with automated tests and visual confirmations.
 import gi
 import logging
 import os
+from datetime import datetime
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
@@ -24,7 +25,8 @@ BACKUP_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-backup")
 # C335/C435 sont à générer sur une vraie machine (le sélecteur les marque "à
 # générer" tant que leur cfg n'existe pas). C235 retombe sur le legacy
 # qc_printer.cfg si qc_printer_C235.cfg n'est pas encore déployé.
-QC_SIZES = ["C235", "C335", "C435"]
+# YMS12 = BANC QC YMS (une C235 + 2 HyperDrive, 12 boîtiers testés un par un).
+QC_SIZES = ["C235", "C335", "C435", "YMS12"]
 QC_CFG_LEGACY = os.path.join(CONFIG_DIR, "qc_printer.cfg")
 
 # Compteur QC central (qc.yumi-lab.com). Le rapport JSON est posté ici en fin
@@ -59,6 +61,7 @@ class Panel(ScreenPanel):
         self._visual_dialog = None
         self._current_report = None
         self._timeout_id = None
+        self._restart_retries = 0
         self._selected_size = QC_SIZES[0]
 
         # Build the UI
@@ -325,7 +328,7 @@ class Panel(ScreenPanel):
         self.labels["test_name"].set_hexpand(True)
 
         self.labels["progress"] = Gtk.Label()
-        self.labels["progress"].set_markup("<span size='large'>0 / {}</span>".format(len(QC_TESTS)))
+        self.labels["progress"].set_markup("<span size='large'>0 / {}</span>".format(len(self.engine.tests)))
         self.labels["progress"].set_halign(Gtk.Align.END)
 
         header.pack_start(self.labels["test_name"], True, True, 5)
@@ -555,7 +558,7 @@ class Panel(ScreenPanel):
             return
 
         self._build_running_screen()
-        test = self.engine.start(printer_id)
+        test = self.engine.start(printer_id, model=self._selected_size)
         if test:
             self._run_test(test)
 
@@ -678,6 +681,18 @@ class Panel(ScreenPanel):
         if "device=" not in yc:
             yc = (yc + " device=" + self._selected_size).strip()
         report["yumi_config"] = yc
+        if self._selected_size.upper().startswith("YMS"):
+            # Rapport de BATCH banc YMS : les boîtiers n'ont pas de n° de
+            # série et le banc réutilise toujours la même carte C235 -> on
+            # force l'identité = banc + horodatage, sinon la dédup
+            # machine_uid du compteur écraserait chaque batch par le suivant.
+            # Et device=YMS12 : le device=C235 gravé de la carte du banc ne
+            # doit pas compter comme un QC de C235 au compteur.
+            batch = "YMS12-" + datetime.now().strftime("%Y%m%d-%H%M")
+            report["printer_id"] = batch
+            report["machine_uid"] = ""
+            report["yumi_config"] = "device=YMS12"
+            self.engine.printer_id = batch  # nom du fichier rapport local
         self._current_report = report
         # Cleanup: stop heaters/fans/motors
         self._screen._ws.klippy.gcode_script("QC_CLEANUP")
@@ -710,6 +725,25 @@ class Panel(ScreenPanel):
         """Send the macro for the current test."""
         self._update_test_display(test)
         self._cancel_timeout()
+        # Un test peut faire tomber Klipper (ex: phase moteur HS -> erreur TMC
+        # -> shutdown). Sans relance, toutes les macros suivantes partiraient
+        # dans le vide et chaque test brûlerait son timeout : on relance le
+        # firmware et on re-tente CE test 25 s plus tard (2 essais max).
+        if getattr(self._screen.printer, "state", "") in ("shutdown", "error"):
+            self._restart_retries += 1
+            if self._restart_retries > 2:
+                self._restart_retries = 0
+                self.engine.fail_current_test(
+                    "Klipper en shutdown persistant avant ce test")
+                return
+            logger.warning(
+                "QC: klippy en shutdown avant %s — FIRMWARE_RESTART + retry",
+                test["id"])
+            self._screen._ws.klippy.restart_firmware()
+            GLib.timeout_add_seconds(25, self._retry_test_after_restart,
+                                     test["id"])
+            return
+        self._restart_retries = 0
         timeout = test.get("timeout", 0)
         if timeout:
             self._timeout_id = GLib.timeout_add_seconds(
@@ -718,6 +752,13 @@ class Panel(ScreenPanel):
         macro = test.get("macro", "")
         if macro:
             self._screen._ws.klippy.gcode_script(macro)
+
+    def _retry_test_after_restart(self, test_id):
+        """Re-tente le test courant après un FIRMWARE_RESTART (one-shot GLib)."""
+        test = self.engine.get_current_test()
+        if test and test["id"] == test_id and self.engine.state == QCState.RUNNING:
+            self._run_test(test)
+        return False
 
     def _cancel_timeout(self):
         if self._timeout_id:
@@ -783,7 +824,7 @@ class Panel(ScreenPanel):
 
         # Find test name
         test_name = test_id
-        for t in QC_TESTS:
+        for t in self.engine.tests:
             if t["id"] == test_id:
                 test_name = t["name"]
                 break

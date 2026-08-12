@@ -205,10 +205,45 @@ _QC_ORDER = [
 _QC_BY_ID = {t["id"]: t for t in QC_TESTS}
 QC_TESTS = [_QC_BY_ID[i] for i in _QC_ORDER if i in _QC_BY_ID]
 
+# ── Séquence BANC YMS (modèle "YMS12") : 12 boîtiers testés un par un ──
+# Chaque test = QC_HEAD_FEED TOOL=n (cfg qc_printer_YMS12.cfg) : feed jusqu'au
+# capteur tête, valide le motion sensor (un décrochage en cours de feed =
+# FAIL immédiat), puis stress aller-retour ±100mm 10→100→10mm/s avec suivi
+# capteur par segment, puis rétraction complète (tube partagé vidé).
+# Mapping : YMS-n = extruder(n-1) -> signaux QC:E(n-1)_HEAD:*.
+# Timeout : feed 900mm + stress + rétraction ≈ 220s réels -> filet 420s.
+QC_TESTS_YMS12 = [
+    {
+        "id": "mcu_check",
+        "name": "主板×3 + 固件 / MCUs + firmware",
+        "type": "automated",
+        "macro": "QC_MCU_CHECK",
+        "timeout": 60,
+    },
+] + [
+    {
+        "id": "e%d_head" % (n - 1),
+        "name": "YMS-%d 送料+传感器 / feed+sensor" % n,
+        "type": "automated",
+        "macro": "QC_HEAD_FEED TOOL=%d" % n,
+        "timeout": 420,
+    }
+    for n in range(1, 13)
+]
+
+
+def tests_for_model(model):
+    """Séquence de tests pour le modèle choisi au panel : banc YMS (YMS12)
+    ou protocole machine C-series (défaut)."""
+    if (model or "").upper().startswith("YMS"):
+        return QC_TESTS_YMS12
+    return QC_TESTS
+
 
 class QCEngine:
     def __init__(self):
         self.state = QCState.IDLE
+        self.tests = QC_TESTS
         self.current_test_index = -1
         self.results = {}
         self.printer_id = ""
@@ -229,15 +264,16 @@ class QCEngine:
         self._on_visual_prompt = on_visual_prompt
         self._on_qc_complete = on_qc_complete
 
-    def start(self, printer_id, technician=""):
+    def start(self, printer_id, technician="", model=""):
         self.printer_id = printer_id
         self.technician = technician
+        self.tests = tests_for_model(model)
         self.start_time = datetime.now()
         self.current_test_index = -1
         self.results = {}
         self._ztap_triggers = []
         self._test_log = {}
-        for test in QC_TESTS:
+        for test in self.tests:
             self.results[test["id"]] = {
                 "result": QCResult.PENDING,
                 "timestamp": None,
@@ -249,22 +285,22 @@ class QCEngine:
     def next_test(self):
         """Advance to the next test. Returns the test dict or None if done."""
         self.current_test_index += 1
-        if self.current_test_index >= len(QC_TESTS):
+        if self.current_test_index >= len(self.tests):
             self._finish()
             return None
-        test = QC_TESTS[self.current_test_index]
+        test = self.tests[self.current_test_index]
         self.test_start_time = datetime.now()
         logger.info(f"QC: Starting test {test['id']}")
         return test
 
     def get_current_test(self):
-        if 0 <= self.current_test_index < len(QC_TESTS):
-            return QC_TESTS[self.current_test_index]
+        if 0 <= self.current_test_index < len(self.tests):
+            return self.tests[self.current_test_index]
         return None
 
     def get_progress(self):
         """Returns (current, total) tuple."""
-        return (self.current_test_index + 1, len(QC_TESTS))
+        return (self.current_test_index + 1, len(self.tests))
 
     def process_gcode_response(self, message):
         """Parse QC: prefixed gcode responses + captures trigger_z des taps."""
@@ -429,7 +465,7 @@ class QCEngine:
         # PASS — sinon un QC quitté tôt (aucun test déroulé) passerait pour validé.
         all_pass = all(
             self.results.get(t["id"], {}).get("result") == QCResult.PASS
-            for t in QC_TESTS)
+            for t in self.tests)
         if failed:
             overall = "FAIL"
         elif all_pass:
@@ -450,7 +486,7 @@ class QCEngine:
             "skipped_tests": skipped,
         }
 
-        for test in QC_TESTS:
+        for test in self.tests:
             r = self.results.get(test["id"], {})
             report["tests"].append({
                 "id": test["id"],
