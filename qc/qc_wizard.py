@@ -61,6 +61,7 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 try:
     from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS
     from ks_includes.qc_yms import (
+        allocate_yms_codes,
         build_box_report,
         extract_measures,
         YMS_BENCH_SLOTS,
@@ -75,6 +76,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS
     from qc_yms import (
+        allocate_yms_codes,
         build_box_report,
         extract_measures,
         YMS_BENCH_SLOTS,
@@ -621,26 +623,9 @@ class Panel(ScreenPanel):
         GLib.idle_add(self._yms_alloc_done, printer_id, ids, err)
 
     def _allocate_yms_codes(self, count, model):
-        """POST /api/qc/yms/allocate {"model","count"} -> (liste ids, erreur)."""
+        """Adaptateur autour du client d'allocation pur qc_yms.allocate_yms_codes."""
         token = self._qc_token()
-        if not token:
-            return None, "Token QC manquant : %s" % QC_TOKEN_FILE
-        data = json.dumps({"model": model, "count": count}).encode("utf-8")
-        req = urllib.request.Request(
-            QC_YMS_ALLOCATE_URL, data=data, method="POST",
-            headers={"Content-Type": "application/json", "X-QC-Token": token})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            return None, "Allocation refusée : HTTP %d" % e.code
-        except Exception as e:
-            return None, "Allocation impossible (réseau ?) : %s" % e
-        ids = payload.get("yms_ids") or (
-            [payload["yms_id"]] if payload.get("yms_id") else [])
-        if payload.get("status") != "ok" or len(ids) != count:
-            return None, "Réponse allocation invalide : %s" % str(payload)[:120]
-        return ids, ""
+        return allocate_yms_codes(QC_YMS_ALLOCATE_URL, token, count, model)
 
     def _yms_alloc_done(self, printer_id, ids, err):
         """Main thread : démarre la séquence si les codes sont là."""

@@ -5,6 +5,8 @@ No GTK/gi imports here so it can be imported by tests and by the thin UI layer.
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime
 
 # Contrat FORMAT-YMS.md v1.1
@@ -185,3 +187,30 @@ def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
             },
         ],
     }
+
+
+def allocate_yms_codes(url, token, count, model, timeout=15):
+    """POST /api/qc/yms/allocate {"model","count"} -> (liste ids, erreur).
+
+    Returns:
+        (ids, "") en cas de succès.
+        (None, message_erreur) sinon.
+    """
+    if not token:
+        return None, "Token QC manquant"
+    data = json.dumps({"model": model, "count": count}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/json", "X-QC-Token": token})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return None, "Allocation refusée : HTTP %d" % e.code
+    except Exception as e:
+        return None, "Allocation impossible (réseau ?) : %s" % e
+    ids = payload.get("yms_ids") or (
+        [payload["yms_id"]] if payload.get("yms_id") else [])
+    if payload.get("status") != "ok" or len(ids) != count:
+        return None, "Réponse allocation invalide : %s" % str(payload)[:120]
+    return ids, ""
