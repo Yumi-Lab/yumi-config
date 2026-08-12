@@ -214,3 +214,34 @@ def allocate_yms_codes(url, token, count, model, timeout=15):
     if payload.get("status") != "ok" or len(ids) != count:
         return None, "Réponse allocation invalide : %s" % str(payload)[:120]
     return ids, ""
+
+
+# URL de consultation du rapport (contrat v1.1)
+QC_REPORT_URL_BASE = "https://qc.yumi-lab.com/report/"
+
+
+def build_label_tspl(report):
+    """Génère le TSPL brut de l'étiquette QC (58x37 mm) pour imprimante POS80L.
+
+    Returns:
+        bytes encodés en ASCII, lignes terminées par CRLF.
+    """
+    overall = report.get("overall_result", "?")
+    batch = report.get("printer_id", "?")
+    qc_model = report.get("qc_model", "")
+    date = (report.get("date_end") or "")[:16].replace("T", " ")
+    url = "%s%s" % (QC_REPORT_URL_BASE, batch)
+    lines = [
+        "SIZE 58 mm,37 mm",
+        "GAP 2 mm,0 mm",
+        "DIRECTION 1",
+        "SET PEEL ON",
+        "CLS",
+        'TEXT 16,16,"4",0,1,1,"QC %s"' % overall,
+        'TEXT 16,64,"2",0,1,1,"%s"' % qc_model,
+        'TEXT 16,96,"2",0,1,1,"%s"' % date,
+        'TEXT 16,200,"1",0,1,1,"%s"' % batch,
+        'QRCODE 290,40,M,4,A,0,"%s"' % url,
+        "PRINT 1,1",
+    ]
+    return ("\r\n".join(lines) + "\r\n").encode("ascii", "replace")

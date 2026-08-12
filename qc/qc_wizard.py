@@ -63,6 +63,7 @@ try:
     from ks_includes.qc_yms import (
         allocate_yms_codes,
         build_box_report,
+        build_label_tspl,
         extract_measures,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -78,6 +79,7 @@ except ImportError:
     from qc_yms import (
         allocate_yms_codes,
         build_box_report,
+        build_label_tspl,
         extract_measures,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -897,26 +899,10 @@ class Panel(ScreenPanel):
         (ok, message). Ne bloque jamais le QC : imprimante absente = no-op."""
         if not os.path.exists(self.POS80L_DEV):
             return False, "POS80L absente"
-        overall = report.get("overall_result", "?")
-        batch = report.get("printer_id", "?")
-        url = "https://qc.yumi-lab.com/report/%s" % batch
-        date = (report.get("date_end") or "")[:16].replace("T", " ")
-        lines = [
-            "SIZE 58 mm,37 mm",
-            "GAP 2 mm,0 mm",
-            "DIRECTION 1",
-            "SET PEEL ON",
-            "CLS",
-            'TEXT 16,16,"4",0,1,1,"QC %s"' % overall,
-            'TEXT 16,64,"2",0,1,1,"%s"' % report.get("qc_model", ""),
-            'TEXT 16,96,"2",0,1,1,"%s"' % date,
-            'TEXT 16,200,"1",0,1,1,"%s"' % batch,
-            'QRCODE 290,40,M,4,A,0,"%s"' % url,
-            "PRINT 1,1",
-        ]
+        tspl = build_label_tspl(report)
         try:
             with open(self.POS80L_DEV, "wb") as f:
-                f.write(("\r\n".join(lines) + "\r\n").encode("ascii", "replace"))
+                f.write(tspl)
             return True, "étiquette imprimée"
         except OSError as e:
             logger.warning("QC: impression étiquette POS80L: %s", e)
