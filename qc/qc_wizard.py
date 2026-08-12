@@ -80,7 +80,7 @@ except ImportError:
     # Fallback: try relative import for development
     import sys
     import os
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS
     from qc_yms import (
         allocate_yms_codes,
