@@ -12,10 +12,16 @@
 #      sgthrs, vitesse, accel) : reculer, dwell (vider le flag StallGuard),
 #      taper avec un overshoot tres limite via offset cinematique.
 #      PREUVE DE CONTACT obligatoire : le trigger doit tomber AVANT la cible
-#      commandee (= il a bute le mur). Si le move atteint la cible sans trigger
-#      precoce -> tap REJETE (sinon faux positif spread=0, "tap dans le vide").
-#   C) Rejet des outliers, moyenne des taps retenus, report du spread, puis
+#      commandee (= il a bute le mur), hors zone de deceleration (= pas un
+#      artefact d'arret), et pas trop avant (= pas un faux stall / obstacle).
+#   C) Fenetre glissante de `samples` taps concordants, puis
 #      SET_KINEMATIC_POSITION AXIS=position_endstop (le zero est le hard-stop).
+#
+# ATTENTION CoolStep/autotune (cause racine de l'echec "Y ne home plus a chaud"
+# 2026-08-12) : pendant un homing move, le tmc.py de Klipper force StealthChop
+# (2209/SG4) et TCOOLTHRS=0xFFFFF (si le champ vaut 0), ce qui arme CoolStep a
+# TOUTES les vitesses si semin>0 -> courant effectif reduit jusqu'a IRUN/4
+# (seimin=1). Il FAUT couper semin pendant le home (cf. _open_sg_window).
 #
 # A appeler depuis le homing_override : YUMI_SENSORLESS_HOME AXIS=Y.
 import logging
@@ -58,7 +64,14 @@ class YumiSensorless:
             'X': config.getfloat('run_current_x', 1.2, above=0.),
             'Y': config.getfloat('run_current_y', 1.2, above=0.),
         }
-        # sgthrs pendant les taps / a restaurer apres (0 = garder la valeur cfg).
+        # sgthrs pendant le home de base (G28). 0 = ne pas toucher au registre.
+        # ATTENTION : "ne pas toucher" = heriter de la valeur posee par
+        # l'autotune (sg4_thrs, ex 50), PAS du driver_SGTHRS du printer.cfg.
+        self.coarse_sgthrs = {
+            'X': config.getint('coarse_sgthrs_x', 0),
+            'Y': config.getint('coarse_sgthrs_y', 0),
+        }
+        # sgthrs pendant les taps / a restaurer apres (0 = ne pas toucher).
         self.tap_sgthrs = {
             'X': config.getint('tap_sgthrs_x', 0),
             'Y': config.getint('tap_sgthrs_y', 0),
@@ -88,6 +101,84 @@ class YumiSensorless:
         self.printer.lookup_object('gcode').run_script_from_command(
             "SET_KINEMATIC_POSITION %s=%.4f" % (axis, value))
 
+    def _unhome(self, ai):
+        # Retire le statut "homed" de l'axe avant un abort : les _set_kin des
+        # taps ont marque l'axe homed sur un referentiel possiblement FAUX.
+        # API Python directe. Ne JAMAIS passer par la commande
+        # SET_KINEMATIC_POSITION CLEAR=... : son SET_HOMED vaut 'xyz' par
+        # defaut, elle force-home donc les DEUX AUTRES axes en effet de bord
+        # (dont un Z jamais home), et un force_move ancien sans CLEAR=
+        # force-home les trois sans rien effacer.
+        kin = self.printer.lookup_object('toolhead').get_kinematics()
+        clear = getattr(kin, 'clear_homing_state', None)
+        if clear is None:
+            # Vieux Klipper : pas d'API d'unhome propre -> on n'aggrave rien
+            # (comportement d'origine), l'erreur franche reste le garde-fou.
+            return
+        # Signature reelle : clear_homing_state(clear_axes) teste "axis_name
+        # in clear_axes" avec des LETTRES ('x'/'y'/'z') -> passer la lettre
+        # (un tuple d'indices int serait silencieusement sans effet).
+        clear("xyz"[ai])
+
+    def _g28(self, axis):
+        # G28 PRIMITIF meme hors homing_override : tape en console (bench),
+        # un "G28 Y" nu relancerait l'override COMPLET (recursion X+Y+Z +
+        # restore autotune qui refermerait la fenetre StallGuard de l'appel
+        # en cours). On leve in_script comme l'override le fait lui-meme.
+        gcode = self.printer.lookup_object('gcode')
+        ho = self.printer.lookup_object('homing_override', None)
+        if ho is not None and not getattr(ho, 'in_script', True):
+            ho.in_script = True
+            try:
+                gcode.run_script_from_command("G28 %s" % axis)
+            finally:
+                ho.in_script = False
+        else:
+            gcode.run_script_from_command("G28 %s" % axis)
+
+    def _open_sg_window(self, st):
+        # Ouvre VRAIMENT la fenetre StallGuard pour les homing moves :
+        # - tcoolthrs=0 : le tmc.py de Klipper force alors TCOOLTHRS=0xFFFFF
+        #   pendant chaque homing move (fenetre pleine-gamme), puis restaure.
+        # - semin=0 : coupe CoolStep. OBLIGATOIRE et pas optionnel : pendant un
+        #   homing move Klipper met TCOOLTHRS=0xFFFFF, ce qui arme CoolStep a
+        #   TOUTES les vitesses si semin>0 (l'autotune pose semin=2/seimin=1 au
+        #   boot ET apres chaque home via le restore). CoolStep reduit alors le
+        #   courant effectif jusqu'a IRUN/4 (seimin=1) a faible charge : un tap
+        #   commande a 1.2A peut rouler vers ~0.3-0.6A = courant qui NE SENT
+        #   PAS le mur (verifie live 2026-06), et un home de base a 0.55A tombe
+        #   encore plus bas -> decrochage / broutage non senti moteur chaud.
+        #   Cause racine de l'echec "Y ne home plus a chaud" (2026-08).
+        gcode = self.printer.lookup_object('gcode')
+        gcode.run_script_from_command(
+            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=tcoolthrs VALUE=0" % st)
+        gcode.run_script_from_command(
+            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=semin VALUE=0" % st)
+
+    def _read_field(self, st, field):
+        # Valeur EFFECTIVE d'un champ TMC (celle qui compte : l'autotune
+        # ecrase p.ex. driver_SGTHRS avec son sg4_thrs au boot et apres chaque
+        # home, donc la valeur du printer.cfg peut etre lettre morte).
+        obj = self.printer.lookup_object('tmc2209 stepper_%s' % st, None)
+        if obj is None:
+            return None
+        try:
+            return obj.fields.get_field(field)
+        except Exception:
+            return None
+
+    def _set_sgthrs(self, st, value, gcmd):
+        # Ecrit sgthrs seulement si le driver l'a (2209) : sur un autre driver
+        # SET_TMC_FIELD leverait "Unknown field name" et avorterait le home.
+        if self._read_field(st, 'sgthrs') is None:
+            gcmd.respond_info(
+                "YUMI_SENSORLESS_HOME: pas de registre sgthrs sur stepper_%s "
+                "(driver non 2209) -> reglage sgthrs ignore" % st)
+            return
+        self.printer.lookup_object('gcode').run_script_from_command(
+            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=sgthrs VALUE=%d"
+            % (st, value))
+
     def cmd_home(self, gcmd):
         axis = gcmd.get('AXIS', 'Y').upper()
         if axis not in ('X', 'Y'):
@@ -116,30 +207,53 @@ class YumiSensorless:
         # donc <= position_max ; le chariot surcourse physiquement).
         target_phys = pos_endstop - away * self.overshoot
 
-        # Ouvre la fenetre StallGuard pour tout le home.
-        gcode.run_script_from_command(
-            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=tcoolthrs VALUE=0" % st)
+        # Le faux trigger d'arret tombe DANS la zone de deceleration du tap
+        # (gap fantome ~ v_trigger^2/2a, observe 0.05-0.08 a 20mm/s/1000mm/s2).
+        # La preuve de contact n'est discriminante que si l'overshoot depasse
+        # largement cette zone — sinon un tap dans le vide serait ACCEPTE.
+        decel_zone = speed * speed / (2. * self.tap_accel)
+        if self.overshoot <= decel_zone * 2.:
+            raise gcmd.error(
+                "YUMI_SENSORLESS_HOME: overshoot %.2f <= 2x zone de decel "
+                "%.2f (SPEED^2 / 2*fine_accel) -> preuve de contact non "
+                "discriminante. Augmenter overshoot ou fine_accel, ou baisser "
+                "SPEED." % (self.overshoot, decel_zone))
+        min_gap = max(self.overshoot * 0.5, decel_zone * 1.5)
+
+        # Etat TMC a restaurer en sortie (capture AVANT toute modification).
+        semin0 = self._read_field(st, 'semin')
+        tcool0 = self._read_field(st, 'tcoolthrs')
+        sg0 = self._read_field(st, 'sgthrs')
+
+        # Ouvre la fenetre StallGuard (tcoolthrs=0 + CoolStep coupe).
+        self._open_sg_window(st)
 
         # --- A) Home natif : localise le mur ---
+        csg = self.coarse_sgthrs[axis]
         if not skip_base:
             cc = self.coarse_current[axis]
             if cc > 0:
                 gcode.run_script_from_command(
                     "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f" % (st, cc))
-            gcmd.respond_info("YUMI_SENSORLESS_HOME %s: home base..." % axis)
-            gcode.run_script_from_command("G28 %s" % axis)
+            if csg > 0:
+                self._set_sgthrs(st, csg, gcmd)
+            gcmd.respond_info(
+                "YUMI_SENSORLESS_HOME %s: home base... (sgthrs=%s)"
+                % (axis, self._read_field(st, 'sgthrs')))
+            self._g28(axis)
 
         # --- B) Prep taps : courant FRANC + sgthrs + accel constants ---
-        gcode.run_script_from_command(
-            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=tcoolthrs VALUE=0" % st)
+        self._open_sg_window(st)
         tap_cur = self.tap_current[axis] or self.run_current[axis]
         gcode.run_script_from_command(
             "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f" % (st, tap_cur))
         tap_sg = self.tap_sgthrs[axis]
         if tap_sg > 0:
-            gcode.run_script_from_command(
-                "SET_TMC_FIELD STEPPER=stepper_%s FIELD=sgthrs VALUE=%d"
-                % (st, tap_sg))
+            self._set_sgthrs(st, tap_sg, gcmd)
+        elif csg > 0 and sg0 is not None:
+            # coarse_sgthrs etait pose pour le courant coarse : ne pas le
+            # laisser aux taps a courant franc -> re-pose la valeur d'entree.
+            self._set_sgthrs(st, sg0, gcmd)
         eventtime = self.printer.get_reactor().monotonic()
         saved_accel = toolhead.get_status(eventtime).get('max_accel', 1000.)
         gcode.run_script_from_command(
@@ -153,8 +267,11 @@ class YumiSensorless:
         validated = False
         try:
             for attempt in range(1, max_taps + 1):
-                if len(triggers) >= samples:
-                    break
+                # NE PAS sortir des que len(triggers) >= samples : la fenetre
+                # GLISSANTE doit pouvoir continuer a taper tant que les
+                # `samples` derniers taps ne concordent pas (sinon elle ne
+                # glisse jamais et max_taps ne sert a rien — bug historique).
+                # Sorties de boucle : validated, anti-marathon, ou max_taps.
                 # Recule du mur (referentiel reel), puis dwell.
                 cur = toolhead.get_position()
                 cur[ai] = pos_endstop + away * self.retract
@@ -180,49 +297,73 @@ class YumiSensorless:
                     # -> shutdown Klipper sur un pad non patche.
                     epos = phoming.probing_move(mcu_endstop, target, speed)
                 except self.printer.command_error as e:
-                    # Aucun trigger sur toute la course (retract + overshoot) :
-                    # le chariot a parcouru PLUS que la distance de retraction
-                    # sans buter -> le home de base a mal localise le mur.
-                    self._set_kin(axis, pos_endstop)
+                    # Pas de trigger valide. Re-ancre le referentiel depuis la
+                    # position logique COURANTE moins l'offset forcepos : juste
+                    # sur ce que l'on sait, quel que soit le sous-cas ("no
+                    # trigger" = move complet -> chariot a overshoot au-dela du
+                    # mur suppose ; "triggered prior to movement" = pas bouge
+                    # -> chariot toujours au retract). Re-ancrer betement a
+                    # pos_endstop fausserait le referentiel de retract mm.
+                    cur_log = toolhead.get_position()[ai]
+                    self._set_kin(axis, cur_log - away * self.overshoot)
                     reason = "aucun contact sur %.1fmm (%s)" % (
                         self.retract + self.overshoot, str(e).split('\n')[0])
                 else:
                     # PREUVE DE CONTACT : le trigger doit tomber AVANT la cible
-                    # commandee. gap = distance trigger->cible (coord logiques).
-                    # Vrai mur -> gap ~ overshoot ; faux (arrive a la cible sans
-                    # buter) -> gap ~ 0.
+                    # commandee, HORS zone de decel, et pas trop avant le mur.
+                    # gap = distance trigger->cible (coord logiques).
+                    # Vrai mur -> gap ~ overshoot ; arret sans buter -> gap ~ 0
+                    # (zone de decel) ; faux stall / obstacle -> gap >> overshoot.
                     gap = abs(epos[ai] - pos_endstop)
                     trig = epos[ai] - away * self.overshoot  # mur reel
                     self._set_kin(axis, pos_endstop)  # recale au mur
-                    if gap < self.overshoot * 0.5:
+                    if gap < min_gap:
                         reason = "cible atteinte sans buter (gap=%.4f)" % gap
+                    elif gap > self.overshoot + 1.5:
+                        # Trigger bien AVANT le mur attendu : faux stall
+                        # (moteur chaud / sgthrs trop sensible) ou obstacle
+                        # sur la course. Ne JAMAIS valider un tel tap.
+                        # Marge absolue 1.5mm : le tassement legitime du 1er
+                        # contact mesure au pire ~0.8mm (Y), jamais 1.5.
+                        reason = ("trigger avant le mur attendu (gap=%.4f) "
+                                  "-> faux stall ou obstacle" % gap)
 
                 if reason is not None:
                     rejects += 1
                     no_contact += 1
                     gcmd.respond_info("tap %d rejete: %s" % (attempt, reason))
-                    # Pas de contact 2x de suite = home de base foireux / depart
-                    # mal positionne -> re-home de recuperation (borne), sinon
-                    # erreur franche (jamais de faux zero).
+                    # Pas de contact fiable 2x de suite = home de base foireux /
+                    # depart mal positionne -> re-home de recuperation (borne),
+                    # sinon erreur franche (jamais de faux zero).
                     if no_contact >= 2:
-                        if rehomes >= self.max_rehomes:
+                        if rehomes >= self.max_rehomes or skip_base:
+                            # L'axe a ete marque homed par les _set_kin des
+                            # taps sur un referentiel non fiable -> unhome
+                            # avant l'abort (jamais de faux zero). Avec
+                            # SKIP_BASE=1 (bench, referentiel pose a la main)
+                            # on n'impose JAMAIS un G28 natif surprise.
+                            self._unhome(ai)
                             raise gcmd.error(
                                 "YUMI_SENSORLESS_HOME %s: aucun contact apres "
                                 "%d re-home(s) -> position de depart ou butee "
                                 "non fiable, home avorte" % (axis, rehomes))
+                        # Re-home de recuperation a courant FRANC (tap_cur,
+                        # deja en place) : les conditions du home de base
+                        # viennent de prouver qu'elles echouent (moteur chaud),
+                        # les retenter a l'identique re-echoue a l'identique.
+                        # A courant franc le faux trigger en course libre est
+                        # quasi impossible et le mur rigide stalle net.
                         gcmd.respond_info(
                             "YUMI_SENSORLESS_HOME %s: home de base suspect "
-                            "(pas de contact) -> re-home de recuperation %d/%d"
+                            "(pas de contact fiable) -> re-home de "
+                            "recuperation a courant franc %d/%d"
                             % (axis, rehomes + 1, self.max_rehomes))
-                        cc = self.coarse_current[axis]
-                        if cc > 0:
-                            gcode.run_script_from_command(
-                                "SET_TMC_CURRENT STEPPER=stepper_%s "
-                                "CURRENT=%.3f" % (st, cc))
-                        gcode.run_script_from_command("G28 %s" % axis)
-                        gcode.run_script_from_command(
-                            "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f"
-                            % (st, tap_cur))
+                        self._g28(axis)
+                        # Nouveau referentiel -> repartir a zero : ne jamais
+                        # melanger dans la fenetre des taps mesures avant et
+                        # apres le re-home, et re-bruler la chauffe.
+                        triggers = []
+                        valid_count = 0
                         rehomes += 1
                         no_contact = 0
                     continue
@@ -246,6 +387,13 @@ class YumiSensorless:
                     if wspread <= tol:
                         validated = True
                         break
+                    # Anti-marathon : la fenetre glissante sert a ecarter le
+                    # tassement initial (1-2 taps), pas a taper des minutes
+                    # (un axe degrade peut ne jamais converger et max_taps
+                    # peut etre configure tres haut). Apres samples*3 taps
+                    # valides sans stabilisation, inutile d'insister.
+                    if len(triggers) >= samples * 3:
+                        break
                 else:
                     gcmd.respond_info("tap %d: pos=%.4f gap=%.4f (%d/%d)"
                                       % (attempt, trig, gap,
@@ -253,20 +401,32 @@ class YumiSensorless:
         finally:
             gcode.run_script_from_command(
                 "SET_VELOCITY_LIMIT ACCEL=%.0f" % saved_accel)
+            # Restaure l'etat TMC d'entree (utile si pas d'autotune installe /
+            # restore_autotune=False : sinon semin=0 tuerait CoolStep pour
+            # toute la session). L'AUTOTUNE_TMC ci-dessous re-ecrase ensuite
+            # avec le tuning silencieux quand il est present — c'est voulu.
+            if semin0 is not None:
+                gcode.run_script_from_command(
+                    "SET_TMC_FIELD STEPPER=stepper_%s FIELD=semin VALUE=%d"
+                    % (st, semin0))
+            if tcool0 is not None:
+                gcode.run_script_from_command(
+                    "SET_TMC_FIELD STEPPER=stepper_%s FIELD=tcoolthrs VALUE=%d"
+                    % (st, tcool0))
             gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f"
                 % (st, self.run_current[axis]))
-            rs = self.run_sgthrs[axis]
-            if rs > 0:
-                gcode.run_script_from_command(
-                    "SET_TMC_FIELD STEPPER=stepper_%s FIELD=sgthrs VALUE=%d"
-                    % (st, rs))
             if self.restore_autotune:
                 try:
                     gcode.run_script_from_command(
                         "AUTOTUNE_TMC STEPPER=stepper_%s" % st)
                 except Exception as e:
                     logging.info("YUMI_SENSORLESS_HOME autotune: %s", e)
+            # run_sgthrs APRES l'autotune, sinon il serait re-ecrase par le
+            # sg4_thrs de l'autotune et deviendrait de la config morte.
+            rs = self.run_sgthrs[axis]
+            if rs > 0:
+                self._set_sgthrs(st, rs, gcmd)
 
         # --- C) Decision : le zero est le hard-stop (pos_endstop). Les taps
         # servent a VERIFIER la repetabilite, pas a calculer le zero. ---
@@ -277,17 +437,29 @@ class YumiSensorless:
         toolhead.wait_moves()
 
         if len(triggers) < samples:
-            gcmd.respond_info(
+            # Budget de taps epuise sans assez de contacts prouves : le
+            # referentiel n'est pas fiable -> unhome + erreur franche (avant :
+            # "home natif conserve" = zero potentiellement faux garde en douce).
+            self._unhome(ai)
+            raise gcmd.error(
                 "YUMI_SENSORLESS_HOME %s: repetabilite NON etablie "
-                "(%d taps valides / %d, %d rejetes) -> home natif conserve, "
-                "zero pose en butee" % (axis, len(triggers), samples, rejects))
-            return
+                "(%d taps valides / %d requis, %d rejetes) -> referentiel "
+                "non fiable, home avorte" % (axis, len(triggers), samples,
+                                             rejects))
 
         # Fenetre finale = les `samples` derniers taps (stabilises si validated).
         window = triggers[-samples:]
         spread = max(window) - min(window)
         mean = sum(window) / len(window)
         ok = validated and spread <= tol
+        if not ok and spread > max(tol * 4., 0.2):
+            # Contacts reels mais dispersion incompatible avec une butee
+            # fiable (courroie/mecanique) : jamais de faux zero.
+            self._unhome(ai)
+            raise gcmd.error(
+                "YUMI_SENSORLESS_HOME %s: spread=%.4fmm sur %d taps "
+                "(tol=%.4f) -> butee non repetable, home avorte"
+                % (axis, spread, len(window), tol))
         gcmd.respond_info(
             "YUMI_SENSORLESS_HOME %s %s: %d taps valides (%d rejetes) -> "
             "moyenne=%.4f spread=%.4fmm (tol=%.4f). Zero pose en butee=%.4f"
