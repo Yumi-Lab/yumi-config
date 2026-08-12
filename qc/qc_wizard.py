@@ -61,6 +61,7 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 try:
     from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS
     from ks_includes.qc_yms import (
+        build_box_report,
         extract_measures,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -74,6 +75,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS
     from qc_yms import (
+        build_box_report,
         extract_measures,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -100,6 +102,7 @@ class Panel(ScreenPanel):
         self._restart_retries = 0
         self._selected_size = QC_SIZES[0]
         self._yms_ids = None        # codes alloués par le serveur (banc YMS)
+        self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
 
@@ -842,55 +845,23 @@ class Panel(ScreenPanel):
 
     def _build_box_report(self, test_id, result):
         """Rapport individuel d'un boîtier YMS (position banc = e<k>_head ->
-        YMS-(k+1)). measures{} est la source primaire côté serveur : calculée
-        ici depuis les logs capturés du test, les log[] restent en trace."""
-        pos = int(test_id[1:test_id.index("_")]) + 1
-        yms_id = self._yms_ids[pos - 1]
-        logs = list(self.engine._test_log.get(test_id, []))
-        res = self.engine.results.get(test_id, {})
+        YMS-(k+1)). Adaptateur autour du module pur qc_yms.build_box_report."""
         passed = (result == QCResult.PASS)
-        started = self._box_started.get(test_id) or datetime.now()
-        now = datetime.now()
-        mcu_res = self.engine.results.get("mcu_check", {})
-        mcu_result = mcu_res.get("result")
-        test_entry_name = "YMS-%d 送料+传感器 / feed+sensor" % pos
-        return {
-            "version": "1.0",
-            "printer_id": yms_id,
-            "technician": self.engine.technician,
-            "date": started.isoformat(),
-            "date_end": now.isoformat(),
-            "duration_seconds": int((now - started).total_seconds()),
-            "overall_result": "PASS" if passed else "FAIL",
-            "failed_tests": [] if passed else [test_id],
-            "skipped_tests": [],
-            "qc_model": "YMS-LIGHT",
-            "yumi_config": "device=YMS-LIGHT",
-            "machine_uid": "",
-            "pad_mac": self.labels["printer_id"].get_text().strip(),
-            "bench_position": pos,
-            "bench_slot": YMS_BENCH_SLOTS[pos - 1],
-            "bench_session": self._bench_session,
-            "bench_total": YMS_BENCH_TOTAL,
-            "measures": self._extract_measures(logs, passed),
-            "tests": [
-                {"id": "mcu_check",
-                 "name": "主板×3 + 固件 / MCUs + firmware",
-                 "type": "automated",
-                 "result": (mcu_result.value
-                            if isinstance(mcu_result, QCResult) else "pending"),
-                 "timestamp": mcu_res.get("timestamp", ""),
-                 "details": mcu_res.get("details", ""),
-                 "log": list(self.engine._test_log.get("mcu_check", []))},
-                {"id": test_id,
-                 "name": test_entry_name,
-                 "type": "automated",
-                 "result": "pass" if passed else "fail",
-                 "timestamp": res.get("timestamp", ""),
-                 "details": res.get("details", ""),
-                 "log": logs},
-            ],
-        }
+        return build_box_report(
+            test_id=test_id,
+            result="PASS" if passed else "FAIL",
+            yms_ids=self._yms_ids,
+            session=self._bench_session,
+            pad_mac=self.labels["printer_id"].get_text().strip(),
+            technician=self.engine.technician,
+            test_log=self.engine._test_log,
+            engine_results=self.engine.results,
+            model=self._yms_model,
+            bench_total=YMS_BENCH_TOTAL,
+            bench_slots=YMS_BENCH_SLOTS,
+            started=self._box_started.get(test_id) or datetime.now(),
+            now=datetime.now(),
+        )
 
     @staticmethod
     def _extract_measures(logs, passed):
