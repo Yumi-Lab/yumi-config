@@ -100,6 +100,73 @@ def device_for_model(model):
     return qc_model, "device=%s" % qc_model, prefix
 
 
+def load_disabled_positions(path):
+    """Charge la liste des positions banc désactivées depuis un JSON.
+
+    Format attendu : {"disabled": [2, 11]}. Fichier absent ou illisible -> [].
+    """
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        disabled = data.get("disabled", [])
+        return sorted({
+            int(p) for p in disabled
+            if isinstance(p, int) or (isinstance(p, str) and p.isdigit())
+        })
+    except Exception:
+        return []
+
+
+def enabled_positions(disabled, total=YMS_BENCH_TOTAL):
+    """Renvoie les positions actives (1..total) hors disabled."""
+    disabled_set = set(disabled or [])
+    return [p for p in range(1, total + 1) if p not in disabled_set]
+
+
+def test_id_for_position(pos):
+    """Position banc (1..N) -> identifiant de test e<n>_head."""
+    return "e%d_head" % (pos - 1)
+
+
+def build_yms_tests(disabled_positions=None):
+    """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
+
+    Returns:
+        liste de dicts test (compatible avec QCEngine.tests). Les positions
+        désactivées portent la clé ``skipped: True`` pour que le wizard les
+        saute sans envoyer de macro.
+    """
+    disabled = set(disabled_positions or [])
+    tests = [{
+        "id": "mcu_check",
+        "name": "主板×3 + 固件 / MCUs + firmware",
+        "type": "automated",
+        "macro": "QC_MCU_CHECK",
+        "timeout": 60,
+    }]
+    for pos in range(1, YMS_BENCH_TOTAL + 1):
+        test_id = test_id_for_position(pos)
+        name = "YMS-%d 送料+传感器 / feed+sensor" % pos
+        if pos in disabled:
+            tests.append({
+                "id": test_id,
+                "name": name,
+                "type": "automated",
+                "macro": "",
+                "timeout": 0,
+                "skipped": True,
+            })
+        else:
+            tests.append({
+                "id": test_id,
+                "name": name,
+                "type": "automated",
+                "macro": "QC_HEAD_FEED TOOL=%d" % pos,
+                "timeout": 420,
+            })
+    return tests
+
+
 def position_from_test_id(test_id):
     """e<n>_head -> position banc (n+1)."""
     m = re.fullmatch(r"e(\d+)_head", test_id)
@@ -108,16 +175,23 @@ def position_from_test_id(test_id):
     return int(m.group(1)) + 1
 
 
+def yms_code_for_position(pos, yms_ids, disabled=None):
+    """Map une position active vers le code alloué, en sautant les désactivées."""
+    enabled = enabled_positions(disabled, len(yms_ids) + len(disabled or []))
+    idx = enabled.index(pos)
+    return yms_ids[idx]
+
+
 def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
-                     started=None, now=None):
+                     started=None, now=None, disabled_positions=None):
     """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.1).
 
     Args:
         test_id: identifiant du test (ex: "e5_head").
         result: résultat brut du test (passé à la fonction : "PASS" ou "FAIL").
-        yms_ids: liste des codes alloués par le serveur (indexée position-1).
+        yms_ids: liste des codes alloués par le serveur (ordre des positions actives).
         session: identifiant de session banc.
         pad_mac: adresse MAC / identifiant du pad QC.
         technician: nom de l'opérateur.
@@ -128,12 +202,13 @@ def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
         bench_slots: mapping position -> slot physique.
         started: datetime de début du test.
         now: datetime de fin du test.
+        disabled_positions: liste des positions désactivées (pour le mapping code).
 
     Returns:
         dict conforme au contrat v1.1.
     """
     pos = position_from_test_id(test_id)
-    yms_id = yms_ids[pos - 1]
+    yms_id = yms_code_for_position(pos, yms_ids, disabled_positions)
     logs = list(test_log.get(test_id, []))
     passed = (result == "PASS")
     res = engine_results.get(test_id, {})

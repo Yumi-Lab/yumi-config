@@ -64,7 +64,11 @@ try:
         allocate_yms_codes,
         build_box_report,
         build_label_tspl,
+        build_yms_tests,
+        enabled_positions,
         extract_measures,
+        load_disabled_positions,
+        test_id_for_position,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -80,7 +84,11 @@ except ImportError:
         allocate_yms_codes,
         build_box_report,
         build_label_tspl,
+        build_yms_tests,
+        enabled_positions,
         extract_measures,
+        load_disabled_positions,
+        test_id_for_position,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -107,6 +115,7 @@ class Panel(ScreenPanel):
         self._selected_size = QC_SIZES[0]
         self._yms_ids = None        # codes alloués par le serveur (banc YMS)
         self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
+        self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
 
@@ -620,8 +629,12 @@ class Panel(ScreenPanel):
     # ─── BANC YMS : allocation groupée + démarrage ─────────────
 
     def _yms_alloc_worker(self, printer_id):
-        """Thread : demande les 12 codes au serveur puis démarre (ou refuse)."""
-        ids, err = self._allocate_yms_codes(YMS_BENCH_TOTAL, "light")
+        """Thread : charge les slots désactivés, alloue les codes actifs,
+        puis démarre (ou refuse)."""
+        slots_path = os.path.join(CONFIG_DIR, "qc_bench_slots.json")
+        self._disabled_positions = load_disabled_positions(slots_path)
+        count = YMS_BENCH_TOTAL - len(self._disabled_positions)
+        ids, err = self._allocate_yms_codes(count, self._yms_model)
         GLib.idle_add(self._yms_alloc_done, printer_id, ids, err)
 
     def _allocate_yms_codes(self, count, model):
@@ -639,10 +652,23 @@ class Panel(ScreenPanel):
         self._box_started = {}
         self._bench_session = "%s-%s" % (printer_id,
                                          datetime.now().strftime("%Y%m%d-%H%M"))
-        logger.info("QC YMS: codes alloués %s (session %s)",
-                    ids, self._bench_session)
+        logger.info("QC YMS: codes alloués %s (session %s), slots hors service %s",
+                    ids, self._bench_session, self._disabled_positions)
         self._build_running_screen()
-        test = self.engine.start(printer_id, model=self._selected_size)
+        # Démarre l'engine, puis remplace la séquence par la vraie liste YMS12
+        # incluant les positions désactivées (marquées skipped).
+        self.engine.start(printer_id, model=self._selected_size)
+        self.engine.tests = build_yms_tests(self._disabled_positions)
+        self.engine.results = {}
+        self.engine._test_log = {}
+        for test in self.engine.tests:
+            self.engine.results[test["id"]] = {
+                "result": QCResult.PENDING,
+                "timestamp": None,
+                "details": "",
+            }
+        self.engine.current_test_index = -1
+        test = self.engine.next_test()
         if test:
             self._run_test(test)
         return False
@@ -848,6 +874,7 @@ class Panel(ScreenPanel):
             bench_slots=YMS_BENCH_SLOTS,
             started=self._box_started.get(test_id) or datetime.now(),
             now=datetime.now(),
+            disabled_positions=self._disabled_positions,
         )
 
     @staticmethod
@@ -914,6 +941,10 @@ class Panel(ScreenPanel):
         """Send the macro for the current test."""
         self._update_test_display(test)
         self._cancel_timeout()
+        # Position banc hors service : on la marque SKIP sans macro ni rapport.
+        if test.get("skipped"):
+            self.engine.skip_current_test()
+            return
         # Un test peut faire tomber Klipper (ex: phase moteur HS -> erreur TMC
         # -> shutdown). Sans relance, toutes les macros suivantes partiraient
         # dans le vide et chaque test brûlerait son timeout : on relance le
