@@ -42,7 +42,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   est relance sur une machine deja passee au QC sur CE pad (heuristique locale
   documentee : rapport precedent du meme machine_uid dans qc_reports/) ; jamais
   envoyes sinon. Tests.
-- [ ] **L8 — docs/REPONSES-SERVEUR.md.** Reponses completes aux questions du
+- [x] **L8 — docs/REPONSES-SERVEUR.md.** Reponses completes aux questions du
   serveur : inventaire des mesures (issu de L1/L3/L5), liste fail_reason
   definitive par test, versions remontables, ids non connus du serveur
   eventuels. + section README qc/ mise a jour.
@@ -390,3 +390,47 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     structure de fichiers réelle écrite par save_report, rejouée en tmp.
     La liste retest_reason reste à figer avec le serveur (lot L8).
   Prochain lot : L8 (docs/REPONSES-SERVEUR.md).
+
+- **L8 (13/08) — FAIT.** `docs/REPONSES-SERVEUR.md` : réponses complètes aux 4
+  questions du serveur (CDC §7), fidèles au code livré L1→L7 :
+  - §1 inventaire des measures par test (13 tests, clés exactes, source de
+    chaque mesure, nulls actuels assumés : reached_c/stable heat_*, feed_mm
+    cutter en PASS, z_max_mm — parses forward-compatibles déjà en place) ;
+  - §2 liste fail_reason DÉFINITIVE par test (6 réutilisés du banc YMS + 12
+    nouveaux machines, sémantique des fallbacks timeout/unknown_fail/
+    visual_reject) — proposée à figer ensemble ;
+  - §3 versions remontables : klipper_version (MCU hôte), firmware_version
+    {mcu} (hôte exclu), image_version (convention /etc/yumi-image-version —
+    question en retour posée au serveur), qc_cfg_version (sha256:12hex) ;
+  - §4 retest/retest_reason (3 raisons miroir du verdict précédent + repli
+    previous_report, heuristique locale documentée) ;
+  - §5 ids inconnus du serveur : AUCUN — la séquence n'émet que les 13 ids
+    reconnus (bed_mesh/e0_head hors séquence, jamais envoyés) ;
+  - §6 sandbox : harnais scripts/sandbox_machine_test.py, boucle E2E = L9.
+  README qc/ : `qc/README-MACHINES.md` créé (architecture séquence 13 tests,
+  rapport measures-first additif, sandbox, déploiement) — miroir de
+  README-YMS.md, qui reste le doc du banc.
+  Garde anti-dérive : `qc/tests/test_reponses_serveur.py` (5 tests) — chaque
+  fail_reason émis par les extracteurs (assignations + défauts _EXTRACTORS),
+  chaque test id instrumenté (13/13), chaque retest_reason et chaque clé
+  software_versions DOIVENT figurer dans REPONSES-SERVEUR.md.
+  PROOF:
+  - cmd1: `python3 -m unittest qc.tests.test_reponses_serveur -v`
+  - sortie: 5 tests `... ok` / `Ran 5 tests in 0.001s` / `OK`
+  - cmd2: `./verify.sh 2>&1 | tail -8`
+  - sortie (dernières lignes): `test_post_ack_200_and_payload ... ok` /
+    `Ran 141 tests in 7.608s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 141/141 tests unittest verts (136 avant L8, +5
+    nouveaux), 4/4 étapes verify.sh OK. Aucun fichier shell touché (shlint
+    sans objet).
+  - attribution: python3 3.14.6 local macOS, branche qc-machines-dev @
+    482554f+. VARIED: docs/REPONSES-SERVEUR.md (nouveau),
+    qc/README-MACHINES.md (nouveau), qc/tests/test_reponses_serveur.py
+    (nouveau) / HELD FIXED: qc/*.py (code), macros, klippy extras, verify.sh,
+    scripts/sandbox_machine_test.py.
+  - WHAT THIS DOES NOT SAY: le contenu des réponses est cohérent avec le CODE
+    (prouvé par le test de cohérence) mais pas encore validé par le SERVEUR —
+    la liste fail_reason est une proposition à figer (réponse serveur
+    attendue), l'acceptation prod des champs est le lot L9, le QC pilote réel
+    le lot L10.
+  Prochain lot : L9 (validation sandbox E2E prod).
