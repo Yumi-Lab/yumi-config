@@ -57,6 +57,7 @@ def build_report():
         eng._test_log[tid] = []
     # Identité machine réaliste : YUMI_CONFIG + UID STM32 (capture mcu_check).
     eng._test_log["mcu_check"] = [
+        "[mcu] version: v0.12.0-159-gabcd1234",
         "[mcu] board=F401 device=C235 lot=SB001 uid=2D0046000D51353234323830",
         "MCU_UID=2D0046000D51353234323830",
     ]

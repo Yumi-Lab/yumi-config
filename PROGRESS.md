@@ -29,7 +29,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   attache measures + fail_reason quand l'extracteur du test existe (absent
   sinon — additif). details/log inchanges. Tests de conformite (cles exactes,
   rapport actuel intact champ par champ hors ajouts).
-- [ ] **L5 — Extension a tous les tests.** mcu_check (mcu_uid, mcu_count,
+- [x] **L5 — Extension a tous les tests.** mcu_check (mcu_uid, mcu_count,
   firmware versions par mcu), fan_* (visual_ack), heat_extruder, cutter
   (feed_mm, cut_ok visuel), e1_head (memes cles que le banc : reutiliser
   qc/qc_yms.extract_measures), z_tap_home (z_max_mm, tap_z_mm), screws_tilt
@@ -219,3 +219,64 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     le lot L5.
   Prochain lot : L5 (extension à tous les tests : mcu_check, fan_*,
   heat_extruder, cutter, e1_head, z_tap_home, screws_tilt).
+
+- **L5 (13/08) — FAIT.** Extracteurs pour les 9 tests restants : les 13 tests
+  de la séquence machine ont TOUS measures au rapport (bed_mesh/e0_head, hors
+  `_QC_ORDER`, restent sans extracteur -> None).
+  - `mcu_check` : mcu_uid (MCU_UID=), mcu_count + firmware_versions {mcu:
+    version} (lignes `[<name>] version:`), yumi_config_found (device=) ;
+    fail_reason no_yumi_config / mcu_uid_error / timeout.
+  - `fan_*` : extracteur visuel partagé, visual_ack=verdict opérateur ;
+    FAIL hors timeout -> visual_reject (vs timeout).
+  - `heat_extruder` : factory `_extract_heat(target_c)` partagée avec
+    heat_bed (target 220 = M104 S220 de QC_HEAT_EXTRUDER), ramp_s=duration_s,
+    HEAT_OK forward-compatible ; thermal_runaway / thermal_timeout.
+  - `cutter` : motion_first_detect, feed_mm (ligne FAIL "pas a la tete apres
+    Nmm" seulement — non loggé en PASS mode cutter), cut_ok opérateur ;
+    head_not_reached / sensor_mute / already_at_head / visual_reject.
+  - `e1_head` : RÉUTILISE `qc_yms.extract_measures` (mêmes lignes de log),
+    clés banc-only élaguées (stress/dropouts/retract), feed_budget_mm=800
+    (_QC_HEAD_FEED variable_maxd) ; fallback timeout -> unknown_fail quand
+    timed_out=False. Import qc_yms double chemin (package qc/ ou symlink
+    ks_includes — qc_yms.py déjà symlinks par install_qc_station.sh:34).
+  - `z_tap_home` : tap_z_mm (1er VALIDATED trigger_z), z_max_mm (parse
+    ZMAX= forward-compatible, None aujourd'hui), visual_ack ;
+    tap_not_converging ("Pressure probe failed") / not_homed / visual_reject.
+  - `screws_tilt` : corrections {vis: tours signés CW+/CCW-} (parse
+    "adjust CW 00:19", format upstream screws_tilt_adjust.py vérifié),
+    max_deviation_mm (écart z sondés), n_retries ; not_homed /
+    screws_tilt_aborted ("bed level exceeds" / "triggered prior").
+  - Signature interne des extracteurs : + timed_out (5e param) pour
+    distinguer rejet opérateur (visual_reject) d'un vrai timeout engine.
+  - Advisory reviewer L4 traité : défaut `timed_out=True` -> False (un
+    appelant qui omet l'argument obtient unknown_fail, plus sûr ; l'engine
+    passe toujours la valeur explicitement — 3 tests mis à jour).
+  Tests : +TestMcuCheck/FansVisual/HeatExtruder/Cutter/E1Head/ZTapHome/
+  ScrewsTilt (31 nouveaux), test_no_extractor -> test_all_executed_tests_
+  have_measures (13/13), fixtures = logs réels AUDIT-MESURES.md/macros.
+  PROOF:
+  - cmd1: `./verify.sh 2>&1 | tail -8`
+  - sortie: `Ran 106 tests in 7.091s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 106/106 tests unittest verts (75 avant L5, +31),
+    4/4 étapes verify.sh OK. Aucun fichier shell touché (shlint sans objet).
+  - cmd2 (gate E2E): `python3 - <<'PY' ... sandbox_machine_test.build_report() ... PY`
+    -> `entrees avec measures (13/13): ['mcu_check', 'home_x', 'home_y',
+    'fan_motherboard', 'fan_part', 'fan_hotend', 'heat_extruder', 'heat_bed',
+    'cutter', 'e1_head', 'z_tap_home', 'z_tap_calib', 'screws_tilt']` ;
+    `overall: PASS | technician present: False` ; mcu_check ->
+    `{"mcu_uid": "2D0046000D51353234323830", "mcu_count": 1,
+    "firmware_versions": {"mcu": "v0.12.0-159-gabcd1234"},
+    "yumi_config_found": true, "fail_reason": null}` ; e1_head sans clés
+    stress/dropouts, budget 800 ; JSON sérialisable.
+  - attribution: python3 3.14.6 local macOS, branche qc-machines-dev @
+    7edb4f0+. VARIED: qc/qc_machine_measures.py (9 extracteurs + factory
+    heat + défaut timed_out), qc/tests/test_qc_machine_measures.py (+31),
+    qc/tests/test_qc_engine.py (2 tests L5), scripts/sandbox_machine_test.py
+    (log mcu_check + ligne version) / HELD FIXED: qc_engine.py, qc_yms.py,
+    qc_wizard.py, macros, klippy extras, verify.sh.
+  - WHAT THIS DOES NOT SAY: ne prouve PAS que la prod accepte ces measures
+    (E2E prod = L9, aucun token ici) ni qu'un pad réel émet ces logs —
+    fixtures issues de l'audit statique des macros/klippy. feed_mm cutter en
+    PASS et z_max_mm restent None tant que l'instrumentation additive
+    (documentée AUDIT-MESURES.md) n'est pas déployée.
+  Prochain lot : L6 (versions logicielles au rapport).

@@ -167,12 +167,15 @@ class TestMachineReportMeasures(unittest.TestCase):
         self.assertEqual(entries["home_y"]["measures"]["fail_reason"],
                          "unknown_fail")
 
-    def test_no_extractor_no_measures_key(self):
+    def test_all_executed_tests_have_measures(self):
+        """L5 : les 13 tests de la séquence machine ont TOUS un extracteur
+        -> toute entrée exécutée (pass/fail) porte measures. Les ids hors
+        séquence (bed_mesh, e0_head) restent sans extracteur (test dispatch
+        de test_qc_machine_measures)."""
         entries = self._report({})
-        for tid in ("mcu_check", "fan_part", "cutter", "e1_head",
-                    "z_tap_home", "screws_tilt"):
-            self.assertNotIn("measures", entries[tid],
-                             "%s ne doit pas avoir de measures (L5)" % tid)
+        for tid, entry in entries.items():
+            self.assertIn("measures", entry,
+                          "%s doit avoir measures (L5)" % tid)
 
     def test_skipped_never_has_measures(self):
         entries = self._report({
@@ -192,15 +195,21 @@ class TestMachineReportMeasures(unittest.TestCase):
 
     def test_sandbox_report_measures_json_serializable(self):
         """Gate charge réelle : rapport sandbox complet (vrai QCEngine,
-        13 tests) — measures présentes sur les 4 extracteurs, sérialisables."""
+        13 tests) — measures présentes sur CHAQUE test exécuté (L5),
+        sérialisables."""
         report = _load_sandbox_module().build_report()
         with_measures = [e for e in report["tests"] if "measures" in e]
         self.assertEqual({e["id"] for e in with_measures},
-                         {"z_tap_calib", "home_x", "home_y", "heat_bed"})
+                         {e["id"] for e in report["tests"]})
+        self.assertEqual(len(with_measures), 13)
         m = next(e for e in report["tests"]
                  if e["id"] == "z_tap_calib")["measures"]
         self.assertEqual(m["spread_mm"], 0.0312)
         self.assertIsNone(m["fail_reason"])
+        m = next(e for e in report["tests"]
+                 if e["id"] == "mcu_check")["measures"]
+        self.assertEqual(m["mcu_uid"], "2D0046000D51353234323830")
+        self.assertTrue(m["yumi_config_found"])
         json.dumps(report)  # lève si une mesure n'est pas sérialisable
 
 
