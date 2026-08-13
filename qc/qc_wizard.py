@@ -8,9 +8,10 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
@@ -40,12 +41,13 @@ QC_CFG_LEGACY = os.path.join(CONFIG_DIR, "qc_printer.cfg")
 QC_COUNTER_URL = "https://qc.yumi-lab.com/api/qc/report"
 QC_TOKEN_FILE = os.path.join(CONFIG_DIR, "qc_token")
 
-# ── Banc YMS (contrat docs/FORMAT-YMS.md v1.1 du repo yumi-qc-counter) ──
-# Les boîtiers YMS n'ont pas de numéro de série : le serveur ALLOUE les codes
-# (YMSL-/YMSP-) en début de séquence (groupé, réseau requis une seule fois).
-# Un rapport par boîtier est envoyé au fil de la séquence sur le POST
-# /api/qc/report standard, avec measures{} calculées par le pad (source
-# primaire) et l'étiquette QR imprimée sur PASS uniquement.
+# ── Banc YMS (contrat docs/FORMAT-YMS.md v1.4 du repo yumi-qc-counter) ──
+# Les boîtiers YMS n'ont pas de numéro de série : le serveur ALLOUE le code
+# EN FIN de test de chaque boîtier (jamais en amont, zéro code perdu) :
+# PASS -> numéro de série YMSL-/YMSP-, FAIL -> code famille QCFL- (taux de
+# défectueux). Rapport par boîtier sur le POST /api/qc/report standard avec
+# measures{} calculées par le pad (source primaire). Étiquette SYSTÉMATIQUE :
+# PASS = numéro de série + QR ; FAIL = étiquette de rejet (position + raison).
 QC_YMS_ALLOCATE_URL = "https://qc.yumi-lab.com/api/qc/yms/allocate"
 QC_REPORT_URL_BASE = "https://qc.yumi-lab.com/report/"
 YMS_BENCH_TOTAL = 12
@@ -60,12 +62,46 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
     from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS
+    from ks_includes.qc_yms import (
+        allocate_yms_codes,
+        build_box_report,
+        build_label_tspl,
+        build_retest_sequence,
+        build_yms_tests,
+        enabled_positions,
+        extract_measures,
+        load_bench_config,
+        load_disabled_positions,
+        position_from_test_id,
+        test_id_for_position,
+        YMS_BENCH_SLOTS,
+        YMS_BENCH_TOTAL,
+        MODELS,
+        DEFAULT_MODEL,
+    )
 except ImportError:
     # Fallback: try relative import for development
     import sys
     import os
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS
+    from qc_yms import (
+        allocate_yms_codes,
+        build_box_report,
+        build_label_tspl,
+        build_retest_sequence,
+        build_yms_tests,
+        enabled_positions,
+        extract_measures,
+        load_bench_config,
+        load_disabled_positions,
+        position_from_test_id,
+        test_id_for_position,
+        YMS_BENCH_SLOTS,
+        YMS_BENCH_TOTAL,
+        MODELS,
+        DEFAULT_MODEL,
+    )
 
 
 class Panel(ScreenPanel):
@@ -85,9 +121,12 @@ class Panel(ScreenPanel):
         self._timeout_id = None
         self._restart_retries = 0
         self._selected_size = QC_SIZES[0]
-        self._yms_ids = None        # codes alloués par le serveur (banc YMS)
+        self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
+        self._bench_config = {}     # v1.5 : yms_version + composants montés
+        self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
+        self._box_reports = {}      # position -> rapport envoyé (carte + réimpression)
 
         # Build the UI
         self._build_start_screen()
@@ -433,6 +472,31 @@ class Panel(ScreenPanel):
         )
         main_box.pack_start(info_label, False, False, 5)
 
+        # ── BANC YMS : carte des positions (vert = PASS, rouge = FAIL,
+        # gris = non testé) — un appui sur un carré RÉIMPRIME l'étiquette du
+        # boîtier (mal collée, déchirée...), PASS comme FAIL. ──
+        if self._selected_size.upper().startswith("YMS") and self._box_reports:
+            pos_grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+            pos_grid.set_halign(Gtk.Align.CENTER)
+            for pos in range(1, YMS_BENCH_TOTAL + 1):
+                rep = self._box_reports.get(pos)
+                if rep is None:
+                    sq = self._gtk.Button(None, str(pos), None)
+                    sq.set_sensitive(False)
+                else:
+                    passed = rep.get("overall_result") == "PASS"
+                    sq = self._gtk.Button(None, str(pos),
+                                          "color3" if passed else "color2")
+                    sq.connect("clicked", self._on_reprint_label, pos)
+                sq.set_size_request(58, 50)
+                pos_grid.attach(sq, (pos - 1) % 6, (pos - 1) // 6, 1, 1)
+            main_box.pack_start(pos_grid, False, False, 4)
+            reprint_hint = Gtk.Label()
+            reprint_hint.set_markup(
+                "<span size='small' foreground='#9E9E9E'>"
+                "触摸方块重印标签 / toucher un carré = réimprimer l'étiquette</span>")
+            main_box.pack_start(reprint_hint, False, False, 2)
+
         # Test results grid (scrollable)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -440,11 +504,17 @@ class Panel(ScreenPanel):
 
         results_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         for test in report.get("tests", []):
+            tid = test.get("id", "")
+            result = test.get("result", "pending")
+            is_yms_fail = (
+                tid.startswith("e") and tid.endswith("_head")
+                and result == "fail"
+            )
+
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             row.set_margin_start(10)
             row.set_margin_end(10)
 
-            result = test.get("result", "pending")
             if result == "pass":
                 mark = "<span foreground='#4CAF50' size='large' weight='bold'>  PASS</span>"
             elif result == "fail":
@@ -465,7 +535,16 @@ class Panel(ScreenPanel):
 
             row.pack_start(name_label, True, True, 0)
             row.pack_end(result_lbl, False, False, 0)
-            results_box.pack_start(row, False, False, 0)
+
+            # Re-test unitaire : une ligne YMS en FAIL est cliquable.
+            if is_yms_fail:
+                event_box = Gtk.EventBox()
+                event_box.add(row)
+                event_box.connect("button-press-event", self._on_yms_fail_row_clicked, tid)
+                event_box.get_style_context().add_class("button")
+                results_box.pack_start(event_box, False, False, 0)
+            else:
+                results_box.pack_start(row, False, False, 0)
 
             # Sous-ligne détails : la mesure la plus parlante du log capturé
             # (distance feed, spread Z, corrections vis...) ou le champ details.
@@ -484,6 +563,14 @@ class Panel(ScreenPanel):
 
         # Bottom buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+
+        # Banc YMS : enchaîner un NOUVEAU lot de 12 sans repasser par l'accueil
+        # (même modèle que le lot précédent, slots relus du fichier).
+        if self._selected_size.upper().startswith("YMS"):
+            batch_btn = self._gtk.Button("refresh", "新一批×12 / Nouveau lot ×12",
+                                         "color3")
+            batch_btn.connect("clicked", self._on_new_batch)
+            btn_box.pack_start(batch_btn, True, True, 0)
 
         # Finish: save report + restore production cfg + restart Klipper
         if os.path.exists(BACKUP_CFG):
@@ -583,62 +670,189 @@ class Panel(ScreenPanel):
             return
 
         if self._selected_size.upper().startswith("YMS"):
-            # Banc YMS : allocation groupée des codes AVANT de démarrer.
-            # Échec réseau/serveur = la séquence ne démarre pas (contrat v1.1).
-            self._screen.show_popup_message(
-                "分配编号中… / Allocation des codes YMS…", level=1)
-            threading.Thread(target=self._yms_alloc_worker,
-                             args=(printer_id,), daemon=True).start()
+            # Banc YMS : choix du modèle AVANT l'allocation groupée.
+            self._show_yms_model_selector(printer_id)
             return
 
         self._build_running_screen()
         test = self.engine.start(printer_id, model=self._selected_size)
+        self._start_gcode_poller()
         if test:
             self._run_test(test)
 
-    # ─── BANC YMS : allocation groupée + démarrage ─────────────
+    # ─── FILET ANTI-PERTE DE SIGNAUX (gcode_store poller) ──────────────
+    # Vécu au gate banc : après un shutdown Klipper (erreur TMC) + restart,
+    # KlipperScreen masque ce panel et process_update ne lui livre plus les
+    # réponses gcode -> un PASS réel a été raté et le test est parti en faux
+    # FAIL par timeout. Ce thread relit le gcode_store Moonraker et REJOUE
+    # chaque réponse dans l'engine : la voie GTK reste en place, l'engine
+    # déduplique (logs identiques ignorés, signaux d'un test non courant
+    # ignorés), donc la double livraison est sans effet.
 
-    def _yms_alloc_worker(self, printer_id):
-        """Thread : demande les 12 codes au serveur puis démarre (ou refuse)."""
-        ids, err = self._allocate_yms_codes(YMS_BENCH_TOTAL, "light")
-        GLib.idle_add(self._yms_alloc_done, printer_id, ids, err)
+    def _start_gcode_poller(self):
+        self._stop_gcode_poller()
+        self._poller_stop = threading.Event()
+        threading.Thread(target=self._gcode_poller_worker,
+                         args=(self._poller_stop,), daemon=True).start()
 
-    def _allocate_yms_codes(self, count, model):
-        """POST /api/qc/yms/allocate {"model","count"} -> (liste ids, erreur)."""
+    def _stop_gcode_poller(self):
+        if getattr(self, "_poller_stop", None):
+            self._poller_stop.set()
+            self._poller_stop = None
+
+    def _gcode_poller_worker(self, stop):
+        # Ne rejoue que les lignes POSTERIEURES au demarrage du run : le
+        # buffer Moonraker garde les signaux des runs precedents, qui
+        # completeraient faussement le test courant.
+        last = time.time()
+        while not stop.wait(2.0):
+            try:
+                with urllib.request.urlopen(
+                        "http://127.0.0.1:7125/server/gcode_store?count=60",
+                        timeout=3) as r:
+                    entries = json.loads(
+                        r.read().decode())["result"]["gcode_store"]
+            except Exception:
+                continue
+            for g in entries:
+                if g.get("type") == "response" and g.get("time", 0) > last:
+                    last = g["time"]
+                    GLib.idle_add(self.engine.process_gcode_response,
+                                  g.get("message", ""))
+
+    def _show_yms_model_selector(self, printer_id):
+        """Dialogue 2 gros boutons LIGHT / PRO avant allocation YMS."""
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        content.set_valign(Gtk.Align.CENTER)
+
+        title = Gtk.Label()
+        title.set_markup("<span size='x-large' weight='bold'>选择型号 / Select model</span>")
+        content.pack_start(title, False, False, 10)
+
+        hint = Gtk.Label()
+        hint.set_markup("<span size='large'>YMS 型号 / YMS model</span>")
+        content.pack_start(hint, False, False, 5)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        btn_box.set_halign(Gtk.Align.CENTER)
+
+        light_btn = self._gtk.Button(None, "LIGHT", "color3")
+        light_btn.set_size_request(160, 120)
+        light_btn.connect("clicked", self._on_yms_model_selected, printer_id, "light")
+        btn_box.pack_start(light_btn, False, False, 0)
+
+        pro_btn = self._gtk.Button(None, "PRO", "color1")
+        pro_btn.set_size_request(160, 120)
+        pro_btn.connect("clicked", self._on_yms_model_selected, printer_id, "pro")
+        btn_box.pack_start(pro_btn, False, False, 0)
+
+        content.pack_start(btn_box, False, False, 10)
+
+        self._gtk.Dialog(
+            _("YMS Model"),
+            [],
+            content,
+            lambda *args: None,
+        )
+
+    def _on_yms_model_selected(self, widget, printer_id, model):
+        """Le modèle est choisi : démarre DIRECTEMENT la séquence. v1.4 : plus
+        aucune allocation en amont — le code de chaque boîtier est demandé en
+        FIN de son test (PASS -> numéro de série, FAIL -> code QCFL-)."""
+        self._yms_model = model
+        self._yms_start_sequence(printer_id)
+
+    # ─── BANC YMS : démarrage de séquence (v1.4, sans allocation) ──────
+
+    def _allocate_yms_codes(self, count, model, result="pass"):
+        """Adaptateur autour du client d'allocation pur qc_yms.allocate_yms_codes."""
         token = self._qc_token()
-        if not token:
-            return None, "Token QC manquant : %s" % QC_TOKEN_FILE
-        data = json.dumps({"model": model, "count": count}).encode("utf-8")
-        req = urllib.request.Request(
-            QC_YMS_ALLOCATE_URL, data=data, method="POST",
-            headers={"Content-Type": "application/json", "X-QC-Token": token})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            return None, "Allocation refusée : HTTP %d" % e.code
-        except Exception as e:
-            return None, "Allocation impossible (réseau ?) : %s" % e
-        ids = payload.get("yms_ids") or (
-            [payload["yms_id"]] if payload.get("yms_id") else [])
-        if payload.get("status") != "ok" or len(ids) != count:
-            return None, "Réponse allocation invalide : %s" % str(payload)[:120]
-        return ids, ""
+        return allocate_yms_codes(
+            QC_YMS_ALLOCATE_URL, token, count, model, result=result,
+            yms_version=(self._bench_config or {}).get("yms_version", "1.0"))
 
-    def _yms_alloc_done(self, printer_id, ids, err):
-        """Main thread : démarre la séquence si les codes sont là."""
-        if not ids:
-            self._screen.show_popup_message(
-                "无法开始 / Séquence NON démarrée — " + err, level=3)
-            return False
-        self._yms_ids = ids
+    def _yms_start_sequence(self, printer_id):
+        """Main thread : démarre la séquence 12 positions (slots HS sautés)."""
+        slots_path = os.path.join(CONFIG_DIR, "qc_bench_slots.json")
+        self._disabled_positions = load_disabled_positions(slots_path)
+        # v1.5 : version produit + composants montés (fichier éditable opérateur)
+        self._bench_config = load_bench_config(
+            os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
+        self._box_reports = {}
         self._bench_session = "%s-%s" % (printer_id,
                                          datetime.now().strftime("%Y%m%d-%H%M"))
-        logger.info("QC YMS: codes alloués %s (session %s)",
-                    ids, self._bench_session)
+        logger.info("QC YMS: séquence %s (modèle %s), slots hors service %s",
+                    self._bench_session, self._yms_model,
+                    self._disabled_positions)
         self._build_running_screen()
-        test = self.engine.start(printer_id, model=self._selected_size)
+        # Démarre l'engine, puis remplace la séquence par la vraie liste YMS12
+        # incluant les positions désactivées (marquées skipped).
+        self.engine.start(printer_id, model=self._selected_size)
+        self.engine.tests = build_yms_tests(self._disabled_positions)
+        self.engine.results = {}
+        self.engine._test_log = {}
+        for test in self.engine.tests:
+            self.engine.results[test["id"]] = {
+                "result": QCResult.PENDING,
+                "timestamp": None,
+                "details": "",
+            }
+        self.engine.current_test_index = -1
+        self._start_gcode_poller()
+        test = self.engine.next_test()
+        if test:
+            self._run_test(test)
+        return False
+
+    # ─── RE-TEST UNITAIRE D'UN BOÎTIER YMS EN FAIL ─────────────────
+
+    def _on_yms_fail_row_clicked(self, widget, event, test_id):
+        """Ligne YMS FAIL touchée sur l'écran résumé : propose le re-test."""
+        pos = position_from_test_id(test_id)
+        label = Gtk.Label()
+        label.set_markup(
+            "<span size='large'>重新测试 YMS-%d ?\nRe-test YMS-%d ?</span>" % (pos, pos))
+        buttons = [
+            {"name": _("是 / YES"), "response": Gtk.ResponseType.YES,
+             "style": "color3"},
+            {"name": _("否 / NO"), "response": Gtk.ResponseType.NO,
+             "style": "color2"},
+        ]
+        self._gtk.Dialog(
+            _("Re-test YMS-%d") % pos,
+            buttons,
+            label,
+            lambda dialog, resp: self._on_yms_retest_confirmed(dialog, resp, test_id),
+        )
+
+    def _on_yms_retest_confirmed(self, dialog, response_id, test_id):
+        self._gtk.remove_dialog(dialog)
+        if response_id != Gtk.ResponseType.YES:
+            return
+        printer_id = self.labels["printer_id"].get_text().strip()
+        self._yms_retest_test_id = test_id
+        # v1.4 : pas d'allocation en amont — le nouveau code (re-test = code
+        # NEUF, jamais réutilisé) est demandé en fin de test comme en séquence.
+        logger.info("QC YMS: re-test %s", test_id)
+        if not self._bench_config:
+            self._bench_config = load_bench_config(
+                os.path.join(CONFIG_DIR, "qc_bench_config.json"))
+        self._build_running_screen()
+        self.engine.start(printer_id, model=self._selected_size)
+        pos = position_from_test_id(self._yms_retest_test_id)
+        self.engine.tests = build_retest_sequence(pos)
+        self.engine.results = {}
+        self.engine._test_log = {}
+        for test in self.engine.tests:
+            self.engine.results[test["id"]] = {
+                "result": QCResult.PENDING,
+                "timestamp": None,
+                "details": "",
+            }
+        self.engine.current_test_index = -1
+        self._start_gcode_poller()
+        test = self.engine.next_test()
         if test:
             self._run_test(test)
         return False
@@ -743,15 +957,15 @@ class Panel(ScreenPanel):
         # Banc YMS : rapport PAR BOÎTIER envoyé au fil de la séquence (l'envoi
         # et l'étiquette partent en thread, le test suivant démarre sans
         # attendre). Un boîtier SKIPPÉ = code brûlé, pas de rapport.
-        if (self._selected_size.upper().startswith("YMS") and self._yms_ids
-                and re.fullmatch(r"e\d+_head", test_id)
+        is_yms_head = re.fullmatch(r"e\d+_head", test_id)
+        if (self._selected_size.upper().startswith("YMS")
+                and is_yms_head
                 and result in (QCResult.PASS, QCResult.FAIL)):
-            try:
-                box_report = self._build_box_report(test_id, result)
-                threading.Thread(target=self._dispatch_box_report,
-                                 args=(box_report,), daemon=True).start()
-            except Exception as e:
-                logger.error("QC YMS: rapport boîtier %s: %s", test_id, e)
+            # v1.4 : l'allocation du code se fait DANS le thread de dispatch,
+            # en fin de test (PASS -> YMSL-/YMSP-, FAIL -> QCFL-). Séquence et
+            # re-test passent par le même chemin.
+            threading.Thread(target=self._dispatch_box,
+                             args=(test_id, result), daemon=True).start()
         # Run next test if available
         test = self.engine.get_current_test()
         if test and self.engine.state == QCState.RUNNING:
@@ -764,6 +978,7 @@ class Panel(ScreenPanel):
 
     def _on_qc_complete(self, report):
         self._cancel_timeout()
+        self._stop_gcode_poller()
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
         # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
@@ -824,121 +1039,67 @@ class Panel(ScreenPanel):
             self._screen.show_popup_message(msg, level=1 if ok else 2)
         return False
 
-    # ─── BANC YMS : rapport par boîtier (contrat FORMAT-YMS.md v1.1) ────
+    # ─── BANC YMS : rapport par boîtier (contrat FORMAT-YMS.md v1.4) ────
 
-    def _build_box_report(self, test_id, result):
+    def _build_box_report(self, test_id, result, yms_id):
         """Rapport individuel d'un boîtier YMS (position banc = e<k>_head ->
-        YMS-(k+1)). measures{} est la source primaire côté serveur : calculée
-        ici depuis les logs capturés du test, les log[] restent en trace."""
-        pos = int(test_id[1:test_id.index("_")]) + 1
-        yms_id = self._yms_ids[pos - 1]
-        logs = list(self.engine._test_log.get(test_id, []))
-        res = self.engine.results.get(test_id, {})
+        YMS-(k+1)). Adaptateur autour du module pur qc_yms.build_box_report."""
         passed = (result == QCResult.PASS)
-        started = self._box_started.get(test_id) or datetime.now()
-        now = datetime.now()
-        mcu_res = self.engine.results.get("mcu_check", {})
-        mcu_result = mcu_res.get("result")
-        test_entry_name = "YMS-%d 送料+传感器 / feed+sensor" % pos
-        return {
-            "version": "1.0",
-            "printer_id": yms_id,
-            "technician": self.engine.technician,
-            "date": started.isoformat(),
-            "date_end": now.isoformat(),
-            "duration_seconds": int((now - started).total_seconds()),
-            "overall_result": "PASS" if passed else "FAIL",
-            "failed_tests": [] if passed else [test_id],
-            "skipped_tests": [],
-            "qc_model": "YMS-LIGHT",
-            "yumi_config": "device=YMS-LIGHT",
-            "machine_uid": "",
-            "pad_mac": self.labels["printer_id"].get_text().strip(),
-            "bench_position": pos,
-            "bench_slot": YMS_BENCH_SLOTS[pos - 1],
-            "bench_session": self._bench_session,
-            "bench_total": YMS_BENCH_TOTAL,
-            "measures": self._extract_measures(logs, passed),
-            "tests": [
-                {"id": "mcu_check",
-                 "name": "主板×3 + 固件 / MCUs + firmware",
-                 "type": "automated",
-                 "result": (mcu_result.value
-                            if isinstance(mcu_result, QCResult) else "pending"),
-                 "timestamp": mcu_res.get("timestamp", ""),
-                 "details": mcu_res.get("details", ""),
-                 "log": list(self.engine._test_log.get("mcu_check", []))},
-                {"id": test_id,
-                 "name": test_entry_name,
-                 "type": "automated",
-                 "result": "pass" if passed else "fail",
-                 "timestamp": res.get("timestamp", ""),
-                 "details": res.get("details", ""),
-                 "log": logs},
-            ],
-        }
+        return build_box_report(
+            test_id=test_id,
+            result="PASS" if passed else "FAIL",
+            yms_id=yms_id,
+            session=self._bench_session,
+            pad_mac=self.labels["printer_id"].get_text().strip(),
+            technician=self.engine.technician,
+            test_log=self.engine._test_log,
+            engine_results=self.engine.results,
+            model=self._yms_model,
+            bench_total=YMS_BENCH_TOTAL,
+            bench_slots=YMS_BENCH_SLOTS,
+            started=self._box_started.get(test_id) or datetime.now(timezone.utc),
+            now=datetime.now(timezone.utc),
+            extruder_model=(self._bench_config or {}).get("extruder_model", ""),
+            spring_model=(self._bench_config or {}).get("spring_model", ""),
+        )
 
     @staticmethod
     def _extract_measures(logs, passed):
         """measures{} depuis les logs du test (fail_reason = 7 valeurs normées)."""
-        m = {"feed_mm": None, "feed_budget_mm": 900, "head_reached": False,
-             "motion_first_detect": False, "dropouts_e": [], "dropout_count": 0,
-             "feed_dropout": False, "stress_segments_ok": 0,
-             "stress_segments_total": 16,
-             "stress_speeds_mms": [10, 30, 60, 100],
-             "retract_mm": None, "tmc_error": None, "fail_reason": None}
-        for line in logs:
-            if "a change d'etat" in line:
-                m["motion_first_detect"] = True
-            r = re.search(r"filament a la tete apres (\d+)mm", line)
-            if r:
-                m["feed_mm"] = int(r.group(1))
-                m["head_reached"] = True
-            r = re.search(r"pas a la tete apres (\d+)mm", line)
-            if r:
-                m["feed_mm"] = int(r.group(1))
-                m["head_reached"] = False
-                m["fail_reason"] = "head_not_reached"
-            r = re.search(r"decrochage encodeur E=([\d.]+)", line)
-            if r:
-                m["dropouts_e"].append(float(r.group(1)))
-            if "a CESSE de suivre pendant le feed" in line:
-                m["feed_dropout"] = True
-                m["fail_reason"] = "sensor_lost_feed"
-                r = re.search(r"\(a (\d+)mm\)", line)
-                if r:
-                    m["feed_mm"] = int(r.group(1))
-            if "n'a PAS change d'etat" in line:
-                m["fail_reason"] = "sensor_mute"
-            if "deja a la tete avant feed" in line:
-                m["fail_reason"] = "already_at_head"
-            if "PERDU le suivi au segment" in line:
-                m["fail_reason"] = "sensor_lost_stress"
-            r = re.search(r"stress OK.*?(\d+) segments", line)
-            if r:
-                m["stress_segments_ok"] = int(r.group(1))
-            r = re.search(r"stress (\d+)/(\d+) detected=True", line)
-            if r:
-                m["stress_segments_ok"] = max(m["stress_segments_ok"],
-                                              int(r.group(1)))
-                m["stress_segments_total"] = int(r.group(2))
-            if "DRV_STATUS" in line:
-                m["tmc_error"] = line.strip()[:200]
-                m["fail_reason"] = "tmc_error"
-        m["dropout_count"] = len(m["dropouts_e"])
-        if m["head_reached"] and m["feed_mm"]:
-            m["retract_mm"] = m["feed_mm"]
-        if passed:
-            m["fail_reason"] = None
-        elif not m["fail_reason"]:
-            m["fail_reason"] = "timeout"
-        return m
+        return extract_measures(logs, passed)
 
-    def _dispatch_box_report(self, report):
-        """Thread : sauve le rapport boîtier (store-and-forward), l'envoie au
-        compteur (marqueur .sent sur 200, sinon le timer qc-upload retentera),
-        et imprime l'étiquette QR — sur PASS uniquement (contrat v1.1)."""
-        yms_id = report.get("printer_id", "?")
+    def _dispatch_box(self, test_id, result):
+        """Thread de fin de test d'un boîtier (v1.4) :
+        1. alloue le code AU RÉSULTAT (PASS -> numéro de série YMSL-/YMSP-,
+           FAIL -> code famille QCFL-, retry 3x) ;
+        2. construit + sauve le rapport (store-and-forward) et l'envoie
+           (.sent sur ACK, sinon le timer qc-upload retentera) ;
+        3. imprime l'étiquette SYSTÉMATIQUEMENT (PASS = numéro de série + QR,
+           FAIL = étiquette de rejet position + raison) — une étiquette par
+           test, aucun décalage possible dans la pile de boîtiers."""
+        pos = position_from_test_id(test_id)
+        passed = (result == QCResult.PASS)
+        ids, err = None, ""
+        for _attempt in range(3):
+            ids, err = self._allocate_yms_codes(
+                1, self._yms_model, "pass" if passed else "fail")
+            if ids:
+                break
+            time.sleep(5)
+        if ids:
+            yms_id = ids[0]
+        else:
+            # Pas de code (réseau/serveur HS) : rapport gardé en LOCAL avec
+            # identité provisoire, étiquette quand même (pile non décalée),
+            # boîtier à repasser une fois le réseau revenu.
+            yms_id = "NOCODE-P%02d-%s" % (pos, self._bench_session)
+            logger.error("QC YMS: allocation impossible pos %d: %s", pos, err)
+        report = self._build_box_report(test_id, result, yms_id)
+        # UTC d'envoi : permet au serveur de recaler l'heure usine et de
+        # mesurer la derive d'horloge du pad (received_at - sent_at_utc).
+        report["sent_at_utc"] = datetime.now(timezone.utc).isoformat()
+        self._box_reports[pos] = report   # carte des positions + réimpression
+        no_code = yms_id.startswith("NOCODE-")
         path = ""
         try:
             report_dir = os.path.expanduser("~/printer_data/config/qc_reports")
@@ -947,23 +1108,40 @@ class Panel(ScreenPanel):
                 yms_id, datetime.now().strftime("%Y%m%d_%H%M%S")))
             with open(path, "w") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
+            if no_code:
+                # identité provisoire : ne JAMAIS l'envoyer au compteur
+                open(path + ".sent", "w").close()
         except OSError as e:
             logger.error("QC YMS: sauvegarde rapport %s: %s", yms_id, e)
-        ok, msg = self._upload_report(report)
+        ok, msg = (False, "sans code (local)") if no_code \
+            else self._upload_report(report)
         if ok and path:
             try:
                 open(path + ".sent", "w").close()
             except OSError:
                 pass
-        if report.get("overall_result") == "PASS":
-            lok, lmsg = self._print_qc_label(report)
-        else:
-            lok, lmsg = False, "FAIL: pas d'étiquette (code brûlé)"
-        note = "%s: %s%s" % (yms_id,
-                             "envoyé ✓" if ok else "en attente réseau",
-                             " — 标签 ✓" if lok else "")
+        lok, lmsg = self._print_qc_label(report)
+        note = "YMS-%d %s → %s: %s%s" % (
+            pos, "PASS" if passed else "FAIL", yms_id,
+            "envoyé ✓" if ok else ("local" if no_code else "en attente réseau"),
+            " — 标签 ✓" if lok else "")
         logger.info("QC YMS: %s (%s / %s)", note, msg, lmsg)
         GLib.idle_add(self._screen.show_popup_message, note, 1 if ok else 2)
+
+    def _on_new_batch(self, widget):
+        """Relance directement une séquence complète (même modèle YMS)."""
+        printer_id = self.labels["printer_id"].get_text().strip()
+        self._yms_start_sequence(printer_id)
+
+    def _on_reprint_label(self, widget, pos):
+        """Réimprime l'étiquette du boîtier testé (depuis l'écran résumé)."""
+        rep = self._box_reports.get(pos)
+        if not rep:
+            return
+        ok, msg = self._print_qc_label(rep)
+        self._screen.show_popup_message(
+            "YMS-%d: 标签已重印 / étiquette réimprimée ✓" % pos if ok
+            else "YMS-%d: %s" % (pos, msg), level=1 if ok else 3)
 
     # ─── ÉTIQUETTE QC (POS80L branchée au pad, TSPL brut) ──────────────
     # v1 locale : texte + QR vers la page rapport. Le format définitif
@@ -978,26 +1156,10 @@ class Panel(ScreenPanel):
         (ok, message). Ne bloque jamais le QC : imprimante absente = no-op."""
         if not os.path.exists(self.POS80L_DEV):
             return False, "POS80L absente"
-        overall = report.get("overall_result", "?")
-        batch = report.get("printer_id", "?")
-        url = "https://qc.yumi-lab.com/report/%s" % batch
-        date = (report.get("date_end") or "")[:16].replace("T", " ")
-        lines = [
-            "SIZE 58 mm,37 mm",
-            "GAP 2 mm,0 mm",
-            "DIRECTION 1",
-            "SET PEEL ON",
-            "CLS",
-            'TEXT 16,16,"4",0,1,1,"QC %s"' % overall,
-            'TEXT 16,64,"2",0,1,1,"%s"' % report.get("qc_model", ""),
-            'TEXT 16,96,"2",0,1,1,"%s"' % date,
-            'TEXT 16,200,"1",0,1,1,"%s"' % batch,
-            'QRCODE 290,40,M,4,A,0,"%s"' % url,
-            "PRINT 1,1",
-        ]
+        tspl = build_label_tspl(report)
         try:
             with open(self.POS80L_DEV, "wb") as f:
-                f.write(("\r\n".join(lines) + "\r\n").encode("ascii", "replace"))
+                f.write(tspl)
             return True, "étiquette imprimée"
         except OSError as e:
             logger.warning("QC: impression étiquette POS80L: %s", e)
@@ -1009,6 +1171,10 @@ class Panel(ScreenPanel):
         """Send the macro for the current test."""
         self._update_test_display(test)
         self._cancel_timeout()
+        # Position banc hors service : on la marque SKIP sans macro ni rapport.
+        if test.get("skipped"):
+            self.engine.skip_current_test()
+            return
         # Un test peut faire tomber Klipper (ex: phase moteur HS -> erreur TMC
         # -> shutdown). Sans relance, toutes les macros suivantes partiraient
         # dans le vide et chaque test brûlerait son timeout : on relance le
@@ -1028,7 +1194,7 @@ class Panel(ScreenPanel):
                                      test["id"])
             return
         self._restart_retries = 0
-        self._box_started[test["id"]] = datetime.now()
+        self._box_started[test["id"]] = datetime.now(timezone.utc)
         timeout = test.get("timeout", 0)
         if timeout:
             self._timeout_id = GLib.timeout_add_seconds(

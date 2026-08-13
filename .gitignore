@@ -5,3 +5,17 @@ smartpad-yumi-c435/config/printer-20241024_111311.cfg
 smartpad-yumi-c435/config/printer-20241024_121952.cfg
 smartpad-yumi-c435/config/printer-20241024_123336.cfg
 smartpad-yumi-c435/config/printer-20241024_123859.cfg
+.monitor/
+.loop/
+.done
+.done-*
+.gate-handoff
+.env
+loop.sh
+dash.sh
+monitor.mjs
+loop.conf
+monitor-watch.sh
+watchdog.sh
+prompts/
+__pycache__/
