@@ -564,6 +564,14 @@ class Panel(ScreenPanel):
         # Bottom buttons
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
 
+        # Banc YMS : enchaîner un NOUVEAU lot de 12 sans repasser par l'accueil
+        # (même modèle que le lot précédent, slots relus du fichier).
+        if self._selected_size.upper().startswith("YMS"):
+            batch_btn = self._gtk.Button("refresh", "新一批×12 / Nouveau lot ×12",
+                                         "color3")
+            batch_btn.connect("clicked", self._on_new_batch)
+            btn_box.pack_start(batch_btn, True, True, 0)
+
         # Finish: save report + restore production cfg + restart Klipper
         if os.path.exists(BACKUP_CFG):
             finish_btn = self._gtk.Button("complete", "完成 / Finish", "color3")
@@ -1119,6 +1127,11 @@ class Panel(ScreenPanel):
             " — 标签 ✓" if lok else "")
         logger.info("QC YMS: %s (%s / %s)", note, msg, lmsg)
         GLib.idle_add(self._screen.show_popup_message, note, 1 if ok else 2)
+
+    def _on_new_batch(self, widget):
+        """Relance directement une séquence complète (même modèle YMS)."""
+        printer_id = self.labels["printer_id"].get_text().strip()
+        self._yms_start_sequence(printer_id)
 
     def _on_reprint_label(self, widget, pos):
         """Réimprime l'étiquette du boîtier testé (depuis l'écran résumé)."""
