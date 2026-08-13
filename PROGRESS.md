@@ -34,7 +34,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   (feed_mm, cut_ok visuel), e1_head (memes cles que le banc : reutiliser
   qc/qc_yms.extract_measures), z_tap_home (z_max_mm, tap_z_mm), screws_tilt
   (corrections par vis en tours + max_deviation). Tests par extracteur.
-- [ ] **L6 — Versions logicielles.** Bloc racine software_versions :
+- [x] **L6 — Versions logicielles.** Bloc racine software_versions :
   klipper_version (printer info), firmware_version par mcu (mcu_version),
   image_version (fichier release YumiOS si present), qc_cfg_version (marqueur
   _QC_MODE ou hash de la cfg). Additif, tolerant a l'absence. Tests.
@@ -280,3 +280,62 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     PASS et z_max_mm restent None tant que l'instrumentation additive
     (documentée AUDIT-MESURES.md) n'est pas déployée.
   Prochain lot : L6 (versions logicielles au rapport).
+
+- **L6 (13/08) — FAIT.** Bloc racine `software_versions` (contrat §3.2),
+  additif et tolérant : chaque clé absente de sa source est omise, le bloc
+  entier est omis si rien n'est disponible (rapport strictement identique à
+  l'existant dans ce cas — test dédié sur le set de clés racine).
+  - `klipper_version` : relue de la ligne MCU hôte DÉJÀ émise par
+    QC_MCU_CHECK (`[mcu SmartPiOne] version: X (host ...)`, fallback
+    `[mcu rpi]`) — la mcu_version du MCU linux EST la version Klipper du
+    'printer info'. AUCUNE instrumentation macro nécessaire (les cfg
+    générées ne sont pas régénérables ici : backups de prod absents du
+    repo) — compatible avec les cfgs déjà déployées.
+  - `firmware_version` : {mcu: version} depuis les lignes `[<mcu>] version:`,
+    MCU hôte EXCLU (c'est le process Klipper, pas un firmware flashé).
+    Parsing factorisé : `firmware_versions_from_log` réutilisé par
+    `_extract_mcu_check` (DRY).
+  - `image_version` : 1re ligne du 1er fichier présent parmi
+    `/etc/yumi-image-version`, `/etc/yumi-release` (constante
+    IMAGE_VERSION_FILES, convention best-effort documentée — à confirmer
+    avec l'image YumiOS, réponse serveur lot L8).
+  - `qc_cfg_version` : `sha256:<12 hex>` de
+    `~/printer_data/config/qc_printer_<MODEL>.cfg` (cfg modèle déployée par
+    sync_qc_cfgs.sh) — le modèle est désormais mémorisé par engine.start()
+    (`self.model`, attribut nouveau, défaut ""). Choix du hash plutôt que
+    du marqueur _QC_MODE : fonctionne avec les cfgs déployées sans régén.
+  Helpers purs dans qc_machine_measures.py (image_version_from_files,
+  qc_cfg_hash, klipper_version_from_log, software_versions) — l'engine
+  reste un adaptateur mince.
+  Tests : +TestSoftwareVersions (12, helpers : parsing multi-MCU, suffixe
+  host élagué, fallback rpi, fichiers tmp, hash sha256 court, tolérance
+  partielle/vide) + TestReportSoftwareVersions (5, engine : bloc complet
+  avec HOME tmp + hash relu du fichier, bloc partiel, bloc omis + set de
+  clés racine inchangé, gate sandbox).
+  PROOF:
+  - cmd1: `./verify.sh 2>&1 | tail -8`
+  - sortie (dernières lignes): `test_post_ack_200_and_payload ... ok` /
+    `Ran 121 tests in 7.061s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 121/121 tests unittest verts (106 avant L6, +15
+    nouveaux — 1 fix test : machine_uid_missing ajouté au set attendu du
+    test "bloc omis", garde-fou identité existant L2), 4/4 étapes verify.sh
+    OK. Aucun fichier shell touché (shlint sans objet).
+  - cmd2 (gate E2E): `python3 - <<'PY' ... sandbox_machine_test.build_report() ... PY`
+    -> `software_versions: {"klipper_version": "v0.12.0-159-gabcd1234",
+    "firmware_version": {"mcu": "v0.12.0-159-gabcd1234"}}` ;
+    `sandbox: True | overall: PASS | technician present: False` ;
+    mcu_check measures `mcu_count: 2` (hôte inclus dans measures, exclu du
+    bloc racine) ; `JSON serializable OK`.
+  - attribution: python3 3.14.6 local macOS, branche qc-machines-dev @
+    7b308f7+. VARIED: qc/qc_machine_measures.py (helpers versions +
+    factorisation firmware_versions_from_log), qc/qc_engine.py (self.model
+    + bloc racine + _qc_cfg_version), qc/tests/test_qc_machine_measures.py
+    (+12), qc/tests/test_qc_engine.py (+5), scripts/sandbox_machine_test.py
+    (ligne hôte simulée) / HELD FIXED: qc_yms.py, qc_wizard.py, macros,
+    klippy extras, verify.sh, cfgs générées.
+  - WHAT THIS DOES NOT SAY: ne prouve PAS que la prod accepte le bloc
+    (E2E prod = L9, aucun token ici) ni qu'un pad réel émet la ligne hôte
+    sur toutes les cfgs (le `[mcu SmartPiOne]` est conditionnel dans la
+    macro) ni que l'image YumiOS porte un fichier release — les deux clés
+    concernées sont omises proprement dans ce cas (tolérance testée).
+  Prochain lot : L7 (retest: true + retest_reason).

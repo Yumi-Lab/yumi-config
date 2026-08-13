@@ -1,8 +1,16 @@
+import hashlib
+import os
+import tempfile
 import unittest
 
 from qc.qc_machine_measures import (
     HEAT_BED_TARGET_C,
     extract_measures,
+    firmware_versions_from_log,
+    image_version_from_files,
+    klipper_version_from_log,
+    qc_cfg_hash,
+    software_versions,
 )
 
 
@@ -498,6 +506,89 @@ class TestScrewsTilt(unittest.TestCase):
     def test_fail_timeout_no_signature(self):
         m = extract_measures("screws_tilt", [], False, timed_out=True)
         self.assertEqual(m["fail_reason"], "timeout")
+
+
+# ── L6 : versions logicielles (bloc racine software_versions) ───────────────
+# logs réels mcu_check (qc_macros.cfg QC_MCU_CHECK) : une ligne version par
+# MCU + la ligne hôte (process linux = version Klipper, suffixe "(host ...)").
+MCU_VERSION_LOGS = [
+    "[mcu] version: v0.12.0-159-gabcd1234",
+    "[mcu SmartPiOne] version: v0.12.0-159-gabcd1234 (host SmartPi One)",
+    "[mcu] board=CR-FDM-v2.5.s1 device=YUMI-C235 lot=2026-08 uid=ABC123",
+    "MCU_UID=2D0046000D51353234323830",
+]
+
+
+class TestSoftwareVersions(unittest.TestCase):
+    def test_firmware_versions_from_log(self):
+        versions = firmware_versions_from_log(MCU_VERSION_LOGS)
+        self.assertEqual(versions, {
+            "mcu": "v0.12.0-159-gabcd1234",
+            "mcu SmartPiOne": "v0.12.0-159-gabcd1234",  # suffixe host élagué
+        })
+
+    def test_klipper_version_from_host_line(self):
+        self.assertEqual(klipper_version_from_log(MCU_VERSION_LOGS),
+                         "v0.12.0-159-gabcd1234")
+
+    def test_klipper_version_mcu_rpi_fallback(self):
+        logs = ["[mcu rpi] version: v0.11.0-53"]
+        self.assertEqual(klipper_version_from_log(logs), "v0.11.0-53")
+
+    def test_klipper_version_absent(self):
+        self.assertIsNone(klipper_version_from_log(
+            ["[mcu] version: v0.12.0-159-gabcd1234"]))
+
+    def test_image_version_first_present_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            absent = os.path.join(tmp, "absent")
+            release = os.path.join(tmp, "yumi-release")
+            with open(release, "w") as f:
+                f.write("2.1.0-20260801\n")
+            self.assertEqual(image_version_from_files([absent, release]),
+                             "2.1.0-20260801")
+
+    def test_image_version_empty_file_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = os.path.join(tmp, "empty")
+            with open(empty, "w") as f:
+                f.write("\n")
+            self.assertIsNone(image_version_from_files([empty]))
+            self.assertIsNone(image_version_from_files(
+                [os.path.join(tmp, "absent")]))
+
+    def test_qc_cfg_hash_short_sha256(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as f:
+            f.write("[gcode_macro _QC_MODE]\nvariable_active: 1\n")
+            path = f.name
+        try:
+            with open(path, "rb") as f:
+                expected = hashlib.sha256(f.read()).hexdigest()[:12]
+            self.assertEqual(qc_cfg_hash(path), expected)
+        finally:
+            os.unlink(path)
+
+    def test_qc_cfg_hash_absent(self):
+        self.assertIsNone(qc_cfg_hash("/nonexistent/qc_printer_X.cfg"))
+
+    def test_software_versions_full(self):
+        sv = software_versions(MCU_VERSION_LOGS, image_version="2.1.0",
+                               qc_cfg_version="sha256:0123456789ab")
+        self.assertEqual(sv, {
+            "klipper_version": "v0.12.0-159-gabcd1234",
+            # hôte exclu : firmware_version = MCU réels flashés uniquement
+            "firmware_version": {"mcu": "v0.12.0-159-gabcd1234"},
+            "image_version": "2.1.0",
+            "qc_cfg_version": "sha256:0123456789ab",
+        })
+
+    def test_software_versions_tolerant_partial(self):
+        sv = software_versions(["[mcu] version: v0.12.0-159-gabcd1234"])
+        self.assertEqual(sv, {
+            "firmware_version": {"mcu": "v0.12.0-159-gabcd1234"}})
+
+    def test_software_versions_empty(self):
+        self.assertEqual(software_versions([]), {})
 
 
 if __name__ == "__main__":

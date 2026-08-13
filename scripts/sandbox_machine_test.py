@@ -56,8 +56,11 @@ def build_report():
         }
         eng._test_log[tid] = []
     # Identité machine réaliste : YUMI_CONFIG + UID STM32 (capture mcu_check).
+    # La ligne hôte (MCU linux = version Klipper du 'printer info') alimente
+    # klipper_version du bloc racine software_versions (L6).
     eng._test_log["mcu_check"] = [
         "[mcu] version: v0.12.0-159-gabcd1234",
+        "[mcu SmartPiOne] version: v0.12.0-159-gabcd1234 (host SmartPi One)",
         "[mcu] board=F401 device=C235 lot=SB001 uid=2D0046000D51353234323830",
         "MCU_UID=2D0046000D51353234323830",
     ]

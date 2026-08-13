@@ -1,6 +1,7 @@
 """
 qc_machine_measures.py — Extraction measures{} + fail_reason pour les tests
-machine C-series (contrat additif serveur, cf. docs/AUDIT-MESURES.md).
+machine C-series (contrat additif serveur, cf. docs/AUDIT-MESURES.md) et
+bloc racine software_versions (versions logicielles, contrat §3.2).
 
 Module pur (aucun import GTK), testable, style qc_yms.extract_measures :
 les mesures sont extraites des logs DÉJÀ capturés par QCEngine._test_log
@@ -8,6 +9,7 @@ les mesures sont extraites des logs DÉJÀ capturés par QCEngine._test_log
 par l'engine. Aucun champ nouveau obligatoire : un test sans extracteur
 renvoie None (le rapport reste identique à aujourd'hui).
 """
+import hashlib
 import re
 
 # Réutilisation du parseur feed du banc YMS pour e1_head (mêmes lignes de log).
@@ -247,23 +249,102 @@ def _extract_heat(target_c):
 # ── mcu_check (auto, QC_MCU_CHECK + QUERY_MCU_UID) ───────────────────────────
 # logs réels :
 #   "[mcu] version: v0.12.0-159-gabcd1234"           (une ligne par MCU)
+#   "[mcu SmartPiOne] version: v0.12.0-159-gabcd1234 (host SmartPi One)"
 #   "[mcu] board=CR-FDM-v2.5.s1 device=YUMI-C235 lot=2026-08 ... uid=ABC123"
 #   "MCU_UID=2D0046000D51353234323830"
 #   FAIL : "QC: aucune identite YUMI gravee sur les MCU (...)" / "MCU_UID_ERROR:"
+
+_VERSION_LINE_RE = re.compile(r"\[([^\]]+)\] version: (\S+)")
+
+# MCU "hôte" = process Linux Klipper (renommé SmartPiOne par generate_qc_cfg.py,
+# "mcu rpi" dans les cfg stock). Sa mcu_version EST la version du logiciel
+# Klipper hôte (klipper_version), pas un firmware flashé : exclue de
+# firmware_version dans le bloc racine software_versions.
+HOST_MCU_NAMES = ("mcu SmartPiOne", "mcu rpi")
+
+
+def firmware_versions_from_log(logs):
+    """{nom_mcu: version} depuis les lignes '[<mcu>] version: X' du mcu_check."""
+    versions = {}
+    for line in logs:
+        r = _VERSION_LINE_RE.match(line.strip())
+        if r:
+            versions[r.group(1)] = r.group(2)
+    return versions
+
+
+def klipper_version_from_log(logs):
+    """Version Klipper hôte = version du MCU hôte (SmartPi One / rpi).
+
+    Le MCU hôte (process linux) rapporte la version du logiciel Klipper, ce
+    que 'printer info' donnerait — déjà loggué par QC_MCU_CHECK, aucune
+    instrumentation macro nécessaire. None si le MCU hôte est absent de la cfg.
+    """
+    versions = firmware_versions_from_log(logs)
+    for name in HOST_MCU_NAMES:
+        if name in versions:
+            return versions[name]
+    return None
+
+
+# Fichiers release YumiOS candidats (1re ligne = version image). Convention
+# best-effort : la clé image_version n'apparaît au rapport que si l'un de ces
+# fichiers existe sur le pad (tolérant à l'absence, ex. dev hors pad).
+IMAGE_VERSION_FILES = ("/etc/yumi-image-version", "/etc/yumi-release")
+
+
+def image_version_from_files(paths=None):
+    """Première ligne non vide du premier fichier release présent, sinon None."""
+    for path in (IMAGE_VERSION_FILES if paths is None else paths):
+        try:
+            with open(path) as f:
+                version = f.readline().strip()
+            if version:
+                return version
+        except OSError:
+            continue
+    return None
+
+
+def qc_cfg_hash(path):
+    """Empreinte sha256 courte (12 hex) d'une cfg QC, None si illisible."""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+def software_versions(mcu_check_logs, image_version=None, qc_cfg_version=None):
+    """Bloc racine software_versions (contrat §3.2), additif et tolérant :
+    chaque clé absente de sa source est omise ; {} si rien n'est disponible
+    (l'engine omet alors le bloc entier — rapport inchangé)."""
+    sv = {}
+    klipper_version = klipper_version_from_log(mcu_check_logs)
+    if klipper_version:
+        sv["klipper_version"] = klipper_version
+    firmware = {name: version
+                for name, version in firmware_versions_from_log(mcu_check_logs).items()
+                if name not in HOST_MCU_NAMES}
+    if firmware:
+        sv["firmware_version"] = firmware
+    if image_version:
+        sv["image_version"] = image_version
+    if qc_cfg_version:
+        sv["qc_cfg_version"] = qc_cfg_version
+    return sv
+
 
 def _extract_mcu_check(logs, passed, details, duration_s, timed_out):
     m = {
         "mcu_uid": None,
         "mcu_count": 0,
-        "firmware_versions": {},
+        "firmware_versions": firmware_versions_from_log(logs),
         "yumi_config_found": False,
         "fail_reason": None,
     }
     for line in logs:
         _check_tmc(line, m)
-        r = re.match(r"\[([^\]]+)\] version: (\S+)", line.strip())
-        if r:
-            m["firmware_versions"][r.group(1)] = r.group(2)
         r = re.search(r"MCU_UID=([0-9A-Fa-f]+)", line)
         if r:
             m["mcu_uid"] = r.group(1)

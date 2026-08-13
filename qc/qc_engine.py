@@ -259,6 +259,7 @@ class QCEngine:
         self.results = {}
         self.printer_id = ""
         self.technician = ""
+        self.model = ""
         self.start_time = None
         self.test_start_time = None
         self._on_state_change = None
@@ -277,6 +278,7 @@ class QCEngine:
 
     def start(self, printer_id, model=""):
         self.printer_id = printer_id
+        self.model = model
         self.tests = tests_for_model(model)
         self.start_time = datetime.now()
         self.test_start_time = None
@@ -559,6 +561,18 @@ class QCEngine:
         # pad_mac = MAC ETH0 du pad QC : identifie le PAD qui a réalisé le QC
         # (traçabilité). self.printer_id vaut encore la MAC à ce stade.
         report["pad_mac"] = self.printer_id
+
+        # Versions logicielles (contrat additif serveur §3.2) : klipper_version
+        # = version du MCU hôte (process linux = le Klipper du 'printer info'),
+        # firmware_version par MCU réel, image_version (fichier release YumiOS
+        # si présent), qc_cfg_version (hash de la cfg QC modèle déployée).
+        # Bloc ENTIÈREMENT omis si aucune source n'est disponible (tolérant).
+        software_versions = qc_machine_measures.software_versions(
+            self._test_log.get("mcu_check", []),
+            image_version=qc_machine_measures.image_version_from_files(),
+            qc_cfg_version=self._qc_cfg_version())
+        if software_versions:
+            report["software_versions"] = software_versions
         # IDENTIFIANT MACHINE = UID STM32 UNIQUE de la carte mère (96 bits, 24 hex,
         # ex 2D0046000D51353234323830), lu via debug_read par QUERY_MCU_UID. C'est
         # la seule identité VRAIMENT unique par imprimante : le QC contrôle tout ce
@@ -579,6 +593,19 @@ class QCEngine:
             report["machine_uid_missing"] = True
 
         return report
+
+    def _qc_cfg_version(self):
+        """Version de la cfg QC exécutée = empreinte sha256 courte de la cfg
+        QC modèle déployée sur le pad (sync_qc_cfgs.sh copie
+        qc_printer_<MODEL>.cfg vers ~/printer_data/config/). Préfixée
+        'sha256:' pour être auto-documentée. None si modèle inconnu ou fichier
+        absent (tolérant — ex. exécution hors pad)."""
+        if not self.model:
+            return None
+        path = os.path.expanduser(
+            f"~/printer_data/config/qc_printer_{self.model}.cfg")
+        digest = qc_machine_measures.qc_cfg_hash(path)
+        return f"sha256:{digest}" if digest else None
 
     def save_report(self, report=None):
         """Save report as JSON file. Returns the file path."""

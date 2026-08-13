@@ -1,7 +1,10 @@
+import hashlib
 import importlib.util
 import json
 import os
+import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime
 
 from qc import qc_engine
@@ -211,6 +214,89 @@ class TestMachineReportMeasures(unittest.TestCase):
         self.assertEqual(m["mcu_uid"], "2D0046000D51353234323830")
         self.assertTrue(m["yumi_config_found"])
         json.dumps(report)  # lève si une mesure n'est pas sérialisable
+
+
+class TestReportSoftwareVersions(unittest.TestCase):
+    """L6 : bloc racine software_versions (contrat §3.2), additif et tolérant
+    — klipper_version (ligne MCU hôte), firmware_version par MCU réel,
+    image_version (fichier release), qc_cfg_version (hash cfg modèle)."""
+
+    MCU_CHECK_LOGS = [
+        "[mcu] version: v0.12.0-159-gabcd1234",
+        "[mcu SmartPiOne] version: v0.12.0-159-gabcd1234 (host SmartPi One)",
+        "[mcu] board=CR-FDM-v2.5.s1 device=YUMI-C235 lot=2026-08 uid=ABC123",
+        "MCU_UID=2D0046000D51353234323830",
+    ]
+
+    def _report(self, home, mcu_logs, image_version=None):
+        eng = qc_engine.QCEngine()
+        eng.start(printer_id="AABBCCDDEEFF", model="C235")
+        eng._test_log["mcu_check"] = list(mcu_logs)
+        for test in eng.tests:
+            eng.results[test["id"]] = {
+                "result": qc_engine.QCResult.PASS,
+                "timestamp": datetime.now().isoformat(),
+                "details": "OK",
+                "duration_s": 1.0,
+                "timed_out": False,
+            }
+        # image_version : source fichier /etc hors de portée du test -> mockée
+        # (hermétique, testée unitairement dans test_qc_machine_measures).
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}), \
+                unittest.mock.patch(
+                    "qc.qc_machine_measures.image_version_from_files",
+                    return_value=image_version):
+            return eng.generate_report()
+
+    def test_block_full_with_cfg_hash_and_image(self):
+        with tempfile.TemporaryDirectory() as home:
+            cfg_dir = os.path.join(home, "printer_data", "config")
+            os.makedirs(cfg_dir)
+            cfg_path = os.path.join(cfg_dir, "qc_printer_C235.cfg")
+            with open(cfg_path, "w") as f:
+                f.write("[gcode_macro _QC_MODE]\nvariable_active: 1\n")
+            with open(cfg_path, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()[:12]
+            report = self._report(home, self.MCU_CHECK_LOGS,
+                                  image_version="2.1.0-20260801")
+        sv = report["software_versions"]
+        self.assertEqual(sv["klipper_version"], "v0.12.0-159-gabcd1234")
+        self.assertEqual(sv["firmware_version"],
+                         {"mcu": "v0.12.0-159-gabcd1234"})
+        self.assertEqual(sv["image_version"], "2.1.0-20260801")
+        self.assertEqual(sv["qc_cfg_version"], "sha256:" + digest)
+
+    def test_block_partial_without_host_line_nor_files(self):
+        with tempfile.TemporaryDirectory() as home:
+            report = self._report(
+                home, ["[mcu] version: v0.12.0-159-gabcd1234"])
+        sv = report["software_versions"]
+        self.assertEqual(sv, {"firmware_version":
+                              {"mcu": "v0.12.0-159-gabcd1234"}})
+
+    def test_block_omitted_when_nothing_available(self):
+        """Tolérance totale : pas de ligne version, pas de fichier -> bloc
+        absent, rapport strictement identique à l'existant (additif)."""
+        with tempfile.TemporaryDirectory() as home:
+            report = self._report(home, [])
+        self.assertNotIn("software_versions", report)
+        expected = {"version", "printer_id", "date", "date_end",
+                    "duration_seconds", "tests", "overall_result",
+                    "failed_tests", "skipped_tests", "yumi_config",
+                    "machine_uid", "pad_mac",
+                    # logs sans MCU_UID= -> garde-fou identité (existant L2)
+                    "machine_uid_missing"}
+        self.assertEqual(set(report), expected)
+
+    def test_sandbox_report_has_software_versions(self):
+        """Gate charge réelle : rapport sandbox complet — le bloc est présent
+        (logs mcu_check simulés avec ligne hôte) et sérialisable."""
+        report = _load_sandbox_module().build_report()
+        sv = report["software_versions"]
+        self.assertEqual(sv["klipper_version"], "v0.12.0-159-gabcd1234")
+        self.assertEqual(sv["firmware_version"],
+                         {"mcu": "v0.12.0-159-gabcd1234"})
+        json.dumps(report)
 
 
 if __name__ == "__main__":
