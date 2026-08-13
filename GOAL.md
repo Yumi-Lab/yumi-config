@@ -1,79 +1,42 @@
-# GOAL — Banc QC YMS : durcissement logiciel côté pad (repo yumi-config, branche yms-dev)
+# GOAL — QC machines C-series : measures-first (cahier des charges serveur du 13/08)
 
-## Contexte
-Le banc QC usine teste 12 boîtiers YMS sur une C235 + 2 HyperDrive 3P2L.
-Tout le code vit dans `qc/` : cfg banc générée (`generate_yms12_cfg.py` →
-`qc_printer_YMS12.cfg`), engine (`qc_engine.py`), panel KlipperScreen
-(`qc_wizard.py`, symlinké sur les pads). Le contrat serveur est
-`docs/FORMAT-YMS.md` du repo `Yumi-Lab/yumi-qc-counter` (v1.1) : allocation
-groupée `POST /api/qc/yms/allocate` `{"model","count"}` → `{"status":"ok",
-"yms_ids":[...]}`, puis UN rapport par boîtier sur `POST /api/qc/report`
-(printer_id = code alloué, `machine_uid:""`, `device=YMS-LIGHT|YMS-PRO`,
-`bench_position/slot/session/total`, `measures{}` source primaire avec
-`fail_reason` normé : sensor_mute | sensor_lost_feed | sensor_lost_stress |
-head_not_reached | tmc_error | already_at_head | timeout). Étiquette TSPL
-sur PASS uniquement (POS80L, /dev/usb/lp0). Le flux marche déjà de bout en
-bout ; ta mission est de le RENDRE TESTÉ, MODULAIRE et COMPLET.
+## But
+Migrer le QC des imprimantes C235/C335/C435 (panel pad : qc/qc_engine.py,
+qc/qc_wizard.py, qc/qc_macros.cfg + cfg generees par qc/generate_qc_cfg.py)
+vers le contrat additif demande par le serveur qc.yumi-lab.com :
+1. NE PLUS envoyer `technician` (abandonne cote serveur).
+2. Bloc `measures` STRUCTURE dans chaque entree de tests[] du rapport machine
+   (le pad calcule, details/log restent en repli humain) + `fail_reason` norme
+   par test. Reference : docs/FORMAT-YMS.md du repo yumi-qc-counter (les YMS
+   sont deja measures-first, module qc/qc_yms.py = exemple du style attendu).
+3. Versions logicielles au rapport : firmware_version (mcu), klipper_version,
+   image_version, qc_cfg_version.
+4. `retest: true` + `retest_reason` quand un QC est relance sur une machine.
+5. Scripts de test SANDBOX (`"sandbox": true` accepte par le serveur PROD sur
+   /api/qc/report : valide sans rien ecrire) — boucler les tests dessus.
+6. docs/REPONSES-SERVEUR.md : reponses aux questions du serveur (liste
+   exhaustive des mesures deja calculees, liste fail_reason par test, versions
+   remontables, ids de tests non connus du serveur).
 
-## Definition of Done (tout coché dans PROGRESS.md + verify.sh vert)
-1. **Logique pure extraite** de `qc_wizard.py` vers un module `qc/qc_yms.py`
-   importable SANS gi/GTK : extraction des measures, construction du rapport
-   par boîtier, client d'allocation, génération du TSPL de l'étiquette,
-   mapping positions/slots. `qc_wizard.py` devient une couche UI mince qui
-   importe ce module (compatibilité : le symlink KlipperScreen ne charge que
-   qc_wizard.py + qc_engine.py depuis `qc/`, le nouveau module doit être
-   importable par chemin relatif comme le fallback existant).
-2. **Harnais de tests** `qc/tests/` en unittest STDLIB (pas de pytest, pas de
-   dépendance) couvrant : extract_measures (les 6 cas réels du banc déjà
-   validés — les reprendre de PROGRESS.md), build du rapport boîtier
-   (structure conforme au contrat v1.1), client d'allocation (mock
-   http.server local : ok, HTTP 500, réponse invalide, count≠12), engine
-   YMS12 (séquence 13 tests, signaux QC:E*_HEAD, PARTIAL/PASS/FAIL),
-   génération TSPL (contenu, CRLF, QR = report_url).
-3. **Slots hors service** : fichier `~/printer_data/config/qc_bench_slots.json`
-   (liste de positions 1..12 désactivées, ex. `{"disabled": [2, 11]}`) lu au
-   démarrage de séquence → les positions désactivées sont SKIPPED (résultat
-   `skipped`, détail "slot banc hors service"), AUCUN code alloué pour elles
-   (l'allocation demande count = 12 - len(disabled) et le mapping
-   position→code saute les positions désactivées), aucun rapport envoyé.
-   Fichier absent = 12 positions actives (comportement actuel intact).
-4. **Sélecteur PRO/LIGHT** au lancement d'une séquence YMS : dialogue 2 gros
-   boutons (办 LIGHT / PRO) avant l'allocation → `model` de l'allocation et
-   `qc_model`/`device=` des rapports suivent (YMS-PRO ↔ codes YMSP-).
-   Session entière du même modèle (pas de mixte en v1). Défaut = LIGHT.
-5. **Re-test unitaire** : sur l'écran résumé, toucher une ligne YMS en FAIL
-   propose de re-tester CE boîtier seul : allocation unitaire (count=1) d'un
-   NOUVEAU code, exécution du seul test e<n>_head, rapport + étiquette comme
-   en séquence. (Le code précédent reste brûlé, conforme contrat.)
-6. **Doc** `qc/README-YMS.md` : architecture du banc (mapping YMS↔extruder↔
-   slots, macros, phases feed/stress, critères PASS/FAIL, fail_reason),
-   déploiement (install_qc_station.sh, sync_qc_cfgs.sh), lien contrat
-   FORMAT-YMS.md, dépannage (pannes banc vécues : phase A TMC, entrée
-   capteur morte, thermistances).
-7. `verify.sh` vert : py_compile de tous les qc/*.py + régénération de la cfg
-   (`generate_yms12_cfg.py` → parse configparser OK) + `python3 -m unittest
-   discover qc/tests` tout vert.
+## Invariants ABSOLUS (contrat serveur, ne jamais casser)
+- TOUT est ADDITIF : un rapport actuel reste valide ; aucun champ nouveau
+  obligatoire ; le format existant (printer_id, machine_uid=UID STM32 jamais
+  vide/jamais MAC, overall_result PASS seulement si TOUS pass, date naive
+  locale, yumi_config complet, pad_mac, tests[] id/name/result/timestamp/
+  details/log) est INTOUCHABLE.
+- Idempotence (printer_id, date) preservee ; store-and-forward .sent inchange.
+- Ne PAS toucher au flux YMS (qc_yms.py, chemins YMS du wizard) sauf partage
+  de helpers purs. Ne pas casser les 35+ tests existants.
+- ids de tests machines : mcu_check home_x home_y fan_motherboard fan_part
+  fan_hotend heat_extruder heat_bed cutter e1_head z_tap_home z_tap_calib
+  screws_tilt (id inconnu tolere serveur mais rester sur ceux-la).
+- Pas d'identifiant machine genere cote pad. Pas de gestion de fuseau attendue
+  du serveur.
+- Logique pure = module sans GTK (testable) ; qc_wizard/qc_engine = adaptateurs.
+- AUCUNE mention d'outil IA dans les commits. Pas de deploy prod.
 
-## Règles ABSOLUES
-- **Ne JAMAIS toucher** au protocole C-series : liste `QC_TESTS` de
-  qc_engine.py, `qc_macros.cfg`, `qc_printer_C235/C335/C435.cfg`, macros du
-  générateur (generate_yms12_cfg.py ne se modifie que pour des besoins YMS).
-  Les pads usine machines en dépendent.
-- **Ne toucher à RIEN hors de `qc/`** dans ce repo (il contient des configs
-  de prod d'autres sous-systèmes).
-- **Python stdlib uniquement** (les pads n'ont pas de pip fiable). Cible
-  Python 3.11+ (Debian Trixie).
-- **Compatibilité KlipperScreen** : qc_wizard.py doit rester importable dans
-  KlipperScreen (classe Panel(ScreenPanel), mêmes callbacks). Aucun import
-  gi dans qc_yms.py et les tests.
-- Le contrat v1.1 (endpoints, champs, fail_reason normés) est FIGÉ : ne pas
-  le modifier, ne pas inventer de champ obligatoire côté serveur.
-- Commits : messages style repo (`qc: ...`), AUCUNE mention d'outil IA.
-  Travailler sur la branche `yms-dev` UNIQUEMENT — ne jamais pousser ni
-  merger vers main (le merge est fait par le superviseur après gate banc).
-  `git push origin yms-dev` autorisé.
-- Toute validation nécessitant le PAD/BANC réel (KlipperScreen visuel,
-  imprimante POS80L, moteurs) ou le serveur qc.yumi-lab.com réel → NE PAS
-  simuler un PASS : écrire `.gate-handoff` avec la checklist et STOP.
-
-## Quand TOUT est coché ET verify.sh vert → créer `.done`
+## Definition of Done
+Tous les lots de PROGRESS.md coches, ./verify.sh vert (py_compile + generateurs
++ TOUS les tests unittest), reponses serveur ecrites, validation sandbox contre
+la prod OK (script rejouable), gate-handoff final pour le QC pilote sur pad
+reel — PUIS creer .done.

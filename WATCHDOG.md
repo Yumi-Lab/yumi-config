@@ -28,7 +28,9 @@
   (URL + checklist) + **STOP** : tu cèdes la main à l'humain (le watchdog NE relance PAS tant que ce fichier existe).
 
 ## Garde-fous à respecter
-- **Preuve avant de cocher** : une case ne se coche qu'avec un **bloc PROOF** au Journal (commande + vraie sortie).
+- **Preuve avant de cocher** : une case ne se coche qu'avec un **bloc PROOF** au Journal (commande exacte
+  + vraie sortie + critère numérique + attribution `VARIED: … / HELD FIXED: …` +
+  `WHAT THIS DOES NOT SAY: …` ; échec = causes éliminées avec mesure).
 - Zéro hardcodage / DRY ; réutilise l'existant ; non-régression ; secrets jamais committés.
 
 ## MISSION (à personnaliser — sois précis, c'est ce qui cadre l'agent)
