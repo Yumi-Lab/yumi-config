@@ -25,7 +25,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   endstop_not_triggered, tmc_error, timeout, visual_reject, sensor_mute,
   head_not_reached (reutiliser ceux du banc YMS quand identiques). Fixtures =
   logs REELS de docs/AUDIT-MESURES.md. Tests exhaustifs.
-- [ ] **L4 — Engine : bloc measures par entree tests[].** generate_report
+- [x] **L4 — Engine : bloc measures par entree tests[].** generate_report
   attache measures + fail_reason quand l'extracteur du test existe (absent
   sinon — additif). details/log inchanges. Tests de conformite (cles exactes,
   rapport actuel intact champ par champ hors ajouts).
@@ -176,3 +176,46 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     ne prouve PAS que l'engine attache measures au rapport (lot L4) ni que
     la prod les accepte (lot L9). Ne prouve rien sur un pad réel.
   Prochain lot : L4 (engine : bloc measures par entrée tests[]).
+
+- **L4 (13/08) — FAIT.** `generate_report` attache `measures` (fail_reason
+  inclus, style YMS) à chaque entrée tests[] qui a un extracteur ET a été
+  exécutée (pass/fail) — jamais sur pending/skipped, jamais sans extracteur
+  (additif : rapport inchangé pour ces tests). Chaîne complète :
+  - `qc_engine._record_result` mesure désormais `duration_s` (début = envoi
+    macro via `next_test`) et stocke `timed_out` ; `fail_current_test` gagne
+    le paramètre `timed_out` (défaut False → fallback `unknown_fail`).
+  - `qc_wizard._on_test_timeout` passe `timed_out=True` → fallback normé
+    (`timeout` / `thermal_timeout`) au lieu d'`unknown_fail`.
+  - Import de `qc_machine_measures` triple chemin (package qc/ repo, symlink
+    ks_includes/ pad — miroir du pattern qc_wizard —, qc/ seul en dev) ;
+    `install_qc_station.sh` sylinke le module dans ks_includes (sinon ImportError
+    sur pad à la prochaine install).
+  Tests : +TestMachineReportMeasures (10 tests) — clés exactes par extracteur,
+  valeurs relues du details engine, ramp_s=duration_s mesurée, timeout vs
+  unknown_fail, signature log battant le fallback, skipped sans measures,
+  entrée strictement additive (8 clés), gate charge réelle = rapport sandbox
+  complet via le VRAI engine (measures sur les 4 extracteurs, JSON
+  sérialisable).
+  PROOF:
+  - cmd1: `./verify.sh 2>&1 | tail -8`
+  - sortie: `Ran 75 tests in 7.595s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 75/75 tests unittest verts (65 avant L4, +10
+    nouveaux), 4/4 étapes verify.sh OK, shlint install_qc_station.sh propre.
+  - cmd2 (gate E2E): `python3 -c "... sandbox_machine_test.build_report() ..."`
+    -> entrée z_tap_calib réelle : `"measures": {"taps_mm": [],
+    "spread_mm": 0.0312, "tolerance_mm": 0.05, "n_taps": 0,
+    "converged_n": 3, "fail_reason": null}` ; `entrees avec measures:
+    ['home_x', 'home_y', 'heat_bed', 'z_tap_calib']` ; `overall: PASS |
+    technician present: False`.
+  - attribution: python3 local macOS, branche qc-machines-dev @ 7b0e1e5+.
+    VARIED: qc/qc_engine.py (import + duration/timed_out + measures au
+    rapport), qc/qc_wizard.py (timed_out=True au timeout),
+    qc/install_qc_station.sh (symlink), qc/tests/test_qc_engine.py
+    (+TestMachineReportMeasures) / HELD FIXED: qc_machine_measures.py,
+    qc_yms.py, macros, klippy extras, verify.sh, scripts/sandbox_machine_test.py.
+  - WHAT THIS DOES NOT SAY: ne prouve PAS que la prod accepte les measures
+    (E2E prod = L9, aucun token ici) ni qu'un pad réel remonte les durées —
+    sessions simulées uniquement. Les extracteurs au-delà des 4 pilotes sont
+    le lot L5.
+  Prochain lot : L5 (extension à tous les tests : mcu_check, fan_*,
+  heat_extruder, cutter, e1_head, z_tap_home, screws_tilt).

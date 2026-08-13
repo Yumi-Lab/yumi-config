@@ -9,6 +9,17 @@ import logging
 from datetime import datetime
 from enum import Enum
 
+# Module pur d'extraction measures{} (contrat additif serveur). Triple chemin
+# d'import : repo/tests (package qc/), pad (symlink ks_includes/, miroir du
+# pattern de qc_wizard), dev (qc/ seul dans sys.path).
+try:
+    from qc import qc_machine_measures
+except ImportError:
+    try:
+        from ks_includes import qc_machine_measures
+    except ImportError:
+        import qc_machine_measures
+
 logger = logging.getLogger("KlipperScreen.qc_engine")
 
 # Répétabilité du Z tap plein course. Comme le homing : on retape plusieurs
@@ -268,6 +279,7 @@ class QCEngine:
         self.printer_id = printer_id
         self.tests = tests_for_model(model)
         self.start_time = datetime.now()
+        self.test_start_time = None
         self.current_test_index = -1
         self.results = {}
         self._ztap_triggers = []
@@ -411,11 +423,16 @@ class QCEngine:
         if test:
             self._record_result(test["id"], QCResult.SKIPPED, "Skipped by operator")
 
-    def fail_current_test(self, details=""):
-        """Fail the current test (e.g. timeout, Klipper error aborted the macro)."""
+    def fail_current_test(self, details="", timed_out=False):
+        """Fail the current test (e.g. timeout, Klipper error aborted the macro).
+
+        timed_out=True quand l'échec vient du budget du test écoulé (wizard) :
+        le fallback fail_reason de measures est alors le timeout normé du test,
+        sinon 'unknown_fail'."""
         test = self.get_current_test()
         if test:
-            self._record_result(test["id"], QCResult.FAIL, details)
+            self._record_result(test["id"], QCResult.FAIL, details,
+                                timed_out=timed_out)
 
     def abort(self):
         """Abort the entire QC process."""
@@ -423,11 +440,19 @@ class QCEngine:
         if self._on_qc_complete:
             self._on_qc_complete(self.generate_report())
 
-    def _record_result(self, test_id, result, details=""):
+    def _record_result(self, test_id, result, details="", timed_out=False):
+        # Durée mesurée du test (début = envoi de sa macro, cf. next_test) :
+        # alimente measures.ramp_s / measures.duration_s au rapport.
+        duration_s = None
+        if self.test_start_time:
+            duration_s = round(
+                (datetime.now() - self.test_start_time).total_seconds(), 1)
         self.results[test_id] = {
             "result": result,
             "timestamp": datetime.now().isoformat(),
             "details": details,
+            "duration_s": duration_s,
+            "timed_out": timed_out,
         }
         logger.info(f"QC: Test {test_id} = {result.value}")
         self._set_state(QCState.RUNNING)
@@ -488,17 +513,30 @@ class QCEngine:
 
         for test in self.tests:
             r = self.results.get(test["id"], {})
-            report["tests"].append({
+            result = r.get("result", QCResult.PENDING)
+            entry = {
                 "id": test["id"],
                 "name": test["name"],
                 "type": test["type"],
-                "result": r.get("result", QCResult.PENDING).value if isinstance(r.get("result"), QCResult) else str(r.get("result", "pending")),
+                "result": result.value if isinstance(result, QCResult) else str(result),
                 "timestamp": r.get("timestamp", ""),
                 "details": r.get("details", ""),
                 # Log capturé pendant le test : distances feed, spread Z,
                 # corrections de vis, mesh complete, erreurs... (mesures riches)
                 "log": self._test_log.get(test["id"], []),
-            })
+            }
+            # Bloc measures structuré (contrat additif serveur, fail_reason
+            # inclus, style YMS) : attaché seulement si le test a un extracteur
+            # ET a été réellement exécuté (pass/fail). Jamais sur pending ou
+            # skipped — un skip opérateur n'est pas une mesure de la machine.
+            if result in (QCResult.PASS, QCResult.FAIL):
+                measures = qc_machine_measures.extract_measures(
+                    test["id"], entry["log"], result == QCResult.PASS,
+                    entry["details"], r.get("duration_s"),
+                    r.get("timed_out", False))
+                if measures is not None:
+                    entry["measures"] = measures
+            report["tests"].append(entry)
 
         # Identité firmware de la machine (YUMI_CONFIG gravé). Le macro mcu_check
         # émet la constante comme "[mcu] board=... device=... lot=... uid=..."

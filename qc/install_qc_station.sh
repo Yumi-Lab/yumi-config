@@ -32,6 +32,7 @@ if [ -d "$KS/panels" ]; then
     ln -sf "$QC/qc_wizard.py" "$KS/panels/qc_wizard.py"
     ln -sf "$QC/qc_engine.py" "$KS/ks_includes/qc_engine.py"
     ln -sf "$QC/qc_yms.py" "$KS/ks_includes/qc_yms.py"
+    ln -sf "$QC/qc_machine_measures.py" "$KS/ks_includes/qc_machine_measures.py"
     for sd in material-dark material-darker; do
         if [ -d "$KS/styles/$sd/images" ] && [ -f "$QC/qc-check.svg" ]; then
             cp "$QC/qc-check.svg" "$KS/styles/$sd/images/qc-check.svg"

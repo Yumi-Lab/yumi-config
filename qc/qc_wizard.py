@@ -1239,7 +1239,8 @@ class Panel(ScreenPanel):
                 "Timeout %ss depasse sur %s : la macro %s n'a pas repondu "
                 "(relever le timeout de ce test dans qc_engine.QC_TESTS si la "
                 "machine fonctionne)"
-                % (budget, test_id, test.get("macro", "?")))
+                % (budget, test_id, test.get("macro", "?")),
+                timed_out=True)
         return False
 
     def _update_test_display(self, test):
