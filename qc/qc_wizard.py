@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Pango
@@ -1022,8 +1022,8 @@ class Panel(ScreenPanel):
             model=self._yms_model,
             bench_total=YMS_BENCH_TOTAL,
             bench_slots=YMS_BENCH_SLOTS,
-            started=self._box_started.get(test_id) or datetime.now(),
-            now=datetime.now(),
+            started=self._box_started.get(test_id) or datetime.now(timezone.utc),
+            now=datetime.now(timezone.utc),
             extruder_model=(self._bench_config or {}).get("extruder_model", ""),
             spring_model=(self._bench_config or {}).get("spring_model", ""),
         )
@@ -1060,6 +1060,9 @@ class Panel(ScreenPanel):
             yms_id = "NOCODE-P%02d-%s" % (pos, self._bench_session)
             logger.error("QC YMS: allocation impossible pos %d: %s", pos, err)
         report = self._build_box_report(test_id, result, yms_id)
+        # UTC d'envoi : permet au serveur de recaler l'heure usine et de
+        # mesurer la derive d'horloge du pad (received_at - sent_at_utc).
+        report["sent_at_utc"] = datetime.now(timezone.utc).isoformat()
         no_code = yms_id.startswith("NOCODE-")
         path = ""
         try:
@@ -1140,7 +1143,7 @@ class Panel(ScreenPanel):
                                      test["id"])
             return
         self._restart_retries = 0
-        self._box_started[test["id"]] = datetime.now()
+        self._box_started[test["id"]] = datetime.now(timezone.utc)
         timeout = test.get("timeout", 0)
         if timeout:
             self._timeout_id = GLib.timeout_add_seconds(

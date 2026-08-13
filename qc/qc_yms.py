@@ -7,7 +7,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Contrat FORMAT-YMS.md v1.1
 YMS_BENCH_TOTAL = 12
@@ -270,8 +270,10 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
         mcu_result_value = mcu_result.value
     else:
         mcu_result_value = str(mcu_result) if mcu_result is not None else "pending"
-    started = started or datetime.now()
-    now = now or datetime.now()
+    # v1.5+ : timestamps UTC EXPLICITES (ISO 8601 avec fuseau) — le serveur
+    # recalcule l'heure usine (UTC+8) sans dependre du fuseau/horloge du pad.
+    started = started or datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
     test_entry_name = "YMS-%d 送料+传感器 / feed+sensor" % pos
     return {
         "version": "1.0",
