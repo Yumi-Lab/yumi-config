@@ -303,7 +303,11 @@ def allocate_yms_codes(url, token, count, model, timeout=15, result="pass"):
     """
     if not token:
         return None, "Token QC manquant"
-    body = {"model": model, "count": count}
+    # v1.3+ : mode nominal = UNITAIRE (sans count). Le mode groupe (count
+    # present) est deprecie — encore servi par le serveur, ne plus l'utiliser.
+    body = {"model": model}
+    if count != 1:
+        body["count"] = count
     if result != "pass":
         body["result"] = result
     data = json.dumps(body).encode("utf-8")
