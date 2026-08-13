@@ -17,7 +17,7 @@ class TestRetest(unittest.TestCase):
         r = build_box_report(
             test_id="e5_head",
             result="PASS",
-            yms_ids=["YMSL-RET-01"],
+            yms_id="YMSL-RET01-RET01",
             session="S",
             pad_mac="MAC",
             technician="op",
@@ -26,9 +26,8 @@ class TestRetest(unittest.TestCase):
                 "mcu_check": {"result": "skipped"},
                 "e5_head": {"result": "pass"},
             },
-            retest=True,
         )
-        self.assertEqual(r["printer_id"], "YMSL-RET-01")
+        self.assertEqual(r["printer_id"], "YMSL-RET01-RET01")
         self.assertEqual(r["bench_position"], 6)
         self.assertEqual(r["overall_result"], "PASS")
         self.assertEqual(r["tests"][0]["result"], "skipped")

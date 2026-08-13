@@ -7,13 +7,12 @@ from qc.qc_yms import build_box_report
 class TestBuildBoxReport(unittest.TestCase):
     def setUp(self):
         self.base = datetime(2024, 1, 1, 12, 0, 0)
-        self.yms_ids = ["YMSL-%03d" % i for i in range(1, 13)]
 
     def test_pass_keys_and_mapping(self):
         r = build_box_report(
             test_id="e5_head",
             result="PASS",
-            yms_ids=self.yms_ids,
+            yms_id="YMSL-TST01-TST01",
             session="PAD-20240101-1200",
             pad_mac="AABBCCDDEEFF",
             technician="op1",
@@ -37,7 +36,7 @@ class TestBuildBoxReport(unittest.TestCase):
         })
         self.assertEqual(r["bench_position"], 6)
         self.assertEqual(r["bench_slot"], "hyperdrive_uart:4")
-        self.assertEqual(r["printer_id"], "YMSL-006")
+        self.assertEqual(r["printer_id"], "YMSL-TST01-TST01")
         self.assertEqual(r["overall_result"], "PASS")
         self.assertEqual(r["failed_tests"], [])
         self.assertEqual(r["qc_model"], "YMS-LIGHT")
@@ -52,7 +51,7 @@ class TestBuildBoxReport(unittest.TestCase):
         r = build_box_report(
             test_id="e9_head",
             result="FAIL",
-            yms_ids=self.yms_ids,
+            yms_id="YMSL-TST01-TST01",
             session="S",
             pad_mac="MAC",
             technician="op",
@@ -75,7 +74,7 @@ class TestBuildBoxReport(unittest.TestCase):
         r = build_box_report(
             test_id="e0_head",
             result="PASS",
-            yms_ids=["YMSP-%03d" % i for i in range(1, 13)],
+            yms_id="YMSP-TST01-TST01",
             session="S",
             pad_mac="MAC",
             technician="op",
@@ -85,7 +84,7 @@ class TestBuildBoxReport(unittest.TestCase):
         )
         self.assertEqual(r["qc_model"], "YMS-PRO")
         self.assertEqual(r["yumi_config"], "device=YMS-PRO")
-        self.assertEqual(r["printer_id"], "YMSP-001")
+        self.assertEqual(r["printer_id"], "YMSP-TST01-TST01")
 
 
 if __name__ == "__main__":

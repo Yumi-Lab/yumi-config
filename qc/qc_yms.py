@@ -209,18 +209,17 @@ def yms_code_for_position(pos, yms_ids, disabled=None):
     return yms_ids[idx]
 
 
-def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
+def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
-                     started=None, now=None, disabled_positions=None,
-                     retest=False):
-    """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.1).
+                     started=None, now=None):
+    """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.4).
 
     Args:
         test_id: identifiant du test (ex: "e5_head").
         result: résultat brut du test (passé à la fonction : "PASS" ou "FAIL").
-        yms_ids: liste des codes alloués par le serveur. En séquence, ordre
-            des positions actives ; en re-test, liste à un seul élément.
+        yms_id: code alloué EN FIN de test par le serveur (v1.4) — numéro de
+            série YMSP-/YMSL- pour un PASS, code famille QCFL- pour un FAIL.
         session: identifiant de session banc.
         pad_mac: adresse MAC / identifiant du pad QC.
         technician: nom de l'opérateur.
@@ -231,17 +230,11 @@ def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
         bench_slots: mapping position -> slot physique.
         started: datetime de début du test.
         now: datetime de fin du test.
-        disabled_positions: liste des positions désactivées (pour le mapping code).
-        retest: True si c'est un re-test unitaire (yms_ids contient 1 code).
 
     Returns:
-        dict conforme au contrat v1.1.
+        dict conforme au contrat v1.4.
     """
     pos = position_from_test_id(test_id)
-    if retest:
-        yms_id = yms_ids[0]
-    else:
-        yms_id = yms_code_for_position(pos, yms_ids, disabled_positions)
     logs = list(test_log.get(test_id, []))
     passed = (result == "PASS")
     res = engine_results.get(test_id, {})
@@ -297,8 +290,12 @@ def build_box_report(test_id, result, yms_ids, session, pad_mac, technician,
     }
 
 
-def allocate_yms_codes(url, token, count, model, timeout=15):
-    """POST /api/qc/yms/allocate {"model","count"} -> (liste ids, erreur).
+def allocate_yms_codes(url, token, count, model, timeout=15, result="pass"):
+    """POST /api/qc/yms/allocate {"model","count"[,"result"]} -> (ids, erreur).
+
+    v1.4 : l'allocation se fait en FIN de test, unitaire. result="fail" ->
+    code famille QCFL- (boîtier recalé, compte le taux de défectueux) au
+    lieu d'un numéro de série YMSP-/YMSL-.
 
     Returns:
         (ids, "") en cas de succès.
@@ -306,7 +303,10 @@ def allocate_yms_codes(url, token, count, model, timeout=15):
     """
     if not token:
         return None, "Token QC manquant"
-    data = json.dumps({"model": model, "count": count}).encode("utf-8")
+    body = {"model": model, "count": count}
+    if result != "pass":
+        body["result"] = result
+    data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url, data=data, method="POST",
         headers={"Content-Type": "application/json", "X-QC-Token": token})
@@ -331,25 +331,44 @@ QC_REPORT_URL_BASE = "https://qc.yumi-lab.com/report/"
 def build_label_tspl(report):
     """Génère le TSPL brut de l'étiquette QC (58x37 mm) pour imprimante POS80L.
 
+    v1.4 : une étiquette à CHAQUE test (aucun décalage possible dans la pile
+    de boîtiers). PASS -> étiquette numéro de série (code + QR). FAIL ->
+    étiquette de REJET : position banc en gros, raison, code QCFL- + QR de
+    traçabilité (jamais utilisée comme numéro de série).
+
     Returns:
         bytes encodés en ASCII, lignes terminées par CRLF.
     """
     overall = report.get("overall_result", "?")
-    batch = report.get("printer_id", "?")
+    code = report.get("printer_id", "?")
     qc_model = report.get("qc_model", "")
     date = (report.get("date_end") or "")[:16].replace("T", " ")
-    url = "%s%s" % (QC_REPORT_URL_BASE, batch)
-    lines = [
+    url = "%s%s" % (QC_REPORT_URL_BASE, code)
+    head = [
         "SIZE 58 mm,37 mm",
         "GAP 2 mm,0 mm",
         "DIRECTION 1",
         "SET PEEL ON",
         "CLS",
-        'TEXT 16,16,"4",0,1,1,"QC %s"' % overall,
-        'TEXT 16,64,"2",0,1,1,"%s"' % qc_model,
-        'TEXT 16,96,"2",0,1,1,"%s"' % date,
-        'TEXT 16,200,"1",0,1,1,"%s"' % batch,
-        'QRCODE 290,40,M,4,A,0,"%s"' % url,
-        "PRINT 1,1",
     ]
-    return ("\r\n".join(lines) + "\r\n").encode("ascii", "replace")
+    if overall == "PASS":
+        body = [
+            'TEXT 16,16,"4",0,1,1,"QC PASS"',
+            'TEXT 16,64,"2",0,1,1,"%s"' % qc_model,
+            'TEXT 16,96,"2",0,1,1,"%s"' % date,
+            'TEXT 16,200,"1",0,1,1,"%s"' % code,
+            'QRCODE 290,40,M,4,A,0,"%s"' % url,
+        ]
+    else:
+        pos = report.get("bench_position", "?")
+        reason = str((report.get("measures") or {}).get("fail_reason") or "")
+        body = [
+            'TEXT 16,16,"4",0,1,1,"QC FAIL"',
+            'TEXT 16,64,"4",0,1,1,"POSITION %s"' % pos,
+            'TEXT 16,116,"2",0,1,1,"%s"' % reason[:28],
+            'TEXT 16,148,"2",0,1,1,"%s"' % date,
+            'TEXT 16,200,"1",0,1,1,"%s"' % code,
+            'QRCODE 320,110,M,3,A,0,"%s"' % url,
+        ]
+    return ("\r\n".join(head + body + ["PRINT 1,1"]) + "\r\n").encode(
+        "ascii", "replace")

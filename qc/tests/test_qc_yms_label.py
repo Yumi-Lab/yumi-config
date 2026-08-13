@@ -41,3 +41,38 @@ class TestBuildLabelTspl(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLabelFail(unittest.TestCase):
+    """v1.4 : etiquette de REJET systematique pour un FAIL (position + raison
+    + code QCFL-), jamais utilisee comme numero de serie."""
+
+    def test_fail_label_layout(self):
+        report = {
+            "printer_id": "QCFL-QJTVY-FKZDF",
+            "overall_result": "FAIL",
+            "qc_model": "YMS-LIGHT",
+            "date_end": "2026-08-13T12:34:56",
+            "bench_position": 11,
+            "measures": {"fail_reason": "sensor_mute"},
+        }
+        tspl = build_label_tspl(report).decode("ascii")
+        self.assertIn('"QC FAIL"', tspl)
+        self.assertIn('"POSITION 11"', tspl)
+        self.assertIn("sensor_mute", tspl)
+        self.assertIn("QCFL-QJTVY-FKZDF", tspl)
+        self.assertIn("QRCODE", tspl)
+        self.assertIn("https://qc.yumi-lab.com/report/QCFL-QJTVY-FKZDF", tspl)
+
+    def test_pass_label_unchanged(self):
+        report = {
+            "printer_id": "YMSL-7K3MQ-X2R9F",
+            "overall_result": "PASS",
+            "qc_model": "YMS-LIGHT",
+            "date_end": "2026-08-13T12:34:56",
+            "bench_position": 3,
+        }
+        tspl = build_label_tspl(report).decode("ascii")
+        self.assertIn('"QC PASS"', tspl)
+        self.assertNotIn("POSITION", tspl)
+        self.assertIn("YMSL-7K3MQ-X2R9F", tspl)

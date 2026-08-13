@@ -120,3 +120,64 @@ class TestAllocateYmsCodes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAllocateResultParam(unittest.TestCase):
+    """v1.4 : result="fail" envoye dans le body (famille QCFL- cote serveur)."""
+
+    def test_fail_result_in_body(self):
+        seen = {}
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers["Content-Length"])
+                seen.update(json.loads(self.rfile.read(length)))
+                body = json.dumps({"status": "ok",
+                                   "yms_ids": ["QCFL-AAAAA-BBBBB"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            url = "http://127.0.0.1:%d/" % srv.server_port
+            ids, err = allocate_yms_codes(url, "tok", 1, "light", result="fail")
+            self.assertEqual(ids, ["QCFL-AAAAA-BBBBB"])
+            self.assertEqual(seen.get("result"), "fail")
+        finally:
+            srv.shutdown()
+
+    def test_pass_result_absent_du_body(self):
+        seen = {}
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers["Content-Length"])
+                seen.update(json.loads(self.rfile.read(length)))
+                body = json.dumps({"status": "ok",
+                                   "yms_ids": ["YMSL-AAAAA-BBBBB"]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = "http://127.0.0.1:%d/" % srv.server_port
+            ids, _ = allocate_yms_codes(url, "tok", 1, "light")
+            self.assertEqual(ids, ["YMSL-AAAAA-BBBBB"])
+            self.assertNotIn("result", seen)
+        finally:
+            srv.shutdown()
