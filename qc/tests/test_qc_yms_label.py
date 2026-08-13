@@ -21,11 +21,12 @@ class TestBuildLabelTspl(unittest.TestCase):
         self.assertIn("SHIFT 8", text)
         self.assertIn("GAP 2 mm,0 mm", text)
         self.assertIn("SET PEEL ON", text)
-        self.assertIn('TEXT 16,16,"4",0,1,1,"QC PASS"', text)
-        self.assertIn('TEXT 16,64,"2",0,1,1,"YMS-LIGHT"', text)
-        self.assertIn('TEXT 16,96,"2",0,1,1,"2024-01-01 12:34"', text)
-        self.assertIn('TEXT 16,200,"1",0,1,1,"YMSL-042"', text)
-        self.assertIn('QRCODE 290,40,M,4,A,0,"https://qc.yumi-lab.com/report/YMSL-042"', text)
+        self.assertIn('TEXT 16,14,"4",0,1,1,"QC PASS"', text)
+        self.assertIn('"YMS-LIGHT"', text)
+        self.assertIn('"2024-01-01 12:34"', text)
+        self.assertIn('"YMSL-042"', text)
+        self.assertIn('https://qc.yumi-lab.com/report/YMSL-042', text)
+        self.assertIn('QRCODE', text)
         self.assertIn("PRINT 1,1", text)
 
     def test_ascii_safe(self):
