@@ -264,9 +264,8 @@ class QCEngine:
         self._on_visual_prompt = on_visual_prompt
         self._on_qc_complete = on_qc_complete
 
-    def start(self, printer_id, technician="", model=""):
+    def start(self, printer_id, model=""):
         self.printer_id = printer_id
-        self.technician = technician
         self.tests = tests_for_model(model)
         self.start_time = datetime.now()
         self.current_test_index = -1
@@ -476,7 +475,8 @@ class QCEngine:
         report = {
             "version": "1.0",
             "printer_id": self.printer_id,
-            "technician": self.technician,
+            # "technician" volontairement ABSENT : champ abandonné côté serveur
+            # (contrat machines additif — l'envoyer, même vide, est inutile).
             "date": self.start_time.isoformat() if self.start_time else "",
             "date_end": end_time.isoformat(),
             "duration_seconds": int(duration),

@@ -11,7 +11,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   exact des lignes, ex. z_tap_calib "VALIDATED: trigger_z=..." / spread, feed
   "filament a la tete apres NNNmm", screws_tilt corrections par vis...), et la
   mesure structuree qu'on peut en tirer. verify.sh reste vert.
-- [ ] **L2 — technician retire + harnais sandbox.** Supprimer technician du
+- [x] **L2 — technician retire + harnais sandbox.** Supprimer technician du
   rapport (engine, save, upload — champ absent, pas vide) ; script
   scripts/sandbox_machine_test.py : poste un rapport machine REALISTE avec
   "sandbox": true sur https://qc.yumi-lab.com/api/qc/report (token lu du pad ou
@@ -82,3 +82,33 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   - WHAT THIS DOES NOT SAY: ne prouve rien sur la prod ni sur les pads —
     audit statique des formats de logs, pas une extraction implémentée.
   Prochain lot : L2 (technician retiré + harnais sandbox).
+
+- **L2 (13/08) — FAIT.** `technician` retiré du rapport machine :
+  `qc_engine.generate_report()` ne l'émet plus (champ ABSENT, pas vide) et le
+  paramètre `start(technician=...)` inutilisé est supprimé (aucun appelant ne
+  le passait ; l'attribut `engine.technician` reste pour le flux YMS, contrat
+  v1.x figé, wizard:1054). Harnais `scripts/sandbox_machine_test.py` : construit
+  un rapport machine réaliste via le VRAI QCEngine (session C235 simulée,
+  13 tests PASS, YUMI_CONFIG + MCU_UID), ajoute `"sandbox": true`, POST sur
+  /api/qc/report (token : env QC_TOKEN > qc_token du pad > .env racine,
+  déjà git-ignoré), vérifie l'ack HTTP 200. Aucun token sur cette machine ->
+  le POST réel prod est le lot L9 ; l'ack est validé ici contre un mock local
+  (même chemin de code). Tests : +TestMachineReport (technician absent, clés
+  racine intactes, identité UID, forme tests[]) + test_sandbox_machine.py
+  (POST mock 200 + payload sans technician, HTTPError 422 → code+corps,
+  précédence token env).
+  PROOF:
+  - cmd: `./verify.sh 2>&1 | tail -8`
+  - sortie (dernières lignes): `test_post_ack_200_and_payload ... ok` /
+    `Ran 43 tests in 7.555s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 43/43 tests verts (35 avant L2, +8 nouveaux), 4/4
+    étapes verify.sh OK.
+  - attribution: python3 local macOS, branche qc-machines-dev @ f91e962+.
+    VARIED: qc/qc_engine.py (rapport sans technician), qc/tests/
+    test_qc_engine.py (+TestMachineReport), qc/tests/test_sandbox_machine.py
+    (nouveau), scripts/sandbox_machine_test.py (nouveau) / HELD FIXED:
+    qc_yms.py, qc_wizard.py, macros, klippy extras, verify.sh.
+  - WHAT THIS DOES NOT SAY: ne prouve PAS que la prod accepte "sandbox": true
+    — validé contre un mock local seulement (aucun token ici) ; l'E2E prod est
+    le lot L9. Ne prouve rien sur un pad réel.
+  Prochain lot : L3 (module pur qc_machine_measures.py, 3 tests pilotes).
