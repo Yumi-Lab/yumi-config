@@ -1,14 +1,17 @@
 import hashlib
+import json
 import os
 import tempfile
 import unittest
 
 from qc.qc_machine_measures import (
     HEAT_BED_TARGET_C,
+    RETEST_REASONS,
     extract_measures,
     firmware_versions_from_log,
     image_version_from_files,
     klipper_version_from_log,
+    previous_qc_overall,
     qc_cfg_hash,
     software_versions,
 )
@@ -589,6 +592,85 @@ class TestSoftwareVersions(unittest.TestCase):
 
     def test_software_versions_empty(self):
         self.assertEqual(software_versions([]), {})
+
+
+class TestPreviousQcOverall(unittest.TestCase):
+    """L7 : détection retest locale — verdict du QC précédent du même
+    machine_uid dans qc_reports/ du pad (heuristique documentée §3.3)."""
+
+    UID = "2D0046000D51353234323830"
+
+    def _write_report(self, report_dir, name, uid, overall, date):
+        path = os.path.join(report_dir, name)
+        with open(path, "w") as f:
+            json.dump({"machine_uid": uid, "overall_result": overall,
+                       "date": date}, f)
+        return path
+
+    def test_no_previous_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(previous_qc_overall(tmp, self.UID))
+
+    def test_missing_dir_and_empty_uid(self):
+        self.assertIsNone(previous_qc_overall("/nonexistent/qc_reports",
+                                              self.UID))
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_X_20260813_100000.json",
+                               self.UID, "FAIL", "2026-08-13T10:00:00")
+            self.assertIsNone(previous_qc_overall(tmp, ""))
+            self.assertIsNone(previous_qc_overall(tmp, None))
+
+    def test_previous_fail_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_X_20260813_100000.json",
+                               self.UID, "FAIL", "2026-08-13T10:00:00")
+            self.assertEqual(previous_qc_overall(tmp, self.UID), "FAIL")
+
+    def test_most_recent_overall_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_X_20260813_100000.json",
+                               self.UID, "FAIL", "2026-08-13T10:00:00")
+            self._write_report(tmp, "QC_X_20260813_110000.json",
+                               self.UID, "PASS", "2026-08-13T11:00:00")
+            self.assertEqual(previous_qc_overall(tmp, self.UID), "PASS")
+
+    def test_other_machine_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_Y_20260813_100000.json",
+                               "AAAAAAAAAAAAAAAAAAAAAAAA", "FAIL",
+                               "2026-08-13T10:00:00")
+            self.assertIsNone(previous_qc_overall(tmp, self.UID))
+
+    def test_uid_case_insensitive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_X_20260813_100000.json",
+                               self.UID.lower(), "PARTIAL",
+                               "2026-08-13T10:00:00")
+            self.assertEqual(previous_qc_overall(tmp, self.UID), "PARTIAL")
+
+    def test_same_run_excluded(self):
+        """Le rapport du run COURANT (même date) n'est pas un retest —
+        protège un generate_report appelé deux fois dans la même session."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write_report(tmp, "QC_X_20260813_100000.json",
+                               self.UID, "PASS", "2026-08-13T10:00:00")
+            self.assertIsNone(previous_qc_overall(
+                tmp, self.UID, exclude_date="2026-08-13T10:00:00"))
+
+    def test_malformed_and_sent_files_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "broken.json"), "w") as f:
+                f.write("{not json")
+            # Marqueur store-and-forward : jamais relu comme rapport.
+            self._write_report(tmp, "QC_X_20260813_100000.json.sent",
+                               self.UID, "FAIL", "2026-08-13T10:00:00")
+            self.assertIsNone(previous_qc_overall(tmp, self.UID))
+
+    def test_retest_reasons_cover_known_overalls(self):
+        for overall in ("PASS", "FAIL", "PARTIAL"):
+            self.assertIn(overall, RETEST_REASONS)
+            self.assertTrue(RETEST_REASONS[overall].startswith(
+                "previous_report_"))
 
 
 if __name__ == "__main__":

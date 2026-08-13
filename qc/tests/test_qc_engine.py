@@ -216,6 +216,114 @@ class TestMachineReportMeasures(unittest.TestCase):
         json.dumps(report)  # lève si une mesure n'est pas sérialisable
 
 
+class TestReportRetest(unittest.TestCase):
+    """L7 : retest/retest_reason (contrat §3.3) — présents UNIQUEMENT si un
+    rapport précédent du même machine_uid existe dans qc_reports/ du pad ;
+    absents sinon (jamais retest: false — additif)."""
+
+    UID = "2D0046000D51353234323830"
+    MCU_CHECK_LOGS = [
+        "[mcu] board=CR-FDM-v2.5.s1 device=YUMI-C235 lot=2026-08 uid=ABC123",
+        "MCU_UID=" + UID,
+    ]
+
+    def _report(self, home):
+        eng = qc_engine.QCEngine()
+        eng.start(printer_id="AABBCCDDEEFF", model="C235")
+        eng._test_log["mcu_check"] = list(self.MCU_CHECK_LOGS)
+        for test in eng.tests:
+            eng.results[test["id"]] = {
+                "result": qc_engine.QCResult.PASS,
+                "timestamp": datetime.now().isoformat(),
+                "details": "OK",
+                "duration_s": 1.0,
+                "timed_out": False,
+            }
+        # image_version : source fichier /etc hors de portée du test -> mockée
+        # (hermétique, même pattern que TestReportSoftwareVersions).
+        with unittest.mock.patch.dict(os.environ, {"HOME": home}), \
+                unittest.mock.patch(
+                    "qc.qc_machine_measures.image_version_from_files",
+                    return_value=None):
+            return eng.generate_report()
+
+    def _write_previous(self, home, uid, overall, date):
+        report_dir = os.path.join(home, "printer_data", "config", "qc_reports")
+        os.makedirs(report_dir, exist_ok=True)
+        with open(os.path.join(report_dir, "QC_prev_20260812_090000.json"),
+                  "w") as f:
+            json.dump({"machine_uid": uid, "overall_result": overall,
+                       "date": date}, f)
+
+    def test_no_retest_without_previous_report(self):
+        """Premier QC de la machine sur ce pad : aucun champ retest, rapport
+        strictement identique à l'existant (additif)."""
+        with tempfile.TemporaryDirectory() as home:
+            report = self._report(home)
+        self.assertNotIn("retest", report)
+        self.assertNotIn("retest_reason", report)
+        expected = {"version", "printer_id", "date", "date_end",
+                    "duration_seconds", "tests", "overall_result",
+                    "failed_tests", "skipped_tests", "yumi_config",
+                    "machine_uid", "pad_mac"}
+        self.assertEqual(set(report), expected)
+
+    def test_retest_after_previous_fail(self):
+        with tempfile.TemporaryDirectory() as home:
+            self._write_previous(home, self.UID, "FAIL", "2026-08-12T09:00:00")
+            report = self._report(home)
+        self.assertIs(report["retest"], True)
+        self.assertEqual(report["retest_reason"], "previous_report_fail")
+
+    def test_retest_reason_mirrors_previous_overall(self):
+        for overall, reason in (("PASS", "previous_report_pass"),
+                                ("PARTIAL", "previous_report_partial")):
+            with tempfile.TemporaryDirectory() as home:
+                self._write_previous(home, self.UID, overall,
+                                     "2026-08-12T09:00:00")
+                report = self._report(home)
+            self.assertEqual(report["retest_reason"], reason)
+
+    def test_no_retest_for_other_machine(self):
+        with tempfile.TemporaryDirectory() as home:
+            self._write_previous(home, "AAAAAAAAAAAAAAAAAAAAAAAA", "FAIL",
+                                 "2026-08-12T09:00:00")
+            report = self._report(home)
+        self.assertNotIn("retest", report)
+
+    def test_no_retest_without_machine_uid(self):
+        """UID STM32 non lu (garde-fou identité) : pas d'identité fiable ->
+        jamais de retest, même avec un rapport précédent dans qc_reports/."""
+        with tempfile.TemporaryDirectory() as home:
+            self._write_previous(home, self.UID, "FAIL", "2026-08-12T09:00:00")
+            eng = qc_engine.QCEngine()
+            eng.start(printer_id="AABBCCDDEEFF", model="C235")
+            for test in eng.tests:
+                eng.results[test["id"]] = {
+                    "result": qc_engine.QCResult.PASS,
+                    "timestamp": datetime.now().isoformat(),
+                    "details": "OK",
+                    "duration_s": 1.0,
+                    "timed_out": False,
+                }
+            with unittest.mock.patch.dict(os.environ, {"HOME": home}), \
+                    unittest.mock.patch(
+                        "qc.qc_machine_measures.image_version_from_files",
+                        return_value=None):
+                report = eng.generate_report()
+        self.assertNotIn("retest", report)
+        self.assertTrue(report["machine_uid_missing"])
+
+    def test_sandbox_report_json_serializable_with_retest(self):
+        """Gate charge réelle : session engine complète avec rapport
+        précédent -> retest présent, rapport JSON sérialisable."""
+        with tempfile.TemporaryDirectory() as home:
+            self._write_previous(home, self.UID, "FAIL", "2026-08-12T09:00:00")
+            report = self._report(home)
+        json.dumps(report)
+        self.assertIs(report["retest"], True)
+
+
 class TestReportSoftwareVersions(unittest.TestCase):
     """L6 : bloc racine software_versions (contrat §3.2), additif et tolérant
     — klipper_version (ligne MCU hôte), firmware_version par MCU réel,

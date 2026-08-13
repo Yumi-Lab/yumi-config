@@ -22,6 +22,9 @@ except ImportError:
 
 logger = logging.getLogger("KlipperScreen.qc_engine")
 
+# Répertoire des rapports machine locaux (save_report + détection retest L7).
+QC_REPORT_DIR = "~/printer_data/config/qc_reports"
+
 # Répétabilité du Z tap plein course. Comme le homing : on retape plusieurs
 # fois et on valide dès que Z_TAP_WINDOW taps CONSECUTIFS convergent dans la
 # fenêtre Z_TAP_SPREAD_TOL (fenêtre glissante). Ça écarte le tassement/jeu des
@@ -592,6 +595,23 @@ class QCEngine:
                 report["printer_id"] = self.printer_id
             report["machine_uid_missing"] = True
 
+        # retest (contrat §3.3) : ce QC est un RE-test si un rapport précédent
+        # du MÊME machine_uid existe déjà dans qc_reports/ de ce pad
+        # (heuristique locale, cf. qc_machine_measures.previous_qc_overall).
+        # Champs ABSENTS sinon — jamais retest: false (additif). La raison
+        # porte le verdict du QC précédent (RETEST_REASONS, liste figée avec
+        # le serveur). machine_uid absent -> jamais de retest (pas d'identité
+        # machine fiable pour comparer).
+        if report.get("machine_uid"):
+            prev_overall = qc_machine_measures.previous_qc_overall(
+                os.path.expanduser(QC_REPORT_DIR),
+                report["machine_uid"],
+                exclude_date=report["date"])
+            if prev_overall is not None:
+                report["retest"] = True
+                report["retest_reason"] = qc_machine_measures.RETEST_REASONS.get(
+                    str(prev_overall).upper(), "previous_report")
+
         return report
 
     def _qc_cfg_version(self):
@@ -612,7 +632,7 @@ class QCEngine:
         if report is None:
             report = self.generate_report()
 
-        report_dir = os.path.expanduser("~/printer_data/config/qc_reports")
+        report_dir = os.path.expanduser(QC_REPORT_DIR)
         os.makedirs(report_dir, exist_ok=True)
 
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")

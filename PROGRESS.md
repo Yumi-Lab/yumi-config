@@ -38,7 +38,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   klipper_version (printer info), firmware_version par mcu (mcu_version),
   image_version (fichier release YumiOS si present), qc_cfg_version (marqueur
   _QC_MODE ou hash de la cfg). Additif, tolerant a l'absence. Tests.
-- [ ] **L7 — retest.** Champs retest: true + retest_reason envoyes quand un QC
+- [x] **L7 — retest.** Champs retest: true + retest_reason envoyes quand un QC
   est relance sur une machine deja passee au QC sur CE pad (heuristique locale
   documentee : rapport precedent du meme machine_uid dans qc_reports/) ; jamais
   envoyes sinon. Tests.
@@ -339,3 +339,54 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     macro) ni que l'image YumiOS porte un fichier release — les deux clés
     concernées sont omises proprement dans ce cas (tolérance testée).
   Prochain lot : L7 (retest: true + retest_reason).
+
+- **L7 (13/08) — FAIT.** `retest: true` + `retest_reason` (contrat §3.3)
+  envoyés UNIQUEMENT quand un QC est relancé sur une machine déjà passée au
+  QC sur CE pad — jamais `retest: false` (additif : rapport inchangé sinon).
+  - Heuristique locale documentée : un rapport précédent portant le MÊME
+    `machine_uid` (UID STM32, identité machine fiable) existe dans
+    `~/printer_data/config/qc_reports/` (là où `save_report` écrit). Helper
+    pur `qc_machine_measures.previous_qc_overall(report_dir, machine_uid,
+    exclude_date)` → overall_result du rapport précédent le plus récent,
+    None sinon. Tolérant : répertoire absent, JSON illisible, clés
+    manquantes, marqueurs `.json.sent` (store-and-forward) ignorés ;
+    comparaison UID insensible à la casse ; `exclude_date` = date du run
+    courant (un double `generate_report` dans la même session n'est PAS un
+    retest).
+  - `retest_reason` normé (constante `RETEST_REASONS`, à figer avec le
+    serveur en L8) : `previous_report_pass` / `previous_report_fail` /
+    `previous_report_partial`, repli `previous_report` si overall inconnu.
+  - `machine_uid` absent (garde-fou identité L2) → jamais de retest : pas
+    d'identité machine fiable pour comparer.
+  - DRY : chemin qc_reports factorisé en constante `QC_REPORT_DIR`
+    (qc_engine) partagée par `save_report` et la détection retest.
+  Tests : +TestPreviousQcOverall (9, helper pur : plus récent gagne, autre
+  machine ignorée, casse, même run exclu, JSON cassé/.sent ignorés, couverture
+  RETEST_REASONS) + TestReportRetest (6, engine via HOME tmp : absent sans
+  rapport précédent + set de clés racine INCHANGÉ, raison miroir du verdict
+  précédent, autre machine, sans UID, gate JSON sérialisable).
+  PROOF:
+  - cmd1: `./verify.sh 2>&1 | tail -6`
+  - sortie (dernières lignes): `Ran 136 tests in 7.575s` / `OK` /
+    `verify.sh: PASS`
+  - critère numérique: 136/136 tests unittest verts (121 avant L7, +15
+    nouveaux), 4/4 étapes verify.sh OK. Aucun fichier shell touché (shlint
+    sans objet).
+  - cmd2 (gate E2E charge réelle): `python3 - <<'PY' ...
+    sandbox_machine_test.build_report() ×2, HOME tmp, 1er rapport sauvegardé
+    comme le fait le wizard ... PY`
+  - sortie: `1er QC — retest present: False | overall: PASS | uid:
+    2D0046000D51353234323830` ; `2e QC — retest: True | retest_reason:
+    previous_report_pass` ; `JSON serializable OK`.
+  - attribution: python3 3.14.6 local macOS, branche qc-machines-dev @
+    0732df4+. VARIED: qc/qc_machine_measures.py (RETEST_REASONS +
+    previous_qc_overall, +json/os), qc/qc_engine.py (bloc retest +
+    QC_REPORT_DIR), qc/tests/test_qc_machine_measures.py (+9),
+    qc/tests/test_qc_engine.py (+6) / HELD FIXED: qc_yms.py, qc_wizard.py,
+    macros, klippy extras, verify.sh, scripts/sandbox_machine_test.py.
+  - WHAT THIS DOES NOT SAY: ne prouve PAS que la prod accepte les champs
+    retest (E2E prod = L9, aucun token ici) ni qu'un pad réel accumule des
+    rapports dans qc_reports/ comme simulé — la détection est prouvée sur la
+    structure de fichiers réelle écrite par save_report, rejouée en tmp.
+    La liste retest_reason reste à figer avec le serveur (lot L8).
+  Prochain lot : L8 (docs/REPONSES-SERVEUR.md).

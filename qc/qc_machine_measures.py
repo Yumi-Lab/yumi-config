@@ -1,7 +1,8 @@
 """
 qc_machine_measures.py — Extraction measures{} + fail_reason pour les tests
 machine C-series (contrat additif serveur, cf. docs/AUDIT-MESURES.md) et
-bloc racine software_versions (versions logicielles, contrat §3.2).
+bloc racine software_versions (versions logicielles, contrat §3.2) et
+détection retest locale (contrat §3.3).
 
 Module pur (aucun import GTK), testable, style qc_yms.extract_measures :
 les mesures sont extraites des logs DÉJÀ capturés par QCEngine._test_log
@@ -10,6 +11,8 @@ par l'engine. Aucun champ nouveau obligatoire : un test sans extracteur
 renvoie None (le rapport reste identique à aujourd'hui).
 """
 import hashlib
+import json
+import os
 import re
 
 # Réutilisation du parseur feed du banc YMS pour e1_head (mêmes lignes de log).
@@ -333,6 +336,51 @@ def software_versions(mcu_check_logs, image_version=None, qc_cfg_version=None):
     if qc_cfg_version:
         sv["qc_cfg_version"] = qc_cfg_version
     return sv
+
+
+# Raisons retest normées (contrat §3.3, liste figée avec le serveur en L8) :
+# l'heuristique locale est DOCUMENTEE — un rapport précédent du même
+# machine_uid existe dans qc_reports/ du pad ; la raison porte son verdict.
+RETEST_REASONS = {
+    "PASS": "previous_report_pass",
+    "FAIL": "previous_report_fail",
+    "PARTIAL": "previous_report_partial",
+}
+
+
+def previous_qc_overall(report_dir, machine_uid, exclude_date=None):
+    """Verdict (overall_result) du QC précédent le plus récent de la même
+    machine sur CE pad, None si jamais passée ici.
+
+    Heuristique locale retest (contrat §3.3) : les rapports machine sont
+    sauvegardés en JSON dans qc_reports/ (save_report) ; un rapport antérieur
+    portant le même machine_uid (UID STM32, identité machine fiable) signifie
+    que ce QC est un re-test. exclude_date = date du run courant : un rapport
+    de la MÊME session (generate_report appelé deux fois) n'est pas un retest.
+    Tolérant : répertoire absent, JSON illisible, clés manquantes -> ignorés.
+    """
+    if not machine_uid or not os.path.isdir(report_dir):
+        return None
+    uid = machine_uid.strip().upper()
+    best_date, best_overall = "", None
+    for name in os.listdir(report_dir):
+        # Les marqueurs store-and-forward "<fichier>.json.sent" ne matchent
+        # pas "*.json" (suffixe .sent) — seuls les rapports sont relus.
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(report_dir, name)) as f:
+                prev = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if str(prev.get("machine_uid", "")).strip().upper() != uid:
+            continue
+        prev_date = str(prev.get("date", ""))
+        if exclude_date and prev_date == exclude_date:
+            continue
+        if prev_date >= best_date:
+            best_date, best_overall = prev_date, prev.get("overall_result")
+    return best_overall
 
 
 def _extract_mcu_check(logs, passed, details, duration_s, timed_out):
