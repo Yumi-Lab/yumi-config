@@ -233,6 +233,16 @@ def main():
     # (tete manipulee en permanence sur le banc) ne doit pas bloquer le feed.
     cfg = replace(cfg, "min_extrude_temp: 0\n", "min_extrude_temp: -100\n", 1)
 
+    # Le pad du banc chauffe (usine, ete, KlipperScreen) : le capteur host a
+    # 100C declenche des shutdowns en pleine sequence (vecu : 100.3C -> faux
+    # FAIL thermique). L'Allwinner H3 throttle tout seul bien avant sa limite
+    # de jonction -> 110C sur le banc, la vraie parade reste la ventilation.
+    cfg = replace(
+        cfg,
+        "[temperature_sensor NanoPi]\nsensor_type: temperature_host\nmin_temp: 0\nmax_temp: 100\n",
+        "[temperature_sensor NanoPi]\nsensor_type: temperature_host\nmin_temp: 0\nmax_temp: 110\n",
+        1)
+
     # Micro-decrochages de l'encodeur (glissiere qui se repositionne a sa
     # butee a l'inversion de sens) : logges sur YMS-1/2 aussi (les capteurs
     # generes des hyperdrives l'ont deja). Logge, PAS eliminatoire — le FAIL
