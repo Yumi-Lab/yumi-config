@@ -32,7 +32,8 @@ class TestBuildBoxReport(unittest.TestCase):
             "duration_seconds", "overall_result", "failed_tests",
             "skipped_tests", "qc_model", "yumi_config", "machine_uid",
             "pad_mac", "bench_position", "bench_slot", "bench_session",
-            "bench_total", "measures", "tests",
+            "bench_total",
+            "extruder_model", "spring_model", "measures", "tests",
         })
         self.assertEqual(r["bench_position"], 6)
         self.assertEqual(r["bench_slot"], "hyperdrive_uart:4")

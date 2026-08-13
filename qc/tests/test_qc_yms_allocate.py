@@ -71,7 +71,7 @@ class TestAllocateYmsCodes(unittest.TestCase):
         )
         self.assertEqual(token_header, "tok")
         body = json.loads(AllocHandler.last_body)
-        self.assertEqual(body, {"model": "light", "count": 2})
+        self.assertEqual(body, {"model": "light", "count": 2, "yms_version": "1.0"})
 
     def test_ok_unitary_yms_id(self):
         AllocHandler.response = {

@@ -100,6 +100,30 @@ def device_for_model(model):
     return qc_model, "device=%s" % qc_model, prefix
 
 
+BENCH_CONFIG_DEFAULTS = {
+    "yms_version": "1.0",
+    "extruder_model": "",
+    "spring_model": "",
+}
+
+
+def load_bench_config(path):
+    """Config banc (contrat v1.5) : version PRODUIT des boîtiers testés +
+    références EXACTES des composants montés (traçabilité). Fichier JSON
+    éditable opérateur ; absent/illisible -> défauts (repli serveur V1.0).
+    """
+    cfg = dict(BENCH_CONFIG_DEFAULTS)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        for key in cfg:
+            if isinstance(data.get(key), str) and data[key].strip():
+                cfg[key] = data[key].strip()
+    except Exception:
+        pass
+    return cfg
+
+
 def load_disabled_positions(path):
     """Charge la liste des positions banc désactivées depuis un JSON.
 
@@ -212,7 +236,8 @@ def yms_code_for_position(pos, yms_ids, disabled=None):
 def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
-                     started=None, now=None):
+                     started=None, now=None,
+                     extruder_model="", spring_model=""):
     """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.4).
 
     Args:
@@ -266,6 +291,8 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
         "bench_slot": bench_slots[pos - 1],
         "bench_session": session,
         "bench_total": bench_total,
+        "extruder_model": extruder_model,
+        "spring_model": spring_model,
         "measures": extract_measures(logs, passed),
         "tests": [
             {
@@ -290,7 +317,8 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
     }
 
 
-def allocate_yms_codes(url, token, count, model, timeout=15, result="pass"):
+def allocate_yms_codes(url, token, count, model, timeout=15, result="pass",
+                       yms_version="1.0"):
     """POST /api/qc/yms/allocate {"model","count"[,"result"]} -> (ids, erreur).
 
     v1.4 : l'allocation se fait en FIN de test, unitaire. result="fail" ->
@@ -305,7 +333,7 @@ def allocate_yms_codes(url, token, count, model, timeout=15, result="pass"):
         return None, "Token QC manquant"
     # v1.3+ : mode nominal = UNITAIRE (sans count). Le mode groupe (count
     # present) est deprecie — encore servi par le serveur, ne plus l'utiliser.
-    body = {"model": model}
+    body = {"model": model, "yms_version": yms_version}
     if count != 1:
         body["count"] = count
     if result != "pass":
@@ -363,7 +391,7 @@ def build_label_tspl(report):
             'TEXT 16,54,"2",0,1,1,"%s"' % qc_model,
             'TEXT 16,84,"1",0,1,1,"%s"' % date,
             'QRCODE 90,112,M,4,A,0,"%s"' % url,
-            'TEXT 92,282,"1",0,1,1,"%s"' % code,
+            'TEXT 24,282,"1",0,1,1,"%s"' % code,
         ]
     else:
         pos = report.get("bench_position", "?")
@@ -374,7 +402,7 @@ def build_label_tspl(report):
             'TEXT 16,104,"1",0,1,1,"%s"' % reason[:28],
             'TEXT 16,128,"1",0,1,1,"%s"' % date,
             'QRCODE 90,152,M,3,A,0,"%s"' % url,
-            'TEXT 92,282,"1",0,1,1,"%s"' % code,
+            'TEXT 24,282,"1",0,1,1,"%s"' % code,
         ]
     return ("\r\n".join(head + body + ["PRINT 1,1"]) + "\r\n").encode(
         "ascii", "replace")

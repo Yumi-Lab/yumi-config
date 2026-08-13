@@ -70,6 +70,7 @@ try:
         build_yms_tests,
         enabled_positions,
         extract_measures,
+        load_bench_config,
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
@@ -92,6 +93,7 @@ except ImportError:
         build_yms_tests,
         enabled_positions,
         extract_measures,
+        load_bench_config,
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
@@ -120,6 +122,7 @@ class Panel(ScreenPanel):
         self._restart_retries = 0
         self._selected_size = QC_SIZES[0]
         self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
+        self._bench_config = {}     # v1.5 : yms_version + composants montés
         self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
@@ -730,13 +733,17 @@ class Panel(ScreenPanel):
     def _allocate_yms_codes(self, count, model, result="pass"):
         """Adaptateur autour du client d'allocation pur qc_yms.allocate_yms_codes."""
         token = self._qc_token()
-        return allocate_yms_codes(QC_YMS_ALLOCATE_URL, token, count, model,
-                                  result=result)
+        return allocate_yms_codes(
+            QC_YMS_ALLOCATE_URL, token, count, model, result=result,
+            yms_version=(self._bench_config or {}).get("yms_version", "1.0"))
 
     def _yms_start_sequence(self, printer_id):
         """Main thread : démarre la séquence 12 positions (slots HS sautés)."""
         slots_path = os.path.join(CONFIG_DIR, "qc_bench_slots.json")
         self._disabled_positions = load_disabled_positions(slots_path)
+        # v1.5 : version produit + composants montés (fichier éditable opérateur)
+        self._bench_config = load_bench_config(
+            os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
         self._bench_session = "%s-%s" % (printer_id,
                                          datetime.now().strftime("%Y%m%d-%H%M"))
@@ -793,6 +800,9 @@ class Panel(ScreenPanel):
         # v1.4 : pas d'allocation en amont — le nouveau code (re-test = code
         # NEUF, jamais réutilisé) est demandé en fin de test comme en séquence.
         logger.info("QC YMS: re-test %s", test_id)
+        if not self._bench_config:
+            self._bench_config = load_bench_config(
+                os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._build_running_screen()
         self.engine.start(printer_id, model=self._selected_size)
         pos = position_from_test_id(self._yms_retest_test_id)
@@ -1014,6 +1024,8 @@ class Panel(ScreenPanel):
             bench_slots=YMS_BENCH_SLOTS,
             started=self._box_started.get(test_id) or datetime.now(),
             now=datetime.now(),
+            extruder_model=(self._bench_config or {}).get("extruder_model", ""),
+            spring_model=(self._bench_config or {}).get("spring_model", ""),
         )
 
     @staticmethod
