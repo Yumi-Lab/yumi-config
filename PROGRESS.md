@@ -17,7 +17,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   "sandbox": true sur https://qc.yumi-lab.com/api/qc/report (token lu du pad ou
   d'un fichier local .env) et verifie l'ack. Tests unitaires du rapport sans
   technician.
-- [ ] **L3 — Module pur qc_machine_measures.py (3 tests pilotes).** Extraction
+- [x] **L3 — Module pur qc_machine_measures.py (3 tests pilotes).** Extraction
   measures + fail_reason pour z_tap_calib (taps_mm[], spread_mm, tolerance_mm,
   n_taps, converged_n), heat_bed (target_c, reached_c, ramp_s, stable) et
   home_x/home_y (retries, duration_s si mesurable) depuis les logs captures par
@@ -137,3 +137,42 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     consommé avant réponse), pas masqué par un retry. Ne prouve rien sur la
     prod ni sur un pad réel.
   Prochain lot : L3 (module pur qc_machine_measures.py, 3 tests pilotes).
+
+- **L3 (13/08) — FAIT.** Nouveau module pur `qc/qc_machine_measures.py`
+  (aucun import GTK, style `qc_yms.extract_measures`) :
+  `extract_measures(test_id, logs, passed, details, duration_s, timed_out)`
+  → dict measures (fail_reason inclus, style YMS) ou `None` si le test n'a
+  pas d'extracteur (additif : rapport inchangé pour ce test). Extracteurs :
+  - `z_tap_calib` : relit le verdict déjà calculé par l'engine dans `details`
+    (taps_mm[], spread_mm, tolerance_mm, n_taps, converged_n) ; repli =
+    re-calcul fenêtré depuis les `VALIDATED: trigger_z=` du log
+    (`_best_window_spread`, même algorithme cluster trié que qc_engine) ;
+    fail_reason `tap_not_converging` / `too_few_taps`.
+  - `home_x`/`home_y` : parse des lignes réelles yumi_sensorless_homing.py
+    (sg_thrs, taps valides/rejetés, spread_mm, tolerance_mm, zero_pos_mm,
+    duration_s engine) ; fail_reason `endstop_not_triggered` (répétabilité
+    NON établie / aucun contact), `spread_too_wide`, `tmc_error`.
+  - `heat_bed` : target_c=60 (défaut macro QC_HEAT_BED), ramp_s=durée engine,
+    reached_c/stable=None tant que l'instrumentation `HEAT_OK` n'existe pas
+    (parse forward-compatible déjà en place) ; fail_reason `thermal_runaway`
+    (ligne verify_heater) / `thermal_timeout` (défaut).
+  - Commun : signature DRV_STATUS → `tmc_error` ; FAIL sans signature →
+    `timeout` (ou `unknown_fail` si l'engine sait que ce n'est PAS un
+    timeout). Constantes window/tol Z NON importées de qc_engine (import
+    circulaire à venir en L4) : relues depuis `details`, défauts documentés.
+  Tests : `qc/tests/test_qc_machine_measures.py`, 22 tests, fixtures = logs
+  RÉELS de docs/AUDIT-MESURES.md (verdicts engine, lignes klippy verbatim).
+  PROOF:
+  - cmd: `./verify.sh 2>&1 | tail -8`
+  - sortie (dernières lignes): `Ran 65 tests in 7.578s` / `OK` /
+    `verify.sh: PASS`
+  - critère numérique: 65/65 tests unittest verts (43 avant L3, +22
+    nouveaux), 4/4 étapes verify.sh OK.
+  - attribution: python3 local macOS, branche qc-machines-dev @ 6e1a225+.
+    VARIED: qc/qc_machine_measures.py (nouveau),
+    qc/tests/test_qc_machine_measures.py (nouveau) / HELD FIXED:
+    qc_engine.py, qc_yms.py, qc_wizard.py, macros, klippy extras, verify.sh.
+  - WHAT THIS DOES NOT SAY: extraction pure sur logs simulés en fixtures —
+    ne prouve PAS que l'engine attache measures au rapport (lot L4) ni que
+    la prod les accepte (lot L9). Ne prouve rien sur un pad réel.
+  Prochain lot : L4 (engine : bloc measures par entrée tests[]).
