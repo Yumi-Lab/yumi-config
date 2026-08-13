@@ -126,6 +126,7 @@ class Panel(ScreenPanel):
         self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
+        self._box_reports = {}      # position -> rapport envoyé (carte + réimpression)
 
         # Build the UI
         self._build_start_screen()
@@ -471,6 +472,31 @@ class Panel(ScreenPanel):
         )
         main_box.pack_start(info_label, False, False, 5)
 
+        # ── BANC YMS : carte des positions (vert = PASS, rouge = FAIL,
+        # gris = non testé) — un appui sur un carré RÉIMPRIME l'étiquette du
+        # boîtier (mal collée, déchirée...), PASS comme FAIL. ──
+        if self._selected_size.upper().startswith("YMS") and self._box_reports:
+            pos_grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+            pos_grid.set_halign(Gtk.Align.CENTER)
+            for pos in range(1, YMS_BENCH_TOTAL + 1):
+                rep = self._box_reports.get(pos)
+                if rep is None:
+                    sq = self._gtk.Button(None, str(pos), None)
+                    sq.set_sensitive(False)
+                else:
+                    passed = rep.get("overall_result") == "PASS"
+                    sq = self._gtk.Button(None, str(pos),
+                                          "color3" if passed else "color2")
+                    sq.connect("clicked", self._on_reprint_label, pos)
+                sq.set_size_request(58, 50)
+                pos_grid.attach(sq, (pos - 1) % 6, (pos - 1) // 6, 1, 1)
+            main_box.pack_start(pos_grid, False, False, 4)
+            reprint_hint = Gtk.Label()
+            reprint_hint.set_markup(
+                "<span size='small' foreground='#9E9E9E'>"
+                "触摸方块重印标签 / toucher un carré = réimprimer l'étiquette</span>")
+            main_box.pack_start(reprint_hint, False, False, 2)
+
         # Test results grid (scrollable)
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -745,6 +771,7 @@ class Panel(ScreenPanel):
         self._bench_config = load_bench_config(
             os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
+        self._box_reports = {}
         self._bench_session = "%s-%s" % (printer_id,
                                          datetime.now().strftime("%Y%m%d-%H%M"))
         logger.info("QC YMS: séquence %s (modèle %s), slots hors service %s",
@@ -1063,6 +1090,7 @@ class Panel(ScreenPanel):
         # UTC d'envoi : permet au serveur de recaler l'heure usine et de
         # mesurer la derive d'horloge du pad (received_at - sent_at_utc).
         report["sent_at_utc"] = datetime.now(timezone.utc).isoformat()
+        self._box_reports[pos] = report   # carte des positions + réimpression
         no_code = yms_id.startswith("NOCODE-")
         path = ""
         try:
@@ -1091,6 +1119,16 @@ class Panel(ScreenPanel):
             " — 标签 ✓" if lok else "")
         logger.info("QC YMS: %s (%s / %s)", note, msg, lmsg)
         GLib.idle_add(self._screen.show_popup_message, note, 1 if ok else 2)
+
+    def _on_reprint_label(self, widget, pos):
+        """Réimprime l'étiquette du boîtier testé (depuis l'écran résumé)."""
+        rep = self._box_reports.get(pos)
+        if not rep:
+            return
+        ok, msg = self._print_qc_label(rep)
+        self._screen.show_popup_message(
+            "YMS-%d: 标签已重印 / étiquette réimprimée ✓" % pos if ok
+            else "YMS-%d: %s" % (pos, msg), level=1 if ok else 3)
 
     # ─── ÉTIQUETTE QC (POS80L branchée au pad, TSPL brut) ──────────────
     # v1 locale : texte + QR vers la page rapport. Le format définitif
