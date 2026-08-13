@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -638,8 +639,49 @@ class Panel(ScreenPanel):
 
         self._build_running_screen()
         test = self.engine.start(printer_id, model=self._selected_size)
+        self._start_gcode_poller()
         if test:
             self._run_test(test)
+
+    # ─── FILET ANTI-PERTE DE SIGNAUX (gcode_store poller) ──────────────
+    # Vécu au gate banc : après un shutdown Klipper (erreur TMC) + restart,
+    # KlipperScreen masque ce panel et process_update ne lui livre plus les
+    # réponses gcode -> un PASS réel a été raté et le test est parti en faux
+    # FAIL par timeout. Ce thread relit le gcode_store Moonraker et REJOUE
+    # chaque réponse dans l'engine : la voie GTK reste en place, l'engine
+    # déduplique (logs identiques ignorés, signaux d'un test non courant
+    # ignorés), donc la double livraison est sans effet.
+
+    def _start_gcode_poller(self):
+        self._stop_gcode_poller()
+        self._poller_stop = threading.Event()
+        threading.Thread(target=self._gcode_poller_worker,
+                         args=(self._poller_stop,), daemon=True).start()
+
+    def _stop_gcode_poller(self):
+        if getattr(self, "_poller_stop", None):
+            self._poller_stop.set()
+            self._poller_stop = None
+
+    def _gcode_poller_worker(self, stop):
+        # Ne rejoue que les lignes POSTERIEURES au demarrage du run : le
+        # buffer Moonraker garde les signaux des runs precedents, qui
+        # completeraient faussement le test courant.
+        last = time.time()
+        while not stop.wait(2.0):
+            try:
+                with urllib.request.urlopen(
+                        "http://127.0.0.1:7125/server/gcode_store?count=60",
+                        timeout=3) as r:
+                    entries = json.loads(
+                        r.read().decode())["result"]["gcode_store"]
+            except Exception:
+                continue
+            for g in entries:
+                if g.get("type") == "response" and g.get("time", 0) > last:
+                    last = g["time"]
+                    GLib.idle_add(self.engine.process_gcode_response,
+                                  g.get("message", ""))
 
     def _show_yms_model_selector(self, printer_id):
         """Dialogue 2 gros boutons LIGHT / PRO avant allocation YMS."""
