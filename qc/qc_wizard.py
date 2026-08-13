@@ -768,6 +768,7 @@ class Panel(ScreenPanel):
                 "details": "",
             }
         self.engine.current_test_index = -1
+        self._start_gcode_poller()
         test = self.engine.next_test()
         if test:
             self._run_test(test)
@@ -833,6 +834,7 @@ class Panel(ScreenPanel):
                 "details": "",
             }
         self.engine.current_test_index = -1
+        self._start_gcode_poller()
         test = self.engine.next_test()
         if test:
             self._run_test(test)
@@ -985,6 +987,7 @@ class Panel(ScreenPanel):
 
     def _on_qc_complete(self, report):
         self._cancel_timeout()
+        self._stop_gcode_poller()
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
         # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
