@@ -336,7 +336,8 @@ def build_label_tspl(report):
     """Génère le TSPL brut de l'étiquette QC (58x37 mm) pour imprimante POS80L.
 
     v1.4 : une étiquette à CHAQUE test (aucun décalage possible dans la pile
-    de boîtiers). PASS -> étiquette numéro de série (code + QR). FAIL ->
+    de boîtiers). Média 39x39 mm (312x312 dots @203dpi), recalage SHIFT +8 (1mm)
+    validé au cadre le 13/08. PASS -> étiquette numéro de série (code + QR). FAIL ->
     étiquette de REJET : position banc en gros, raison, code QCFL- + QR de
     traçabilité (jamais utilisée comme numéro de série).
 
@@ -349,30 +350,31 @@ def build_label_tspl(report):
     date = (report.get("date_end") or "")[:16].replace("T", " ")
     url = "%s%s" % (QC_REPORT_URL_BASE, code)
     head = [
-        "SIZE 58 mm,37 mm",
+        "SIZE 39 mm,39 mm",
         "GAP 2 mm,0 mm",
         "DIRECTION 1",
+        "SHIFT 8",
         "SET PEEL ON",
         "CLS",
     ]
     if overall == "PASS":
         body = [
-            'TEXT 16,16,"4",0,1,1,"QC PASS"',
-            'TEXT 16,64,"2",0,1,1,"%s"' % qc_model,
-            'TEXT 16,96,"2",0,1,1,"%s"' % date,
-            'TEXT 16,200,"1",0,1,1,"%s"' % code,
-            'QRCODE 290,40,M,4,A,0,"%s"' % url,
+            'TEXT 16,14,"4",0,1,1,"QC PASS"',
+            'TEXT 16,54,"2",0,1,1,"%s"' % qc_model,
+            'TEXT 16,84,"1",0,1,1,"%s"' % date,
+            'QRCODE 90,112,M,4,A,0,"%s"' % url,
+            'TEXT 92,282,"1",0,1,1,"%s"' % code,
         ]
     else:
         pos = report.get("bench_position", "?")
         reason = str((report.get("measures") or {}).get("fail_reason") or "")
         body = [
-            'TEXT 16,16,"4",0,1,1,"QC FAIL"',
-            'TEXT 16,64,"4",0,1,1,"POSITION %s"' % pos,
-            'TEXT 16,116,"2",0,1,1,"%s"' % reason[:28],
-            'TEXT 16,148,"2",0,1,1,"%s"' % date,
-            'TEXT 16,200,"1",0,1,1,"%s"' % code,
-            'QRCODE 320,110,M,3,A,0,"%s"' % url,
+            'TEXT 16,14,"4",0,1,1,"QC FAIL"',
+            'TEXT 16,56,"4",0,1,1,"POSITION %s"' % pos,
+            'TEXT 16,104,"1",0,1,1,"%s"' % reason[:28],
+            'TEXT 16,128,"1",0,1,1,"%s"' % date,
+            'QRCODE 90,152,M,3,A,0,"%s"' % url,
+            'TEXT 92,282,"1",0,1,1,"%s"' % code,
         ]
     return ("\r\n".join(head + body + ["PRINT 1,1"]) + "\r\n").encode(
         "ascii", "replace")
