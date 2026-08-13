@@ -77,6 +77,11 @@ class TestSandboxMachineReport(unittest.TestCase):
     def test_http_error_returns_code_and_body(self):
         class Boom(AckHandler):
             def do_POST(self):
+                # Lire le corps AVANT la réponse : sinon la connexion HTTP/1.0
+                # se ferme avec le body non lu en buffer -> RST TCP -> le
+                # client peut lever ConnectionResetError avant d'avoir lu la
+                # réponse (miroir de AckHandler.do_POST).
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 self.send_response(422)
                 self.end_headers()
                 self.wfile.write(b'{"error":"bad payload"}')

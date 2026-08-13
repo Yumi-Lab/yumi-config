@@ -112,3 +112,28 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     — validé contre un mock local seulement (aucun token ici) ; l'E2E prod est
     le lot L9. Ne prouve rien sur un pad réel.
   Prochain lot : L3 (module pur qc_machine_measures.py, 3 tests pilotes).
+
+- **L2 — FIX REVIEW (13/08).** Blocker du verdict CHANGES_REQUESTED (head
+  d39c25e) : test flaky `test_http_error_returns_code_and_body` (3 échecs/5
+  runs isolés, échec systématique en run complet). Root cause confirmée :
+  `Boom.do_POST` envoyait la 422 SANS lire le corps du POST -> fermeture
+  HTTP/1.0 avec body en buffer -> RST TCP -> `e.read()` levait parfois
+  ConnectionResetError(54). Fix : première ligne de `Boom.do_POST` =
+  `self.rfile.read(int(self.headers.get("Content-Length", 0)))` (miroir de
+  `AckHandler.do_POST`), commentaire justifiant. AUCUN code produit touché
+  (harnais de test uniquement).
+  PROOF:
+  - cmd1: `for i in 1 2 3 4 5; do python3 -m unittest qc.tests.test_sandbox_machine; done`
+    -> 5 runs consecutifs `Ran 3 tests in ~2.0s` / `OK` (5/5).
+  - cmd2: `for i in 1 2 3 4 5; do ./verify.sh; done` -> 5 runs consecutifs
+    `Ran 43 tests in ~7.0-7.6s` / `OK` / `verify.sh: PASS` (5/5).
+  - critère numérique: 43/43 tests verts sur 5 runs complets consécutifs, 0
+    échec (avant : 1 échec systématique par run complet).
+  - attribution: python3 local macOS, même HEAD d39c25e + ce fix seul.
+    VARIED: qc/tests/test_sandbox_machine.py (Boom.do_POST lit le body) /
+    HELD FIXED: qc/*.py, scripts/sandbox_machine_test.py, verify.sh, macros.
+  - WHAT THIS DOES NOT SAY: 5 runs ne garantissent pas l'absence absolue de
+    flake ; le mécanisme RST est toutefois supprimé à la source (body toujours
+    consommé avant réponse), pas masqué par un retry. Ne prouve rien sur la
+    prod ni sur un pad réel.
+  Prochain lot : L3 (module pur qc_machine_measures.py, 3 tests pilotes).
