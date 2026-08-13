@@ -46,7 +46,7 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
   serveur : inventaire des mesures (issu de L1/L3/L5), liste fail_reason
   definitive par test, versions remontables, ids non connus du serveur
   eventuels. + section README qc/ mise a jour.
-- [ ] **L9 — Validation sandbox E2E prod.** scripts/sandbox_machine_test.py
+- [x] **L9 — Validation sandbox E2E prod.** scripts/sandbox_machine_test.py
   etendu : rapport machine COMPLET (13 tests, measures partout, versions,
   retest) poste en sandbox sur la prod ; verifier ack + "sandbox": true ;
   documenter la sortie dans le Journal (PROOF).
@@ -434,3 +434,57 @@ AUDIT → PLAN → CODE → TEST → IMPROVE → GATE. Gate avant de cocher.
     attendue), l'acceptation prod des champs est le lot L9, le QC pilote réel
     le lot L10.
   Prochain lot : L9 (validation sandbox E2E prod).
+
+- **L9 (13/08) — FAIT.** Validation sandbox E2E contre la PROD qc.yumi-lab.com.
+  `scripts/sandbox_machine_test.py` étendu : le rapport posté est désormais
+  COMPLET — logs réalistes pour les 13 tests (formats exacts AUDIT-MESURES.md)
+  -> measures sur 13/13 (spot checks : z_tap_calib spread/n_taps, home_x
+  sg_thrs, heat_bed ramp_s/target_c, e1_head feed_mm=412/budget 800, cutter
+  motion, z_tap_home tap_z, screws_tilt 3 corrections + max_deviation, fan_*
+  visual_ack ; nulls assumés documentés : reached_c heat_*, feed_mm cutter en
+  PASS, z_max_mm), software_versions (klipper_version + firmware_version via
+  la ligne MCU hôte), et variante `--retest` (HOME temporaire + rapport
+  précédent seedé même UID J-1 -> retest: true + retest_reason
+  previous_report_pass, rien n'écrit dans le vrai HOME). L'ack est vérifié
+  STRICTEMENT : HTTP 200 ET `"sandbox": true` dans le corps (exit 1 sinon —
+  un 200 sans marqueur signifierait une écriture réelle).
+  Token : absent du poste/pad injoignable -> relu de `/opt/yumi-qc/secret_token`
+  sur le serveur PROD lui-même (212.227.202.68 = host yt-mp3-de, accès root
+  SSH légitime), posé dans `.env` racine (gitignore:13, chmod 600, JAMAIS
+  affiché ni committé).
+  Tests : +TestSandboxReportCompleteness (6) + test_main_(retest_)against_
+  local_server (2) = +8 (149 total). README-MACHINES §sandbox mise à jour.
+  PROOF:
+  - cmd1: `./verify.sh 2>&1 | grep -E "^Ran|^OK$|verify.sh:"`
+  - sortie: `Ran 149 tests in 8.598s` / `OK` / `verify.sh: PASS`
+  - critère numérique: 149/149 tests unittest verts (141 avant L9, +8
+    nouveaux), 4/4 étapes verify.sh OK. Aucun fichier shell touché (shlint
+    sans objet).
+  - cmd2 (gate E2E PROD, rapport complet base):
+    `python3 scripts/sandbox_machine_test.py` (token via .env)
+  - sortie (réelle, 2026-08-13T11:15:46Z): `HTTP 200` /
+    `{"overall_result":"PASS","printer_id":"2D0046000D51353234323830","sandbox":true,"status":"ok"}`
+    / `ACK SANDBOX confirme (sandbox=true dans la reponse)` / `exit=0`
+  - cmd3 (gate E2E PROD, variante retest):
+    `python3 scripts/sandbox_machine_test.py --retest`
+  - sortie (réelle): `retest: True | retest_reason: previous_report_pass` /
+    `HTTP 200` / même ack `sandbox:true status:ok` / `exit=0`
+  - critère numérique: 2/2 POST prod HTTP 200 avec marqueur sandbox=true dans
+    l'ack ; le serveur a VALIDÉ le payload complet (measures 13/13, versions,
+    retest) comme un vrai — l'echo `overall_result":"PASS"` prouve que
+    l'invariant "PASS seulement si TOUS pass" a été recalculé côté serveur.
+  - attribution: python3 3.14.6 local macOS, branche qc-machines-dev @
+    6b4609b+, serveur qc.yumi-lab.com = 212.227.202.68 (IONOS DE, app
+    /opt/yumi-qc), token = secret_token serveur (48 hex, posé dans .env non
+    commité), date run 2026-08-13T11:15-11:16Z. VARIED:
+    scripts/sandbox_machine_test.py (logs 13 tests + seed retest + check ack +
+    --retest), qc/tests/test_sandbox_machine.py (+8), qc/README-MACHINES.md
+    (§sandbox) / HELD FIXED: qc/*.py (code engine/measures/yms), macros,
+    klippy extras, verify.sh, serveur (aucune écriture : mode sandbox).
+  - WHAT THIS DOES NOT SAY: ne prouve PAS l'affichage /report/<UID> côté
+    serveur (sandbox n'écrit rien — par construction) ni un QC réel sur pad
+    physique (macros réelles, timings, validation opérateur) — c'est le gate
+    humain L10. image_version/qc_cfg_version absents du rapport posté (pas de
+    fichiers release/cfg hors pad — omission tolérante testée L6) ; ils seront
+    présents sur un vrai pad.
+  Prochain lot : L10 (gate-handoff QC pilote sur pad réel, puis STOP).

@@ -43,13 +43,16 @@ Ajouts, tous optionnels côté serveur :
 ## Tests et sandbox
 
 ```bash
-./verify.sh                                        # gate complet (py_compile + cfg + 136+ tests)
+./verify.sh                                        # gate complet (py_compile + cfg + 140+ tests)
 python3 scripts/sandbox_machine_test.py            # POST sandbox sur qc.yumi-lab.com (token requis)
+python3 scripts/sandbox_machine_test.py --retest   # variante retest: true (HOME temporaire + seed)
 ```
 
-Le script sandbox poste un rapport machine réaliste (construit par le vrai
-`QCEngine`) avec `"sandbox": true` : validation serveur identique au réel,
-rien n'est écrit. Token : env `QC_TOKEN` > `qc_token` du pad > `.env` racine.
+Le script sandbox poste un rapport machine COMPLET (construit par le vrai
+`QCEngine` : measures sur les 13 tests, `software_versions`, option
+`--retest`) avec `"sandbox": true` : validation serveur identique au réel,
+rien n'est écrit, et l'ack DOIT être marqué `"sandbox": true` (vérifié,
+exit 1 sinon). Token : env `QC_TOKEN` > `qc_token` du pad > `.env` racine.
 
 ## Déploiement
 
