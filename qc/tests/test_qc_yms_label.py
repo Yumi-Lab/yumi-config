@@ -1,10 +1,21 @@
 import unittest
+from unittest import mock
 
 from qc.qc_yms import build_label_tspl
 
+# build_label_tspl delegue a render_qc_tspl.render_qc_label(), qui fetch en direct le
+# gabarit LIVE sur label.yumi-lab.com avant de retomber sur les defauts embarques (meme
+# principe que render_plaque.py pour la plaque M3). Ces tests verifient le comportement
+# du gabarit PAR DEFAUT — ils doivent donc etre isoles du reseau/de l'etat prod (sinon un
+# vrai design sauve par Nicolas sur le site fait echouer des assertions qui ne le
+# concernent pas). On force le fetch a echouer (comme si le reseau etait injoignable),
+# ce que le code gere deja normalement (repli silencieux).
+_NO_LIVE_TEMPLATE = mock.patch("qc.render_qc_tspl.load_template", return_value=None)
 
+
+@_NO_LIVE_TEMPLATE
 class TestBuildLabelTspl(unittest.TestCase):
-    def test_label_bytes_crlf_and_qr(self):
+    def test_label_bytes_crlf_and_qr(self, _mock_load_template):
         report = {
             "overall_result": "PASS",
             "printer_id": "YMSL-042",
@@ -29,7 +40,7 @@ class TestBuildLabelTspl(unittest.TestCase):
         self.assertIn('QRCODE', text)
         self.assertIn("PRINT 1,1", text)
 
-    def test_ascii_safe(self):
+    def test_ascii_safe(self, _mock_load_template):
         report = {
             "overall_result": "FAIL",
             "printer_id": "YMSP-999",
@@ -41,15 +52,12 @@ class TestBuildLabelTspl(unittest.TestCase):
         tspl.decode("ascii")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
+@_NO_LIVE_TEMPLATE
 class TestLabelFail(unittest.TestCase):
     """v1.4 : etiquette de REJET systematique pour un FAIL (position + raison
     + code QCFL-), jamais utilisee comme numero de serie."""
 
-    def test_fail_label_layout(self):
+    def test_fail_label_layout(self, _mock_load_template):
         report = {
             "printer_id": "QCFL-QJTVY-FKZDF",
             "overall_result": "FAIL",
@@ -66,7 +74,7 @@ class TestLabelFail(unittest.TestCase):
         self.assertIn("QRCODE", tspl)
         self.assertIn("https://qc.yumi-lab.com/report/QCFL-QJTVY-FKZDF", tspl)
 
-    def test_pass_label_unchanged(self):
+    def test_pass_label_unchanged(self, _mock_load_template):
         report = {
             "printer_id": "YMSL-7K3MQ-X2R9F",
             "overall_result": "PASS",
@@ -78,3 +86,7 @@ class TestLabelFail(unittest.TestCase):
         self.assertIn('"QC PASS"', tspl)
         self.assertNotIn("POSITION", tspl)
         self.assertIn("YMSL-7K3MQ-X2R9F", tspl)
+
+
+if __name__ == "__main__":
+    unittest.main()

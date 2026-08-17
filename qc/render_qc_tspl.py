@@ -117,10 +117,19 @@ def render(section_elements, data, w_mm, h_mm):
     for e in section_elements:
         t = e.get("t")
         if t == "frame":
+            # Couvre tout rectangle QC : bordure (thick), remplissage (fill), ou les deux.
+            # TSPL n'a pas de primitive "rectangle rempli" séparée — BOX avec une épaisseur
+            # couvrant la moitié du plus petit côté remplit la boîte entière.
             x1, y1 = DOT(e["x"]), DOT(e["y"])
             x2, y2 = DOT(e["x"] + e["w"]), DOT(e["y"] + e["h"])
-            thick = max(1, DOT(e.get("thick", 0.5)))
-            out += ('BOX %d,%d,%d,%d,%d\r\n' % (x1, y1, x2, y2, thick)).encode("ascii")
+            if e.get("thick"):
+                thick = max(1, DOT(e["thick"]))
+            elif e.get("fill"):
+                thick = max(1, min(x2 - x1, y2 - y1) // 2)
+            else:
+                thick = 0
+            if thick:
+                out += ('BOX %d,%d,%d,%d,%d\r\n' % (x1, y1, x2, y2, thick)).encode("ascii")
         elif t == "line":
             x1, y1 = DOT(e["x"]), DOT(e["y"])
             x2 = DOT(e["x"] + e["w"])
