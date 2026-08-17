@@ -362,49 +362,67 @@ def allocate_yms_codes(url, token, count, model, timeout=15, result="pass",
 QC_REPORT_URL_BASE = "https://qc.yumi-lab.com/report/"
 
 
+def _failed_test_labels(report):
+    """Noms courts (anglais) des tests QC machine en échec, depuis
+    report["failed_tests"] (liste d'id) + report["tests"] (id -> name
+    bilingue "中文 / English"). Formatage des données uniquement — la
+    pagination (combien de lignes tiennent sur l'étiquette, "+N autres")
+    est la responsabilité du gabarit `list` côté renderer, pas d'ici."""
+    names_by_id = {t.get("id"): t.get("name", "") for t in report.get("tests", [])}
+    ids = report.get("failed_tests") or []
+    shown = []
+    for tid in ids:
+        name = names_by_id.get(tid, tid)
+        short = name.split("/")[-1].strip() if "/" in name else name
+        # TSPL est envoyé en ASCII pur : "°" (ex. "220°C") tournerait en
+        # "?" illisible sur l'étiquette.
+        short = short.replace("°", "")
+        shown.append((short or tid)[:26])
+    return shown
+
+
 def build_label_tspl(report):
-    """Génère le TSPL brut de l'étiquette QC (58x37 mm) pour imprimante POS80L.
+    """Génère le TSPL de l'étiquette QC pour imprimante POS80L, via le gabarit
+    template-driven (render_qc_tspl.py) — même principe que la plaque M3
+    (m3-driver/render_plaque.py, repo YUMI-POS-Printer) : layout fetché en
+    direct sur label.yumi-lab.com, éditable dans Label Expert (panneau QC
+    Factory), repli sur un défaut embarqué si injoignable.
+
+    Boîtiers YMS (qc_model commence par "YMS") : média 50x30 mm. QC machine
+    (C235/C335/C435...) : média 39x39 mm.
 
     v1.4 : une étiquette à CHAQUE test (aucun décalage possible dans la pile
-    de boîtiers). Média 39x39 mm (312x312 dots @203dpi), recalage SHIFT +8 (1mm)
-    validé au cadre le 13/08. PASS -> étiquette numéro de série (code + QR). FAIL ->
-    étiquette de REJET : position banc en gros, raison, code QCFL- + QR de
-    traçabilité (jamais utilisée comme numéro de série).
+    de boîtiers). PASS -> étiquette numéro de série (code + QR). FAIL ->
+    cadre gras (jamais confondue avec un PASS au coup d'œil) + QR (rapport
+    complet accessible malgré le rejet) : YMS -> position banc + raison ;
+    machine -> liste des tests en échec (pour savoir quoi réparer sans
+    ouvrir le rapport).
 
     Returns:
         bytes encodés en ASCII, lignes terminées par CRLF.
     """
+    from .render_qc_tspl import render_qc_label
+
     overall = report.get("overall_result", "?")
     code = report.get("printer_id", "?")
     qc_model = report.get("qc_model", "")
     date = (report.get("date_end") or "")[:16].replace("T", " ")
-    url = "%s%s" % (QC_REPORT_URL_BASE, code)
-    head = [
-        "SIZE 39 mm,39 mm",
-        "GAP 2 mm,0 mm",
-        "DIRECTION 1",
-        "SHIFT 8",
-        "SET PEEL ON",
-        "CLS",
-    ]
-    if overall == "PASS":
-        body = [
-            'TEXT 16,14,"4",0,1,1,"QC PASS"',
-            'TEXT 16,54,"2",0,1,1,"%s"' % qc_model,
-            'TEXT 16,84,"1",0,1,1,"%s"' % date,
-            'QRCODE 90,112,M,4,A,0,"%s"' % url,
-            'TEXT 24,282,"1",0,1,1,"%s"' % code,
-        ]
-    else:
-        pos = report.get("bench_position", "?")
-        reason = str((report.get("measures") or {}).get("fail_reason") or "")
-        body = [
-            'TEXT 16,14,"4",0,1,1,"QC FAIL"',
-            'TEXT 16,56,"4",0,1,1,"POSITION %s"' % pos,
-            'TEXT 16,104,"1",0,1,1,"%s"' % reason[:28],
-            'TEXT 16,128,"1",0,1,1,"%s"' % date,
-            'QRCODE 90,152,M,3,A,0,"%s"' % url,
-            'TEXT 24,282,"1",0,1,1,"%s"' % code,
-        ]
-    return ("\r\n".join(head + body + ["PRINT 1,1"]) + "\r\n").encode(
-        "ascii", "replace")
+    is_yms = qc_model.upper().startswith("YMS")
+    kind = "yms" if is_yms else "machine"
+    section = "pass" if overall == "PASS" else "fail"
+
+    data = {
+        "overall_result": overall,
+        "code": code,
+        "qc_model": qc_model,
+        "date": date,
+        "qr": "%s%s" % (QC_REPORT_URL_BASE, code),
+    }
+    if section == "fail":
+        if is_yms:
+            data["bench_position"] = report.get("bench_position", "?")
+            data["fail_reason"] = str((report.get("measures") or {}).get("fail_reason") or "")
+        else:
+            data["failed_tests"] = _failed_test_labels(report)
+
+    return render_qc_label(kind, section, data)
