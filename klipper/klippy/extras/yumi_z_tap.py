@@ -18,6 +18,11 @@ class ZTap:
         self.probe_delay = config.getfloat("probe_delay", 0.5)  # seconds
         self.safe_z = config.getfloat("safe_z", 10.0)
         self.travel_speed = config.getfloat("travel_speed", 30.0)
+        # Acceleration Z dediee a la descente de tap (mm/s^2), scopee
+        # strictement a cette phase via save/restore autour du probe -- ne
+        # touche jamais le max_z_accel des impressions/autres mouvements.
+        # 0 = ne rien changer (herite le max_z_accel global de la kinematique).
+        self.tap_accel = config.getfloat("tap_accel", 0., minval=0.)
         # Nb max de dwell pour attendre que le switch repasse OUVERT avant de
         # relancer une descente (anti "Probe triggered prior to movement").
         self.settle_retries = config.getint("settle_retries", 10)
@@ -94,6 +99,9 @@ class ZTap:
                                               self.samples_tolerance, above=0.)
         # SPEED overrides the probe descent speed (mm/s) for this call.
         self.active_speed = gcmd.get_float('SPEED', None, above=0.)
+        # ACCEL overrides tap_accel (mm/s^2) for this call. 0 = tap_accel
+        # config value (0 = ne rien changer, herite le max_z_accel global).
+        self.active_accel = gcmd.get_float('ACCEL', self.tap_accel, minval=0.)
         # Point de tap par defaut :
         #  - tap_at_bed_mesh_zero_position=True -> [bed_mesh]
         #    zero_reference_position (source unique, Z=0 pile sur le zero du
@@ -171,11 +179,21 @@ class ZTap:
         # fasse jamais son retract inter-echantillon (non clampe), qui peut
         # depasser position_max sur un faux trigger haut.
         probe_pressure.sample_count = 1
+        # tap_accel/ACCEL= : ralentit uniquement la RAMPE d'acceleration de
+        # la descente de tap (le probing_move de probe_pressure passe par le
+        # move planner standard, qui applique max_z_accel de la kinematique
+        # a tout mouvement Z pur -- pas de parametre d'accel dedie cote
+        # probing_move, donc on le fait ici en encadrant l'appel).
+        kin = toolhead.get_kinematics()
+        saved_max_z_accel = kin.max_z_accel
+        if self.active_accel > 0:
+            kin.max_z_accel = self.active_accel
         try:
             self._probe_with_pressure_switch(gcmd)
         finally:
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
+            kin.max_z_accel = saved_max_z_accel
 
         # Validation : le maillage charge doit valoir ~0 a la coordonnee du tap
         self._validate_mesh_zero(gcmd)

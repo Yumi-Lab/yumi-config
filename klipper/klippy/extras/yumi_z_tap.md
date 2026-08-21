@@ -47,6 +47,7 @@ samples: 3                    # Consecutive stable readings required to validate
 samples_tolerance: 0.01       # Max allowed deviation between consecutive taps (mm)
 probe_delay: 2                # Delay before first probe (ms)
 safe_z: 10                    # Final lift height above Z=0 after validation (mm)
+tap_accel: 100                 # Z accel during tap descent only (mm/s^2), 0 = unchanged
 ```
 
 ### Parameter Reference
@@ -63,6 +64,7 @@ safe_z: 10                    # Final lift height above Z=0 after validation (mm
 | `samples_tolerance` | float | 0.02 | Maximum Z deviation between consecutive taps (mm) |
 | `probe_delay` | float | 1000.0 | Delay before first probe after positioning (ms) |
 | `safe_z` | float | 10.0 | Final lift height above Z=0 after validation (mm) |
+| `tap_accel` | float | 0.0 | Z acceleration (mm/s^2) during the tap descent only, save/restored around the probe; 0 = leave the kinematics' `max_z_accel` untouched. Overridable per call with `ACCEL=` |
 
 ### Speeds (from probe_pressure)
 
