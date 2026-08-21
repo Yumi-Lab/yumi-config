@@ -204,26 +204,38 @@ def load_template(src):
         return None
 
 
-# ── Gabarits par défaut : conversion mm exacte du TSPL en dur historique de
-# qc_yms.py::build_label_tspl (dots/8 = mm). IDENTIQUES aux DEFAULTS de qc-plaque.js —
-# les deux doivent être modifiés ensemble si jamais le défaut change. ──
+# ── Gabarits par défaut : le repli quand label.yumi-lab.com est injoignable. IDENTIQUES aux
+# DEFAULTS de qc-plaque.js — les deux se modifient ENSEMBLE, sinon le pad imprime autre chose
+# que ce que l'éditeur montre le jour où le réseau tombe.
+# YMS = le standard figé par Nicolas le 2026-08-21 (logos de conformité, mention d'origine,
+# ligne d'alimentation avec le symbole courant continu). MACHINE = conversion mm du TSPL en
+# dur historique de qc_yms.py::build_label_tspl (dots/8 = mm), pas encore repris à la main. ──
 DEFAULTS = {
     "yms": {
         "pass": [
-            {"t": "qr", "x": 2, "y": 3.75, "sz": 15, "c": "{qr}"},
-            {"t": "text", "x": 22.5, "y": 1.75, "sz": 3.6, "c": "QC PASS"},
-            {"t": "text", "x": 22.5, "y": 6.25, "sz": 2.6, "c": "{qc_model}"},
-            {"t": "text", "x": 22.5, "y": 10.25, "sz": 1.6, "c": "{date}"},
-            {"t": "text", "x": 2, "y": 25.75, "sz": 1.6, "c": "{code}"},
+            {"t": "qr", "x": 2.4, "y": 7.23, "sz": 15, "c": "{qr}"},
+            {"t": "text", "x": 18.93, "y": 6.34, "sz": 3.6, "weight": "bold", "c": "QC PASS"},
+            {"t": "text", "x": 19.01, "y": 2.94, "sz": 2.6, "weight": "bold", "c": "{qc_model}"},
+            {"t": "text", "x": 2.28, "y": 22.69, "sz": 1.6, "weight": "bold", "c": "{code}"},
+            {"t": "logo", "logo": "ce", "x": 18.81, "y": 15.22, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "ukca", "x": 25.91, "y": 15.43, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "fcc", "x": 32.69, "y": 15.53, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "weee", "x": 39.98, "y": 22.5, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "rohs", "x": 40.03, "y": 15.52, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "yumi", "x": 2.12, "y": 1.2, "w": 15.82, "h": 5.29},
+            {"t": "text", "x": 2.22, "y": 24.68, "sz": 3.7, "c": "Made in china"},
+            {"t": "text", "x": 19.35, "y": 11.37, "sz": 2.38, "weight": "bold", "c": "Input :24V"},
+            {"t": "logo", "logo": "dc", "x": 34.85, "y": 11.52, "w": 3.0, "h": 2.2},
+            {"t": "text", "x": 38.35, "y": 11.37, "sz": 2.38, "weight": "bold", "c": "2A"},
         ],
         "fail": [
             {"t": "frame", "x": 0.5, "y": 0.5, "w": 49, "h": 29, "thick": 0.75},
-            {"t": "qr", "x": 2.5, "y": 4.25, "sz": 12, "c": "{qr}"},
-            {"t": "text", "x": 23, "y": 1.5, "sz": 3.6, "c": "QC FAIL"},
-            {"t": "text", "x": 23, "y": 6, "sz": 3.6, "c": "POS {bench_position}"},
-            {"t": "text", "x": 23, "y": 10.25, "sz": 1.6, "c": "{fail_reason}"},
-            {"t": "text", "x": 23, "y": 13.25, "sz": 1.6, "c": "{date}"},
-            {"t": "text", "x": 2.5, "y": 26.5, "sz": 1.6, "c": "{code}"},
+            {"t": "text", "x": 5.4, "y": 2.57, "sz": 3.6, "c": "QC FAIL"},
+            {"t": "text", "x": 5.41, "y": 7.85, "sz": 3.6, "c": "POS {bench_position}"},
+            {"t": "text", "x": 5.25, "y": 13.8, "sz": 1.6, "c": "{fail_reason}"},
+            {"t": "text", "x": 5.37, "y": 17.37, "sz": 1.6, "c": "{date}"},
+            {"t": "text", "x": 4.84, "y": 23, "sz": 1.6, "c": "{code}"},
+            {"t": "text", "x": 26.9, "y": 2.29, "sz": 3.7, "c": "PRO V1.0"},
         ],
     },
     "machine": {
