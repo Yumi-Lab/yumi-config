@@ -86,16 +86,26 @@ def _logo_bitmap(x_mm, y_mm, w_mm, h_mm, logo_name=None, src=None, threshold=160
     W, H = DOT(w_mm), DOT(h_mm)
     if W <= 0 or H <= 0:
         return None
-    bg = Image.new("RGBA", src_img.size, (255, 255, 255, 255))
-    bg.paste(src_img, (0, 0), src_img)
-    img = bg.convert("L").resize((W, H))
+    # C'est la SILHOUETTE (canal alpha) qui fait l'encre, jamais la couleur de l'asset.
+    # L'éditeur peint déjà tout logo en noir plein (`filter: brightness(0)` sur l'img du
+    # canevas) : le pad doit imprimer la même chose, sinon l'aperçu ment. Composer sur blanc
+    # et lire la LUMINANCE ne marchait que par accident — les PNG viennent de la plaque M3,
+    # où ils sont dessinés en BLANC sur fond transparent (ruban blanc, plaque noire). Sur
+    # l'étiquette QC (papier blanc, encre noire) ils redevenaient blancs sur blanc : les six
+    # logos de conformité ne sortaient tout simplement pas du papier.
+    img = src_img.getchannel("A").resize((W, H))
     px = img.load()
+    opacite_min = max(1, 255 - threshold)  # en dessous = transparent, donc pas d'impression
     wbytes = (W + 7) // 8
-    data = bytearray(wbytes * H)
+    # Trame initialisée à BLANC (bits à 1), l'encre vient ENSUITE éteindre des bits. Partir
+    # de zéro laissait noires les colonnes de bourrage au-delà de W (jusqu'à 7 dots, la
+    # largeur n'étant presque jamais un multiple de 8) : chaque logo traînait une barre
+    # noire sur son flanc droit.
+    data = bytearray(b"\xff" * (wbytes * H))
     for y in range(H):
         for xx in range(W):
-            if px[xx, y] >= threshold:  # clair => bit à 1 (blanc, pas d'impression)
-                data[y * wbytes + (xx >> 3)] |= 0x80 >> (xx & 7)
+            if px[xx, y] >= opacite_min:  # opaque => encre, bit à 0
+                data[y * wbytes + (xx >> 3)] &= ~(0x80 >> (xx & 7)) & 0xFF
     head = ("BITMAP %d,%d,%d,%d,0," % (DOT(x_mm), DOT(y_mm), wbytes, H)).encode("ascii")
     return head + bytes(data) + b"\r\n"
 
@@ -164,7 +174,15 @@ def render(section_elements, data, w_mm, h_mm):
                         (DOT(e["x"]), DOT(y), font, mult, mult, _tspl_text(str(line)))).encode("ascii")
                 y += e.get("line_h", 2.25)
         elif t == "logo":
-            bmp = _logo_bitmap(e["x"], e["y"], e["w"], e["h"], e.get("logo"), e.get("src"))
+            # L'éditeur Label Expert sauve les logos en {"src": "ce.svg"} (nom de
+            # fichier nu, pas une data: URL) — la convention M3 est {"logo": "ce"}.
+            # On dérive le nom d'asset local depuis "src" quand "logo" est absent,
+            # sinon les 6 logos de tout gabarit sauvé depuis le site restent muets.
+            name = e.get("logo")
+            src = e.get("src")
+            if not name and src and not str(src).startswith("data:"):
+                name = os.path.splitext(os.path.basename(str(src)))[0]
+            bmp = _logo_bitmap(e["x"], e["y"], e["w"], e["h"], name, src)
             if bmp:
                 out += bmp
 
