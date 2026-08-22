@@ -349,7 +349,7 @@ def main():
         1)
 
     # ---- PHASE STRESS (banc uniquement) -------------------------------------
-    # Apres la detection tete : recul 150mm puis allers-retours ±100mm a
+    # Apres la detection tete : recul 150mm puis allers-retours ±20mm a
     # vitesse croissante puis decroissante (accel/decel reelles). A CHAQUE
     # segment on verifie que le motion sensor suit (filament_detected reste
     # vrai apres un push) -> valide l'encodeur en conditions dynamiques,
@@ -384,7 +384,7 @@ def main():
             SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
             RESPOND MSG="QC:{id}:FAIL"
         {% elif seg >= nseg %}
-            {action_respond_info("QC %s: stress OK — %d segments ±100mm (10→40→80mm/s), suivi capteur permanent" % (id, nseg))}
+            {action_respond_info("QC %s: stress OK — %d segments ±20mm (10→40→80mm/s), suivi capteur permanent" % (id, nseg))}
             M83
             SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=extruder
             G1 E-{[pushed - 150, 0]|max} F1200
@@ -393,7 +393,7 @@ def main():
             RESPOND MSG="QC:{id}:PASS"
         {% else %}
             {% set spd = speeds[(seg // 2) % speeds|length] %}
-            {% set dist = 100 if seg % 2 == 0 else -100 %}
+            {% set dist = 20 if seg % 2 == 0 else -20 %}
             M83
             SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=extruder
             G1 E{dist} F{spd}
@@ -588,15 +588,16 @@ gcode:
 description: QC banc - Etat de la boucle chargement groupe
 variable_tools: []
 variable_pushed: 0
-variable_dist: 300
-variable_chunk: 50
+variable_dist: 30
+variable_chunk: 10
 gcode:
     # macro porte-etat, jamais appelee directement
 
 # Boucle chargement groupe : pousse TOUS les extruder_steppers synchronises
-# (un G1 E deplace tout le lot en meme temps), par paliers de 50mm, jusqu'a
-# DIST. A chaque palier, verifie le motion sensor de CHAQUE position (pin
-# independante) -> une position qui n'a JAMAIS bouge une fois DIST atteint
+# (un G1 E deplace tout le lot en meme temps), par paliers de 10mm (pas 50 --
+# a DIST=30mm par defaut un palier de 50 depasserait la cible des le 1er
+# coup), jusqu'a DIST. A chaque palier, verifie le motion sensor de CHAQUE
+# position (pin independante) -> une position qui n'a JAMAIS bouge une fois DIST atteint
 # est marquee FAIL (feeder ou capteur HS), les autres PASS -- sans capteur
 # tete, plus besoin de sequentiel : tout le lot avance ensemble d'un coup.
 [delayed_gcode _qc_load_all_step]
@@ -633,7 +634,7 @@ gcode:
     {% endif %}
 
 [gcode_macro QC_STRESS_ALL]
-description: QC banc — PHASE 2 (parallele) : sweep ±100mm 10→40→80mm/s sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
+description: QC banc — PHASE 2 (parallele) : sweep ±20mm 10→40→80mm/s sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
 gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
@@ -687,7 +688,7 @@ gcode:
     {% if seg >= nseg %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
-                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±100mm (10→40→80mm/s), suivi capteur permanent" % (t - 1, nseg))}
+                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±20mm (10→40→80mm/s), suivi capteur permanent" % (t - 1, nseg))}
             {% endif %}
         {% endfor %}
         {% set ns = namespace(maxpush=0) %}
@@ -707,7 +708,7 @@ gcode:
         RESPOND MSG="QC:STRESS_ALL:PASS"
     {% else %}
         {% set spd = speeds[(seg // 2) % speeds|length] %}
-        {% set dist = 100 if seg % 2 == 0 else -100 %}
+        {% set dist = 20 if seg % 2 == 0 else -20 %}
         M83
         G1 E{dist} F{spd}
         M400

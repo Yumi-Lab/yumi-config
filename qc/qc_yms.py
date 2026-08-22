@@ -189,7 +189,7 @@ LOAD_ALL_TEST_ID = "load_all"
 STRESS_ALL_TEST_ID = "stress_all"
 HEAT_START_TEST_ID = "heat_start"
 HEAT_ALL_TEST_ID = "heat_wait"
-LOAD_DIST_MM = 300
+LOAD_DIST_MM = 30
 
 # YMS Pro seulement : plateau chauffant + sonde intégrés, câblés sur le banc
 # UNIQUEMENT aux 3 premiers slots de chaque hyperdrive (positions 3,4,5 et
