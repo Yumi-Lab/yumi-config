@@ -6,12 +6,13 @@
 #
 # Idempotent : ré-exécutable sans risque. Fait, dans l'ordre :
 #   1. MAJ yumi-config (dernière version QC)
-#   2. Panel QC : symlinks wizard/engine + entrée menu KlipperScreen + icône
-#   3. Token QC (argument, hors repo)
-#   4. cfg QC déployée + passage en MODE QC (backup de la cfg courante)
-#   5. Daemon de retry d'envoi des rapports (timer systemd, retry INFINI)
-#   6. Renvoi des rapports en attente
-#   7. Reboot (applique cfg + panel + affichage proprement)
+#   2. Client CUPS (lp) pour l'étiquette QC machine via le réseau usine
+#   3. Panel QC : symlinks wizard/engine + entrée menu KlipperScreen + icône
+#   4. Token QC (argument, hors repo)
+#   5. cfg QC déployée + passage en MODE QC (backup de la cfg courante)
+#   6. Daemon de retry d'envoi des rapports (timer systemd, retry INFINI)
+#   7. Renvoi des rapports en attente
+#   8. Reboot (applique cfg + panel + affichage proprement)
 #
 # Prérequis : pad Yumi avec ~/yumi-config (clone git) et ~/KlipperScreen.
 # sudo est demandé (mot de passe du pad) pour les étapes systemd + reboot.
@@ -23,11 +24,20 @@ CFG="$HOME/printer_data/config"
 KS="$HOME/KlipperScreen"
 TOKEN="${1:-}"
 
-echo "== 1/7  MAJ yumi-config (dernière version QC) =="
+echo "== 1/8  MAJ yumi-config (dernière version QC) =="
 git -C "$HOME/yumi-config" fetch origin
 git -C "$HOME/yumi-config" reset --hard origin/main
 
-echo "== 2/7  Panel QC (symlinks + menu KlipperScreen) =="
+echo "== 2/8  Client CUPS (étiquette QC machine via le réseau usine) =="
+if ! command -v lp >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y cups-client
+    echo "  cups-client installé (lp disponible)"
+else
+    echo "  cups-client déjà présent"
+fi
+
+echo "== 3/8  Panel QC (symlinks + menu KlipperScreen) =="
 if [ -d "$KS/panels" ]; then
     ln -sf "$QC/qc_wizard.py" "$KS/panels/qc_wizard.py"
     ln -sf "$QC/qc_engine.py" "$KS/ks_includes/qc_engine.py"
@@ -47,7 +57,7 @@ if [ -f "$KSCONF" ] && ! grep -q "panel: qc_wizard" "$KSCONF"; then
     echo "  entrée menu QC ajoutée"
 fi
 
-echo "== 3/7  Token QC =="
+echo "== 4/8  Token QC =="
 if [ -n "$TOKEN" ]; then
     printf '%s' "$TOKEN" > "$CFG/qc_token"
     echo "  token posé ($(wc -c < "$CFG/qc_token") octets)"
@@ -57,7 +67,7 @@ else
     echo "  ATTENTION : pas de token (passe-le en argument) -> l'envoi au compteur ne marchera pas"
 fi
 
-echo "== 4/7  cfg QC + passage en MODE QC =="
+echo "== 5/8  cfg QC + passage en MODE QC =="
 mkdir -p "$CFG/qc_reports"
 # Copier TOUTES les cfg QC modele (C235, C335, ...) en local sur le pad, pour que
 # tous les boutons du selecteur fonctionnent meme SANS connexion reseau.
@@ -72,7 +82,7 @@ fi
 cp "$QC/qc_printer_C235.cfg" "$CFG/printer.cfg"
 echo "  cfg QC active (mode QC)"
 
-echo "== 5/7  Daemon de retry (timer systemd) =="
+echo "== 6/8  Daemon de retry (timer systemd) =="
 chmod +x "$QC/qc_upload_pending.py"
 sudo cp "$QC/qc-upload.service" /etc/systemd/system/qc-upload.service
 sudo cp "$QC/qc-upload.timer"   /etc/systemd/system/qc-upload.timer
@@ -80,10 +90,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now qc-upload.timer
 echo "  qc-upload.timer actif (retry infini jusqu'au HTTP 200)"
 
-echo "== 6/7  Renvoi des rapports en attente =="
+echo "== 7/8  Renvoi des rapports en attente =="
 python3 "$QC/qc_upload_pending.py"
 
-echo "== 7/7  Reboot (applique cfg + panel + affichage) =="
+echo "== 8/8  Reboot (applique cfg + panel + affichage) =="
 echo "Station QC installée. Reboot dans 3 s..."
 sleep 3
 sudo reboot

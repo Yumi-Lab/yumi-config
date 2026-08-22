@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -34,6 +36,16 @@ BACKUP_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-backup")
 # YMS12 = BANC QC YMS (une C235 + 2 HyperDrive, 12 boîtiers testés un par un).
 QC_SIZES = ["C235", "C335", "C435", "YMS12"]
 QC_CFG_LEGACY = os.path.join(CONFIG_DIR, "qc_printer.cfg")
+
+# Mode d'impression étiquette QC MACHINE (C235/C335/C435 — pas le banc YMS12,
+# qui garde sa POS80L locale sans bascule possible). Les pads QC machine
+# n'ont plus d'imprimante branchée en local : "network" (serveur usine
+# smartpi-printer-factory) est le seul mode réel et le défaut. "local" est un
+# secours manuel gardé par sécurité (ex. une POS80L rebranchée en direct sur
+# le pad en dépannage) — persisté pour ne pas avoir à rebasculer à chaque QC.
+QC_PRINT_MODE_FILE = os.path.join(CONFIG_DIR, "qc_print_mode")
+QC_PRINT_MODE_NETWORK = "network"
+QC_PRINT_MODE_LOCAL = "local"
 
 # Compteur QC central (qc.yumi-lab.com). Le rapport JSON est posté ici en fin
 # de QC. Le token (= /opt/yumi-qc/secret_token côté serveur) est placé
@@ -239,10 +251,39 @@ class Panel(ScreenPanel):
         action_row.pack_start(plaque_btn, False, False, 0)
         box.pack_start(action_row, False, False, 5)
 
+        # Écran 800x480 déjà plein au-dessus (titre -> Z TAP/Etiquette M3) :
+        # le reste (bascule impression + sortie QC) va dans une zone
+        # scrollable au lieu de sortir de l'écran sans recours (glissé
+        # tactile vertical, même motif que _build_running_screen /
+        # _build_summary_screen dans ce fichier).
+        lower_scroll = Gtk.ScrolledWindow()
+        lower_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        lower_scroll.set_vexpand(True)
+        lower_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+
+        # Bascule mode impression étiquette QC machine — réseau par défaut
+        # (plus d'imprimante locale sur les pads), local = secours manuel
+        # rare. Action secondaire, pas besoin d'être visible sans scroll.
+        is_network_mode = (self._get_print_mode() == QC_PRINT_MODE_NETWORK)
+        mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        mode_row.set_halign(Gtk.Align.CENTER)
+        mode_btn = self._gtk.Button(
+            "network",
+            "标签打印: 网络 / Étiquette: Réseau" if is_network_mode
+            else "标签打印: 本地 / Étiquette: Local (secours)",
+            "color1" if is_network_mode else "color2")
+        mode_btn.connect("clicked", self._on_toggle_print_mode)
+        mode_btn.set_size_request(320, 50)
+        mode_row.pack_start(mode_btn, False, False, 0)
+        lower_box.pack_start(mode_row, False, False, 3)
+
         if qc_mode:
             exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
             exit_btn.connect("clicked", self._on_exit_qc_mode)
-            box.pack_start(exit_btn, False, False, 5)
+            lower_box.pack_start(exit_btn, False, False, 5)
+
+        lower_scroll.add(lower_box)
+        box.pack_start(lower_scroll, True, True, 0)
 
         self.content.add(box)
         self.content.show_all()
@@ -1030,8 +1071,13 @@ class Panel(ScreenPanel):
                     pass
             elif not ok:
                 msg += " — renvoi auto en arrière-plan jusqu'à reprise réseau"
-            # Étiquette QC auto sur la POS80L branchée au pad (silencieux si absente)
-            lok, lmsg = self._print_qc_label(self._current_report)
+            # Étiquette QC auto — réseau par défaut, "local" seulement si
+            # basculé manuellement depuis le panel (secours, cf. bouton
+            # d'écran d'accueil). Silencieux si imprimante/réseau absents.
+            if self._get_print_mode() == QC_PRINT_MODE_LOCAL:
+                lok, lmsg = self._print_qc_label(self._current_report)
+            else:
+                lok, lmsg = self._print_qc_label_network(self._current_report)
             if lok:
                 msg += " — 标签已打印 / étiquette imprimée"
             elif "absente" not in lmsg:
@@ -1120,7 +1166,7 @@ class Panel(ScreenPanel):
                 open(path + ".sent", "w").close()
             except OSError:
                 pass
-        lok, lmsg = self._print_qc_label(report)
+        lok, lmsg = self._print_qc_label_network(report)
         note = "YMS-%d %s → %s: %s%s" % (
             pos, "PASS" if passed else "FAIL", yms_id,
             "envoyé ✓" if ok else ("local" if no_code else "en attente réseau"),
@@ -1138,22 +1184,25 @@ class Panel(ScreenPanel):
         rep = self._box_reports.get(pos)
         if not rep:
             return
-        ok, msg = self._print_qc_label(rep)
+        ok, msg = self._print_qc_label_network(rep)
         self._screen.show_popup_message(
             "YMS-%d: 标签已重印 / étiquette réimprimée ✓" % pos if ok
             else "YMS-%d: %s" % (pos, msg), level=1 if ok else 3)
 
-    # ─── ÉTIQUETTE QC (POS80L branchée au pad, TSPL brut) ──────────────
-    # v1 locale : texte + QR vers la page rapport. Le format définitif
-    # viendra de label.yumi-lab.com (lien avec variables -> document à
-    # imprimer) : remplacer le corps de _print_qc_label par le fetch du
-    # document + conversion BITMAP (cf. pos80l/bridge du repo POS-Printer).
+    # ─── ÉTIQUETTE QC — SECOURS LOCAL (POS80L branchée en direct sur CE pad) ──
+    # ⚠️ 22/08/2026 : la POS80L du banc YMS12 est passée en réseau (comme le
+    # reste de l'usine) — ce device local n'est PLUS utilisé par le banc YMS.
+    # Seul appelant restant : la bascule manuelle "local" du panel QC machine
+    # (secours si jamais une POS80L est un jour rebranchée en direct sur un
+    # pad machine). Ne pas confondre avec _print_qc_label_network ci-dessous,
+    # qui est maintenant le chemin utilisé par YMS ET machine.
 
     POS80L_DEV = "/dev/usb/lp0"
 
     def _print_qc_label(self, report):
-        """Imprime l'étiquette QC (58x37, gap+peel natifs TSPL). Renvoie
-        (ok, message). Ne bloque jamais le QC : imprimante absente = no-op."""
+        """Imprime l'étiquette QC (58x37, gap+peel natifs TSPL) sur une POS80L
+        branchée EN LOCAL sur ce pad. Renvoie (ok, message). Ne bloque jamais
+        le QC : imprimante absente = no-op."""
         if not os.path.exists(self.POS80L_DEV):
             return False, "POS80L absente"
         tspl = build_label_tspl(report)
@@ -1164,6 +1213,61 @@ class Panel(ScreenPanel):
         except OSError as e:
             logger.warning("QC: impression étiquette POS80L: %s", e)
             return False, "étiquette: %s" % e
+
+    # ─── ÉTIQUETTE QC (serveur d'impression réseau usine) ──────────────
+    # Chemin par défaut pour YMS ET machine (C235/C335/C435...) depuis le
+    # 22/08/2026 — imprime via la POS80L partagée smartpi-printer-factory
+    # (queue CUPS raw "POS80L", port 631), jointe en WiFi usine ou VPN FR
+    # (10.8.0.x) en secours.
+
+    NETWORK_PRINTER_HOST = "smartpi-printer-factory.local:631"
+    NETWORK_PRINTER_QUEUE = "POS80L"
+
+    def _print_qc_label_network(self, report):
+        """Imprime l'étiquette QC machine via le serveur d'impression réseau
+        usine (TSPL brut, queue CUPS raw). Renvoie (ok, message). Ne bloque
+        jamais le QC : réseau/imprimante indisponibles = échec rapide."""
+        if not shutil.which("lp"):
+            return False, "client CUPS (lp) absent"
+        tspl = build_label_tspl(report)
+        try:
+            proc = subprocess.run(
+                ["lp", "-h", self.NETWORK_PRINTER_HOST,
+                 "-d", self.NETWORK_PRINTER_QUEUE, "-o", "raw"],
+                input=tspl, capture_output=True, timeout=10)
+            if proc.returncode != 0:
+                err = proc.stderr.decode("utf-8", "replace").strip()
+                return False, "étiquette réseau: %s" % (err or "échec lp")
+            return True, "étiquette imprimée"
+        except subprocess.TimeoutExpired:
+            return False, "étiquette réseau: timeout"
+        except OSError as e:
+            logger.warning("QC: impression étiquette réseau: %s", e)
+            return False, "étiquette réseau: %s" % e
+
+    # ─── BASCULE MODE IMPRESSION QC MACHINE (réseau / local secours) ───
+
+    def _get_print_mode(self):
+        try:
+            with open(QC_PRINT_MODE_FILE) as f:
+                mode = f.read().strip()
+            if mode in (QC_PRINT_MODE_NETWORK, QC_PRINT_MODE_LOCAL):
+                return mode
+        except OSError:
+            pass
+        return QC_PRINT_MODE_NETWORK
+
+    def _on_toggle_print_mode(self, widget):
+        new_mode = (QC_PRINT_MODE_LOCAL
+                    if self._get_print_mode() == QC_PRINT_MODE_NETWORK
+                    else QC_PRINT_MODE_NETWORK)
+        try:
+            with open(QC_PRINT_MODE_FILE, "w") as f:
+                f.write(new_mode)
+        except OSError as e:
+            self._screen.show_popup_message(f"Mode impression: {e}", level=3)
+            return
+        self._build_start_screen()
 
     # ─── TEST EXECUTION ────────────────────────────────────────
 
