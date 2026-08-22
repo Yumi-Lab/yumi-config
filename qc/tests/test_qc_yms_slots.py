@@ -39,15 +39,22 @@ class TestDisabledSlots(unittest.TestCase):
 
     def test_build_yms_tests_includes_skipped(self):
         tests = build_yms_tests([2, 11])
-        self.assertEqual(len(tests), 13)
+        # mcu_check + 12 positions (phase 1) + stress_all (phase 2, groupé)
+        self.assertEqual(len(tests), 14)
         self.assertEqual(tests[0]["id"], "mcu_check")
-        ids = [t["id"] for t in tests[1:]]
+        ids = [t["id"] for t in tests[1:-1]]
         self.assertEqual(ids, ["e%d_head" % i for i in range(12)])
         self.assertTrue(tests[2]["skipped"])   # e1_head = position 2
         self.assertTrue(tests[11]["skipped"])  # e10_head = position 11
         self.assertFalse(tests[1].get("skipped"))  # e0_head = position 1
         self.assertEqual(tests[2]["macro"], "")
-        self.assertIn("TOOL=1", tests[1]["macro"])
+        self.assertIn("QC_HEAD_FEED_REACH TOOL=1", tests[1]["macro"])
+        # stress_all (phase 2) : TOOLS= porte les positions ACTIVES seulement
+        # (2 et 11 désactivées -> absentes), source de vérité indépendante
+        # de tout état firmware résiduel d'un run précédent.
+        self.assertEqual(tests[-1]["id"], "stress_all")
+        self.assertEqual(tests[-1]["macro"],
+                         "QC_STRESS_ALL TOOLS=1,3,4,5,6,7,8,9,10,12")
 
     def test_yms_code_for_position_skips_disabled(self):
         yms_ids = ["YMSL-001", "YMSL-003", "YMSL-004"]

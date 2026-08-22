@@ -24,6 +24,26 @@ MODELS = {
 }
 DEFAULT_MODEL = "light"
 
+# Le code alloué par le serveur porte le modèle+version en préfixe littéral
+# (ex. "YMSLV1.020260822MGJSSTYP64") -- redondant sur l'étiquette avec
+# {qc_model} affiché à côté, à retirer de l'affichage (demande du 22/08).
+
+
+def strip_model_from_code(code, yms_version):
+    """Retire le préfixe modèle+version EXACT (ex. "YMSLV1.0") d'un code YMS
+    pour l'affichage étiquette (-> "20260822MGJSSTYP64"). Le préfixe attendu
+    est dérivé de MODELS + yms_version, PAS d'une regex ouverte sur des
+    chiffres : version et date sont tous deux numériques sans séparateur,
+    donc un motif générique mangerait aussi la date. Code d'une autre forme
+    (ex. QCFL- de FAIL) ou yms_version absent -> renvoyé inchangé."""
+    if not code or not yms_version:
+        return code or ""
+    for _, prefix in MODELS.values():
+        expected = "%sV%s" % (prefix.rstrip("-"), yms_version)
+        if code.startswith(expected):
+            return code[len(expected):]
+    return code
+
 # 7 valeurs normées de measures.fail_reason
 def extract_measures(logs, passed):
     """Extrait les measures{} depuis les logs d'un test e<n>_head.
@@ -152,13 +172,30 @@ def test_id_for_position(pos):
     return "e%d_head" % (pos - 1)
 
 
+STRESS_ALL_TEST_ID = "stress_all"
+
+
 def build_yms_tests(disabled_positions=None):
     """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
+
+    v2 (22/08) — deux phases : PHASE 1 = feed jusqu'au capteur tête, un
+    boîtier après l'autre (le capteur tête !PA8 est UNIQUE et partagé par
+    les 12, impossible d'attribuer une détection à la bonne position si
+    2+ poussent en même temps -> reste séquentiel, structurellement). PHASE
+    2 = un DERNIER test "stress_all" qui sweep TOUS les boîtiers ayant
+    passé la phase 1 EN MÊME TEMPS (chaque motion sensor YMS-n a sa PROPRE
+    pin -> le suivi reste correctement attribué même groupé) — remplace les
+    12 sweeps individuels par 1 seul, le gros du temps économisé.
 
     Returns:
         liste de dicts test (compatible avec QCEngine.tests). Les positions
         désactivées portent la clé ``skipped: True`` pour que le wizard les
-        saute sans envoyer de macro.
+        saute sans envoyer de macro. Le dernier test ``stress_all`` reçoit
+        la liste des positions ÉLIGIBLES (non désactivées) via TOOLS= —
+        celles qui échouent la phase 1 s'auto-excluent (ok_n jamais mis à 1
+        côté firmware), mais TOOLS= reste la source de vérité pour ne
+        jamais inclure une position désactivée dont ok_n serait resté à 1
+        depuis un run précédent où elle était active.
     """
     disabled = set(disabled_positions or [])
     tests = [{
@@ -168,6 +205,7 @@ def build_yms_tests(disabled_positions=None):
         "macro": "QC_MCU_CHECK",
         "timeout": 60,
     }]
+    enabled = []
     for pos in range(1, YMS_BENCH_TOTAL + 1):
         test_id = test_id_for_position(pos)
         name = "YMS-%d 送料+传感器 / feed+sensor" % pos
@@ -181,13 +219,22 @@ def build_yms_tests(disabled_positions=None):
                 "skipped": True,
             })
         else:
+            enabled.append(pos)
             tests.append({
                 "id": test_id,
                 "name": name,
                 "type": "automated",
-                "macro": "QC_HEAD_FEED TOOL=%d" % pos,
-                "timeout": 420,
+                "macro": "QC_HEAD_FEED_REACH TOOL=%d" % pos,
+                "timeout": 180,
             })
+    if enabled:
+        tests.append({
+            "id": STRESS_ALL_TEST_ID,
+            "name": "全部并行应力测试 / Stress sweep (parallel, all boxes)",
+            "type": "automated",
+            "macro": "QC_STRESS_ALL TOOLS=%s" % ",".join(str(p) for p in enabled),
+            "timeout": 180,
+        })
     return tests
 
 
@@ -237,7 +284,7 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
                      started=None, now=None,
-                     extruder_model="", spring_model=""):
+                     extruder_model="", spring_model="", yms_version="1.0"):
     """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.4).
 
     Args:
@@ -295,6 +342,7 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
         "bench_total": bench_total,
         "extruder_model": extruder_model,
         "spring_model": spring_model,
+        "yms_version": yms_version,
         "measures": extract_measures(logs, passed),
         "tests": [
             {
@@ -422,16 +470,32 @@ def build_label_tspl(report):
     kind = "yms" if is_yms else "machine"
     section = "pass" if overall == "PASS" else "fail"
 
+    # {qc_model} affiché sur l'étiquette porte la version produit (demandé le
+    # 22/08 : "YMS-LIGHT-V1.0", pas juste "YMS-LIGHT") -- calculé UNIQUEMENT
+    # ici pour l'affichage, on ne touche pas report["qc_model"] lui-même
+    # (utilisé tel quel côté serveur/dashboard, aucune raison de le changer).
+    display_model = qc_model
+    if is_yms and report.get("yms_version"):
+        display_model = "%s-V%s" % (qc_model, report["yms_version"])
+
     data = {
         "overall_result": overall,
-        "code": code,
-        "qc_model": qc_model,
+        # {code} affiché = sans le prefixe modele+version (deja dans
+        # {qc_model}) ; le QR garde le code BRUT pour que /report/<code>
+        # reste valide.
+        "code": strip_model_from_code(code, report.get("yms_version")) if is_yms else code,
+        "qc_model": display_model,
         "date": date,
         "qr": "%s%s" % (QC_REPORT_URL_BASE, code),
     }
+    if is_yms:
+        # bench_position existe que le boîtier passe ou échoue -- le gabarit
+        # PASS peut vouloir l'afficher aussi (ajouté par Nicolas le 22/08,
+        # jusque-là seul le FAIL le recevait -> "POS {bench_position}" sortait
+        # tel quel, non substitué, dès qu'on l'ajoutait à la section pass).
+        data["bench_position"] = report.get("bench_position", "?")
     if section == "fail":
         if is_yms:
-            data["bench_position"] = report.get("bench_position", "?")
             data["fail_reason"] = str((report.get("measures") or {}).get("fail_reason") or "")
         else:
             data["failed_tests"] = _failed_test_labels(report)

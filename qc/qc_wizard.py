@@ -86,6 +86,7 @@ try:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
+        STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -109,6 +110,7 @@ except ImportError:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
+        STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -505,19 +507,29 @@ class Panel(ScreenPanel):
         duration = report.get("duration_seconds", 0)
         mins = duration // 60
         secs = duration % 60
+        # Ligne sans limite de largeur ni retour -> le printer_id (session
+        # banc YMS = "0281D1AF910C-20260822-1423", ~26 car.) pousse la ligne
+        # au-delà de 800px et sort de l'écran (signalé 22/08 -- persiste
+        # malgré la taille fixe posée sur les boutons, cause différente).
         info_label = Gtk.Label()
         info_label.set_markup(
             f"<span size='large'>{report.get('qc_model', '?')} — "
             f"Printer: {report.get('printer_id', '?')} — "
             f"Duration: {mins}m {secs}s</span>"
         )
+        info_label.set_line_wrap(True)
+        info_label.set_max_width_chars(50)
+        info_label.set_justify(Gtk.Justification.CENTER)
         main_box.pack_start(info_label, False, False, 5)
 
         # ── BANC YMS : carte des positions (vert = PASS, rouge = FAIL,
-        # gris = non testé) — un appui sur un carré RÉIMPRIME l'étiquette du
-        # boîtier (mal collée, déchirée...), PASS comme FAIL. ──
+        # gris = non testé) — un appui sur un carré propose re-tester OU
+        # réimprimer l'étiquette du boîtier (cf. _on_pos_square_clicked). Les
+        # 12 tiennent sur UNE ligne (demande du 22/08 : plus lisible que 2
+        # rangées de 6, et l'écran est en 800px de large). ──
+        self._pos_buttons = {}
         if self._selected_size.upper().startswith("YMS") and self._box_reports:
-            pos_grid = Gtk.Grid(column_spacing=6, row_spacing=6)
+            pos_grid = Gtk.Grid(column_spacing=4, row_spacing=6)
             pos_grid.set_halign(Gtk.Align.CENTER)
             for pos in range(1, YMS_BENCH_TOTAL + 1):
                 rep = self._box_reports.get(pos)
@@ -528,14 +540,15 @@ class Panel(ScreenPanel):
                     passed = rep.get("overall_result") == "PASS"
                     sq = self._gtk.Button(None, str(pos),
                                           "color3" if passed else "color2")
-                    sq.connect("clicked", self._on_reprint_label, pos)
-                sq.set_size_request(58, 50)
-                pos_grid.attach(sq, (pos - 1) % 6, (pos - 1) // 6, 1, 1)
+                    sq.connect("clicked", self._on_pos_square_clicked, pos)
+                sq.set_size_request(56, 50)
+                pos_grid.attach(sq, pos - 1, 0, 1, 1)
+                self._pos_buttons[pos] = sq
             main_box.pack_start(pos_grid, False, False, 4)
             reprint_hint = Gtk.Label()
             reprint_hint.set_markup(
                 "<span size='small' foreground='#9E9E9E'>"
-                "触摸方块重印标签 / toucher un carré = réimprimer l'étiquette</span>")
+                "触摸方块：重测或重印 / toucher un carré : re-tester ou réimprimer</span>")
             main_box.pack_start(reprint_hint, False, False, 2)
 
         # Test results grid (scrollable)
@@ -602,8 +615,12 @@ class Panel(ScreenPanel):
         scroll.add(results_box)
         main_box.pack_start(scroll, True, True, 5)
 
-        # Bottom buttons
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        # Bottom buttons — jusqu'à 4 dessus (YMS + backup cfg) : taille FIXE +
+        # pack sans expand, sinon le 4e sort de l'écran 800px (signalé 22/08 —
+        # les Button() ks_includes sont pensés pour une grille de menu, pas
+        # une rangée compacte, donc leur taille naturelle déborde à 4).
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_halign(Gtk.Align.CENTER)
 
         # Banc YMS : enchaîner un NOUVEAU lot de 12 sans repasser par l'accueil
         # (même modèle que le lot précédent, slots relus du fichier).
@@ -611,21 +628,25 @@ class Panel(ScreenPanel):
             batch_btn = self._gtk.Button("refresh", "新一批×12 / Nouveau lot ×12",
                                          "color3")
             batch_btn.connect("clicked", self._on_new_batch)
-            btn_box.pack_start(batch_btn, True, True, 0)
+            batch_btn.set_size_request(185, 55)
+            btn_box.pack_start(batch_btn, False, False, 0)
 
         # Finish: save report + restore production cfg + restart Klipper
         if os.path.exists(BACKUP_CFG):
             finish_btn = self._gtk.Button("complete", "完成 / Finish", "color3")
             finish_btn.connect("clicked", self._on_finish_qc)
-            btn_box.pack_start(finish_btn, True, True, 0)
+            finish_btn.set_size_request(185, 55)
+            btn_box.pack_start(finish_btn, False, False, 0)
 
         save_btn = self._gtk.Button("sd", _("保存报告 / Save report"), "color2")
         save_btn.connect("clicked", self._on_save_report)
-        btn_box.pack_start(save_btn, True, True, 0)
+        save_btn.set_size_request(185, 55)
+        btn_box.pack_start(save_btn, False, False, 0)
 
         new_btn = self._gtk.Button("refresh", _("新检测 / New QC"), "color1")
         new_btn.connect("clicked", self._on_new_qc)
-        btn_box.pack_start(new_btn, True, True, 0)
+        new_btn.set_size_request(185, 55)
+        btn_box.pack_start(new_btn, False, False, 0)
 
         main_box.pack_end(btn_box, False, False, 5)
 
@@ -995,18 +1016,34 @@ class Panel(ScreenPanel):
     def _on_test_complete(self, test_id, result):
         self._cancel_timeout()
         GLib.idle_add(self._add_log_entry, test_id, result)
-        # Banc YMS : rapport PAR BOÎTIER envoyé au fil de la séquence (l'envoi
-        # et l'étiquette partent en thread, le test suivant démarre sans
-        # attendre). Un boîtier SKIPPÉ = code brûlé, pas de rapport.
+        is_yms = self._selected_size.upper().startswith("YMS")
         is_yms_head = re.fullmatch(r"e\d+_head", test_id)
-        if (self._selected_size.upper().startswith("YMS")
-                and is_yms_head
-                and result in (QCResult.PASS, QCResult.FAIL)):
-            # v1.4 : l'allocation du code se fait DANS le thread de dispatch,
-            # en fin de test (PASS -> YMSL-/YMSP-, FAIL -> QCFL-). Séquence et
-            # re-test passent par le même chemin.
-            threading.Thread(target=self._dispatch_box,
-                             args=(test_id, result), daemon=True).start()
+        # v2 (22/08) : la séquence PRINCIPALE (build_yms_tests) porte un
+        # dernier test stress_all -- le sweep stress groupé de TOUS les
+        # boîtiers qui ont passé la phase 1 (feed), en une fois. Le RE-TEST
+        # unitaire (build_retest_sequence) n'a PAS ce test -- il garde
+        # l'ancien chemin complet (feed+stress) en un seul _dispatch_box,
+        # une seule position n'ayant rien à gagner à être "parallélisée".
+        has_stress_all = any(t.get("id") == STRESS_ALL_TEST_ID
+                             for t in self.engine.tests)
+        if is_yms and is_yms_head and result in (QCResult.PASS, QCResult.FAIL):
+            if has_stress_all and result == QCResult.PASS:
+                # Rapport pas encore complet : le stress groupé n'a pas
+                # couru -- dispatché depuis _dispatch_stress_batch une fois
+                # stress_all terminé. Un FAIL en phase 1, lui, est définitif
+                # (jamais éligible au stress groupé) -> dispatché tout de
+                # suite comme avant.
+                pass
+            else:
+                # v1.4 : l'allocation du code se fait DANS le thread de
+                # dispatch, en fin de test (PASS -> YMSL-/YMSP-, FAIL ->
+                # QCFL-). Séquence (sans stress_all) et re-test passent par
+                # le même chemin.
+                threading.Thread(target=self._dispatch_box,
+                                 args=(test_id, result), daemon=True).start()
+        elif is_yms and test_id == STRESS_ALL_TEST_ID:
+            threading.Thread(target=self._dispatch_stress_batch,
+                             daemon=True).start()
         # Run next test if available
         test = self.engine.get_current_test()
         if test and self.engine.state == QCState.RUNNING:
@@ -1107,12 +1144,42 @@ class Panel(ScreenPanel):
             now=datetime.now(timezone.utc),
             extruder_model=(self._bench_config or {}).get("extruder_model", ""),
             spring_model=(self._bench_config or {}).get("spring_model", ""),
+            yms_version=(self._bench_config or {}).get("yms_version", "1.0"),
         )
 
     @staticmethod
     def _extract_measures(logs, passed):
         """measures{} depuis les logs du test (fail_reason = 7 valeurs normées)."""
         return extract_measures(logs, passed)
+
+    def _dispatch_stress_batch(self, widget=None):
+        """Fin du sweep stress groupé (stress_all, v2 22/08) : le firmware a
+        déjà loggé le résultat de CHAQUE position dans le log PARTAGÉ
+        stress_all, chaque ligne taguée "QC E<n>_HEAD: ..." (même format que
+        l'ancien sweep solo -> extract_measures() les reconnaît sans aucun
+        changement). Pour chaque boîtier ayant passé la phase 1 : filtre SES
+        lignes, les fusionne dans son propre log (comme s'il avait tout fait
+        seul), décide FAIL si son suivi a été perdu, puis dispatch (comme un
+        _dispatch_box normal) — un thread par boîtier, en parallèle."""
+        stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
+        for pos in range(1, YMS_BENCH_TOTAL + 1):
+            test_id = test_id_for_position(pos)
+            phase1 = self.engine.results.get(test_id, {})
+            if phase1.get("result") != QCResult.PASS:
+                continue  # FAIL/skip phase 1 déjà traité (ou jamais lancé)
+            tag = "QC E%d_HEAD:" % (pos - 1)
+            mine = [l for l in stress_log if l.startswith(tag)]
+            lost = any("PERDU le suivi" in l for l in mine)
+            final = QCResult.FAIL if lost else QCResult.PASS
+            self.engine._test_log.setdefault(test_id, []).extend(mine)
+            self.engine.results[test_id] = {
+                "result": final,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": "" if final == QCResult.PASS
+                           else "Stress sweep (groupé) : suivi perdu",
+            }
+            threading.Thread(target=self._dispatch_box,
+                             args=(test_id, final), daemon=True).start()
 
     def _dispatch_box(self, test_id, result):
         """Thread de fin de test d'un boîtier (v1.4) :
@@ -1145,6 +1212,11 @@ class Panel(ScreenPanel):
         # mesurer la derive d'horloge du pad (received_at - sent_at_utc).
         report["sent_at_utc"] = datetime.now(timezone.utc).isoformat()
         self._box_reports[pos] = report   # carte des positions + réimpression
+        # Ce thread peut finir APRÈS l'affichage de l'écran résumé (allocation
+        # réseau + étiquette) -- le carré de CE poste a alors été dessiné gris/
+        # non cliquable avant que le rapport existe (signalé 22/08 : carré 12
+        # jamais cliquable, il termine presque toujours après le résumé).
+        GLib.idle_add(self._refresh_pos_button, pos)
         no_code = yms_id.startswith("NOCODE-")
         path = ""
         try:
@@ -1178,6 +1250,57 @@ class Panel(ScreenPanel):
         """Relance directement une séquence complète (même modèle YMS)."""
         printer_id = self.labels["printer_id"].get_text().strip()
         self._yms_start_sequence(printer_id)
+
+    def _refresh_pos_button(self, pos):
+        """Rend cliquable + colore un carré de position dont le rapport vient
+        d'arriver APRÈS la construction de l'écran résumé (cf. _dispatch_box).
+        No-op si l'écran résumé n'est plus affiché (carte reconstruite/quittée
+        entre-temps) ou si le carré est déjà à jour."""
+        btn = getattr(self, "_pos_buttons", {}).get(pos)
+        rep = self._box_reports.get(pos)
+        if not btn or not rep or btn.get_sensitive():
+            return False
+        try:
+            passed = rep.get("overall_result") == "PASS"
+            btn.get_style_context().add_class("color3" if passed else "color2")
+            btn.set_sensitive(True)
+            btn.connect("clicked", self._on_pos_square_clicked, pos)
+        except Exception:
+            pass
+        return False
+
+    def _on_pos_square_clicked(self, widget, pos):
+        """Carré de position touché sur l'écran résumé : propose re-tester CE
+        boîtier ou réimprimer son étiquette (demande du 22/08 — avant, un
+        appui réimprimait direct, or c'est souvent le re-test qui est voulu)."""
+        rep = self._box_reports.get(pos)
+        if not rep:
+            return
+        label = Gtk.Label()
+        label.set_markup("<span size='large'>YMS-%d</span>" % pos)
+        buttons = [
+            {"name": _("重新测试 / Re-tester"), "response": Gtk.ResponseType.YES,
+             "style": "color1"},
+            {"name": _("重印标签 / Étiquette"), "response": Gtk.ResponseType.APPLY,
+             "style": "color3"},
+            {"name": _("取消 / Annuler"), "response": Gtk.ResponseType.CANCEL},
+        ]
+        test_id = test_id_for_position(pos)
+        self._gtk.Dialog(
+            "YMS-%d" % pos, buttons, label,
+            lambda dialog, resp: self._on_pos_square_response(dialog, resp, pos, test_id),
+        )
+
+    def _on_pos_square_response(self, dialog, response_id, pos, test_id):
+        if response_id == Gtk.ResponseType.APPLY:
+            self._gtk.remove_dialog(dialog)
+            self._on_reprint_label(None, pos)
+            return
+        if response_id == Gtk.ResponseType.YES:
+            # _on_yms_retest_confirmed enlève elle-même le dialogue.
+            self._on_yms_retest_confirmed(dialog, Gtk.ResponseType.YES, test_id)
+            return
+        self._gtk.remove_dialog(dialog)
 
     def _on_reprint_label(self, widget, pos):
         """Réimprime l'étiquette du boîtier testé (depuis l'écran résumé)."""

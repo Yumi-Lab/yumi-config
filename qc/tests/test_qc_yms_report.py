@@ -33,7 +33,7 @@ class TestBuildBoxReport(unittest.TestCase):
             "skipped_tests", "qc_model", "yumi_config", "machine_uid",
             "pad_mac", "bench_position", "bench_slot", "bench_session",
             "bench_total",
-            "extruder_model", "spring_model", "measures", "tests",
+            "extruder_model", "spring_model", "yms_version", "measures", "tests",
         })
         self.assertEqual(r["bench_position"], 6)
         self.assertEqual(r["bench_slot"], "hyperdrive_uart:4")
