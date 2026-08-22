@@ -137,22 +137,24 @@ runout_gcode:
 # 3 PREMIERS slots de chaque hyperdrive (YMS-3/4/5 et YMS-8/9/10) sont
 # cables pour la chauffe -- slots 4/5 (YMS-6/7/11/12) n'ont pas cette
 # option. Meme carte mere (SMART MAKER 1.X) que la principale, sur les 3
-# canaux chauffe standard du board (HE0/TH0, HE1/THB, HBED/TH1) --
-# reassignes ici a un YMS chacun, jamais utilises par ailleurs sur les
-# hyperdrives (la C235 de base n'utilise QUE HE0/TH0 pour son extruder et
-# HBED/THB pour son lit, sur la carte PRINCIPALE -- ces canaux sont donc
-# entierement libres sur hyperdrive_uart/hyperdrive_usb). sensor_type
-# aligne sur l'usage connu du meme canal sur la carte principale (TH0 =
-# 100K4190YUMI comme l'extruder, THB = 100K3950YUMI comme le heater_bed) ;
-# TH1 n'a pas de precedent dans la cfg de base (jamais utilise) -- meme
-# famille que TH0 par convention de nommage carte, a confirmer a la mise
-# sous tension (temperature affichee visiblement fausse si le mauvais
-# type). PID Kp/Ki/Kd = valeurs GENERIQUES de depart (non calibrees) --
-# PID_CALIBRATE a lancer une fois le matiere reel disponible.
+# canaux chauffe standard du board, heater+sensor du MEME canal ensemble
+# (HE0+TH0, HBED+THB, HE1+TH1 -- validé sur banc réel le 23/08 : YMS-3
+# HE0+TH0 nickel d'emblée, YMS-4/5 avaient le chauffage croisé jusqu'à
+# ce fix) -- reassignes ici a un YMS chacun, jamais utilises par ailleurs
+# sur les hyperdrives (la C235 de base n'utilise QUE HE0/TH0 pour son
+# extruder et HBED/THB pour son lit, sur la carte PRINCIPALE -- ces
+# canaux sont donc entierement libres sur hyperdrive_uart/hyperdrive_usb).
+# sensor_type aligne sur l'usage connu du meme canal sur la carte
+# principale (TH0 = 100K4190YUMI comme l'extruder, THB = 100K3950YUMI
+# comme le heater_bed) ; TH1 n'a pas de precedent dans la cfg de base
+# (jamais utilise) -- meme famille que TH0 par convention de nommage
+# carte, confirme sur banc reel (voir commit 23/08). PID Kp/Ki/Kd =
+# valeurs GENERIQUES de depart (non calibrees) -- PID_CALIBRATE a
+# lancer une fois le materiel reel disponible.
 HEAT_SLOTS = [
     dict(heater="PC8", sensor="PC1", sensor_type="100K4190YUMI", fan="PC7"),
-    dict(heater="PB6", sensor="PC0", sensor_type="100K3950YUMI", fan="PC6"),
-    dict(heater="PC9", sensor="PA3", sensor_type="100K4190YUMI", fan="PA2"),
+    dict(heater="PC9", sensor="PC0", sensor_type="100K3950YUMI", fan="PC6"),
+    dict(heater="PB6", sensor="PA3", sensor_type="100K4190YUMI", fan="PA2"),
 ]
 
 
