@@ -133,6 +133,65 @@ runout_gcode:
     return "\n".join(out)
 
 
+# YMS Pro (plateau chauffant + sonde temperature integres) : seulement les
+# 3 PREMIERS slots de chaque hyperdrive (YMS-3/4/5 et YMS-8/9/10) sont
+# cables pour la chauffe -- slots 4/5 (YMS-6/7/11/12) n'ont pas cette
+# option. Meme carte mere (SMART MAKER 1.X) que la principale, sur les 3
+# canaux chauffe standard du board (HE0/TH0, HE1/THB, HBED/TH1) --
+# reassignes ici a un YMS chacun, jamais utilises par ailleurs sur les
+# hyperdrives (la C235 de base n'utilise QUE HE0/TH0 pour son extruder et
+# HBED/THB pour son lit, sur la carte PRINCIPALE -- ces canaux sont donc
+# entierement libres sur hyperdrive_uart/hyperdrive_usb). sensor_type
+# aligne sur l'usage connu du meme canal sur la carte principale (TH0 =
+# 100K4190YUMI comme l'extruder, THB = 100K3950YUMI comme le heater_bed) ;
+# TH1 n'a pas de precedent dans la cfg de base (jamais utilise) -- meme
+# famille que TH0 par convention de nommage carte, a confirmer a la mise
+# sous tension (temperature affichee visiblement fausse si le mauvais
+# type). PID Kp/Ki/Kd = valeurs GENERIQUES de depart (non calibrees) --
+# PID_CALIBRATE a lancer une fois le matiere reel disponible.
+HEAT_SLOTS = [
+    dict(heater="PC8", sensor="PC1", sensor_type="100K4190YUMI", fan="PC7"),
+    dict(heater="PB6", sensor="PC0", sensor_type="100K3950YUMI", fan="PC6"),
+    dict(heater="PC9", sensor="PA3", sensor_type="100K4190YUMI", fan="PA2"),
+]
+
+
+def heater_sections():
+    out = []
+    for name, _serial, first in HYPERDRIVES:
+        for i, h in enumerate(HEAT_SLOTS):
+            yms = first + i + 1
+            out.append("""\
+# ── YMS-%(y)d : plateau chauffant + sonde (%(m)s slot %(slot)d, YMS Pro) ──
+[heater_generic YMS-%(y)d-heater]
+heater_pin: %(m)s:%(heater)s
+sensor_type: %(sensor_type)s
+sensor_pin: %(m)s:%(sensor)s
+max_power: 1.0
+control: pid
+pid_Kp: 50
+pid_Ki: 50
+pid_Kd: 50
+min_temp: -50
+max_temp: 110
+
+[heater_fan YMS-%(y)d-fan]
+pin: %(m)s:%(fan)s
+max_power: 1
+off_below: 0.31
+heater: YMS-%(y)d-heater
+heater_temp: 25
+shutdown_speed: 0
+
+[verify_heater YMS-%(y)d-heater]
+max_error: 180000
+check_gain_time: 3000
+hysteresis: 10
+heating_gain: 2
+""" % dict(h, y=yms, m=name, slot=i + 1))
+    return "\n".join(out)
+
+
 def autotune_sections():
     out = []
     for name, _serial, first in HYPERDRIVES:
@@ -186,11 +245,13 @@ def main():
                   "# ── YMS-2 : capteur motion (feeder = extruder1, carte principale) ──\n"
                   "[filament_motion_sensor YMS-2]", 1)
 
-    # 5) Capteurs YMS-3..YMS-12 (avant le capteur tete)
+    # 5) Capteurs YMS-3..YMS-12 (avant le capteur tete) + chauffe YMS Pro
+    #    (YMS-3/4/5 et YMS-8/9/10 seulement -- slots 4/5 sans cette option)
     cfg = replace(
         cfg,
         "[filament_switch_sensor head_sensor]",
-        sensor_sections() + "\n[filament_switch_sensor head_sensor]",
+        sensor_sections() + "\n" + heater_sections()
+        + "\n[filament_switch_sensor head_sensor]",
         1)
 
     # 6) QC_HEAD_FEED : selection d'outil generique TOOL=1..12
