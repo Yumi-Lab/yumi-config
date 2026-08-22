@@ -64,6 +64,8 @@ def extract_measures(logs, passed):
         "stress_speeds_mms": [10, 40, 80],
         "retract_mm": None,
         "tmc_error": None,
+        "heat_target_c": None,
+        "heat_reached_c": None,
         "fail_reason": None,
     }
     for line in logs:
@@ -104,6 +106,16 @@ def extract_measures(logs, passed):
         if "DRV_STATUS" in line:
             m["tmc_error"] = line.strip()[:200]
             m["fail_reason"] = "tmc_error"
+        # YMS Pro : chauffe groupee (heat_all), positions cablees seulement.
+        r = re.search(r"chauffe OK, ([\d.]+)C atteint \(cible (\d+)C\)", line)
+        if r:
+            m["heat_reached_c"] = float(r.group(1))
+            m["heat_target_c"] = int(r.group(2))
+        r = re.search(r"chauffe timeout, ([\d.]+)C apres \d+s \(cible (\d+)C\)", line)
+        if r:
+            m["heat_reached_c"] = float(r.group(1))
+            m["heat_target_c"] = int(r.group(2))
+            m["fail_reason"] = "heat_timeout"
     m["dropout_count"] = len(m["dropouts_e"])
     if m["feed_mm"]:
         m["retract_mm"] = m["feed_mm"]
@@ -175,10 +187,18 @@ def test_id_for_position(pos):
 
 LOAD_ALL_TEST_ID = "load_all"
 STRESS_ALL_TEST_ID = "stress_all"
+HEAT_ALL_TEST_ID = "heat_all"
 LOAD_DIST_MM = 300
 
+# YMS Pro seulement : plateau chauffant + sonde intégrés, câblés sur le banc
+# UNIQUEMENT aux 3 premiers slots de chaque hyperdrive (positions 3,4,5 et
+# 8,9,10 — cf. generate_yms12_cfg.py HEAT_SLOTS). Positions 1,2,6,7,11,12
+# n'ont jamais cette option, quel que soit le modèle sélectionné.
+HEAT_CAPABLE_POSITIONS = (3, 4, 5, 8, 9, 10)
+HEAT_TARGET_C = 85
 
-def build_yms_tests(disabled_positions=None):
+
+def build_yms_tests(disabled_positions=None, model=None):
     """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
 
     v3 (23/08) — le capteur tête est retiré du protocole banc : il ne
@@ -192,17 +212,27 @@ def build_yms_tests(disabled_positions=None):
     groupée. Chaque motion sensor YMS-n a sa PROPRE pin -> l'attribution
     par position reste correcte même en mouvement groupé.
 
+    model="pro" : SEULEMENT les positions câblées chauffe (HEAT_CAPABLE_
+    POSITIONS, 3/4/5/8/9/10) sont testées, sur TOUTES les étapes (load_all
+    ET stress_all EN PLUS de heat_all) — un boîtier Pro ne se place que sur
+    ces postes du banc, jamais sur 1/2/6/7/11/12 (demande du 23/08 : "on ne
+    fait que le 3,4,5,8,9,10, on ne fait pas les autres"). model="light" (ou
+    absent) garde le comportement large : toutes les positions actives.
+
     Returns:
         liste de dicts test (compatible avec QCEngine.tests) : mcu_check +
-        load_all + stress_all, chacun des deux derniers portant TOOLS=
-        la liste des positions ACTIVES (non désactivées) — source de
-        vérité indépendante de tout état firmware résiduel d'un run
-        précédent. Aucun test individuel par position : le rapport de
-        chaque boîtier est reconstruit après coup depuis les logs
-        partagés (cf. qc_wizard._dispatch_all_boxes_ordered).
+        load_all + stress_all [+ heat_all si model="pro"], portant TOOLS=
+        la liste des positions ACTIVES (non désactivées, et restreintes aux
+        positions câblées chauffe si model="pro") — source de vérité
+        indépendante de tout état firmware résiduel d'un run précédent.
+        Aucun test individuel par position : le rapport de chaque boîtier
+        est reconstruit après coup depuis les logs partagés (cf.
+        qc_wizard._dispatch_all_boxes_ordered).
     """
     disabled = set(disabled_positions or [])
     enabled = [p for p in range(1, YMS_BENCH_TOTAL + 1) if p not in disabled]
+    if (model or "").lower() == "pro":
+        enabled = [p for p in enabled if p in HEAT_CAPABLE_POSITIONS]
     tests = [{
         "id": "mcu_check",
         "name": "主板×3 + 固件 / MCUs + firmware",
@@ -226,20 +256,32 @@ def build_yms_tests(disabled_positions=None):
             "macro": "QC_STRESS_ALL TOOLS=%s" % tools_arg,
             "timeout": 60,
         })
+        if (model or "").lower() == "pro":
+            # enabled est déjà restreint aux positions câblées chauffe
+            # (filtre plus haut) -- tous les boîtiers de ce lot sont donc
+            # éligibles au heat_all.
+            tests.append({
+                "id": HEAT_ALL_TEST_ID,
+                "name": "全部并行加热测试 / Heat test (parallel, %d°C)" % HEAT_TARGET_C,
+                "type": "automated",
+                "macro": "QC_HEAT_ALL TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
+                "timeout": 330,
+            })
     return tests
 
 
-def build_retest_sequence(position):
+def build_retest_sequence(position, model=None):
     """Mini-séquence pour re-tester un seul boîtier YMS en échec.
 
     v3 (23/08) : même chemin que la séquence principale (load_all +
-    stress_all), juste avec TOOLS= réduit à cette seule position — le
-    dispatch (qc_wizard._dispatch_all_boxes_ordered) fonctionne sans
-    changement, les positions absentes du lot sont simplement ignorées.
-    mcu_check inclus comme skipped (déjà validé en séquence principale)
-    pour conserver la structure du rapport.
+    stress_all [+ heat_all si model="pro" et position câblée chauffe]), juste
+    avec TOOLS= réduit à cette seule position — le dispatch
+    (qc_wizard._dispatch_all_boxes_ordered) fonctionne sans changement, les
+    positions absentes du lot sont simplement ignorées. mcu_check inclus
+    comme skipped (déjà validé en séquence principale) pour conserver la
+    structure du rapport.
     """
-    return [
+    tests = [
         {
             "id": "mcu_check",
             "name": "主板×3 + 固件 / MCUs + firmware",
@@ -263,6 +305,15 @@ def build_retest_sequence(position):
             "timeout": 60,
         },
     ]
+    if (model or "").lower() == "pro" and position in HEAT_CAPABLE_POSITIONS:
+        tests.append({
+            "id": HEAT_ALL_TEST_ID,
+            "name": "YMS-%d 加热测试 / heat (%d°C)" % (position, HEAT_TARGET_C),
+            "type": "automated",
+            "macro": "QC_HEAT_ALL TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
+            "timeout": 330,
+        })
+    return tests
 
 
 def position_from_test_id(test_id):
