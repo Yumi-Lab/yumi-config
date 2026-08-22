@@ -541,7 +541,11 @@ class Panel(ScreenPanel):
                     sq = self._gtk.Button(None, str(pos),
                                           "color3" if passed else "color2")
                     sq.connect("clicked", self._on_pos_square_clicked, pos)
-                sq.set_size_request(56, 50)
+                # 52px (pas 56+) : la zone de contenu KlipperScreen n'est PAS
+                # les 800px de l'écran -- la sidebar de gauche (action_bar,
+                # ks_includes/KlippyGtk.py) prend 10% en mode paysage, donc
+                # 720px reels de large ici. 12*52+11*4=668px, marge confortable.
+                sq.set_size_request(52, 50)
                 pos_grid.attach(sq, pos - 1, 0, 1, 1)
                 self._pos_buttons[pos] = sq
             main_box.pack_start(pos_grid, False, False, 4)
@@ -616,9 +620,11 @@ class Panel(ScreenPanel):
         main_box.pack_start(scroll, True, True, 5)
 
         # Bottom buttons — jusqu'à 4 dessus (YMS + backup cfg) : taille FIXE +
-        # pack sans expand, sinon le 4e sort de l'écran 800px (signalé 22/08 —
-        # les Button() ks_includes sont pensés pour une grille de menu, pas
-        # une rangée compacte, donc leur taille naturelle déborde à 4).
+        # pack sans expand, sinon le 4e sort de l'écran (signalé 22/08 — les
+        # Button() ks_includes sont pensés pour une grille de menu, pas une
+        # rangée compacte, donc leur taille naturelle déborde à 4). 160px, pas
+        # 185+ : la zone de contenu réelle fait 720px (écran 800px - sidebar
+        # gauche action_bar 10%, cf. ks_includes/KlippyGtk.py), pas 800.
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         btn_box.set_halign(Gtk.Align.CENTER)
 
@@ -628,24 +634,24 @@ class Panel(ScreenPanel):
             batch_btn = self._gtk.Button("refresh", "新一批×12 / Nouveau lot ×12",
                                          "color3")
             batch_btn.connect("clicked", self._on_new_batch)
-            batch_btn.set_size_request(185, 55)
+            batch_btn.set_size_request(160, 55)
             btn_box.pack_start(batch_btn, False, False, 0)
 
         # Finish: save report + restore production cfg + restart Klipper
         if os.path.exists(BACKUP_CFG):
             finish_btn = self._gtk.Button("complete", "完成 / Finish", "color3")
             finish_btn.connect("clicked", self._on_finish_qc)
-            finish_btn.set_size_request(185, 55)
+            finish_btn.set_size_request(160, 55)
             btn_box.pack_start(finish_btn, False, False, 0)
 
         save_btn = self._gtk.Button("sd", _("保存报告 / Save report"), "color2")
         save_btn.connect("clicked", self._on_save_report)
-        save_btn.set_size_request(185, 55)
+        save_btn.set_size_request(160, 55)
         btn_box.pack_start(save_btn, False, False, 0)
 
         new_btn = self._gtk.Button("refresh", _("新检测 / New QC"), "color1")
         new_btn.connect("clicked", self._on_new_qc)
-        new_btn.set_size_request(185, 55)
+        new_btn.set_size_request(160, 55)
         btn_box.pack_start(new_btn, False, False, 0)
 
         main_box.pack_end(btn_box, False, False, 5)
