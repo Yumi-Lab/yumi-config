@@ -1027,23 +1027,22 @@ class Panel(ScreenPanel):
         has_stress_all = any(t.get("id") == STRESS_ALL_TEST_ID
                              for t in self.engine.tests)
         if is_yms and is_yms_head and result in (QCResult.PASS, QCResult.FAIL):
-            if has_stress_all and result == QCResult.PASS:
-                # Rapport pas encore complet : le stress groupé n'a pas
-                # couru -- dispatché depuis _dispatch_stress_batch une fois
-                # stress_all terminé. Un FAIL en phase 1, lui, est définitif
-                # (jamais éligible au stress groupé) -> dispatché tout de
-                # suite comme avant.
+            if has_stress_all:
+                # v3 (22/08) : PLUS de dispatch au fil de l'eau ici, ni pour
+                # un PASS (rapport pas complet avant stress_all) ni pour un
+                # FAIL (sinon les étiquettes sortent dans l'ordre où les
+                # boîtiers FINISSENT, pas dans l'ordre des positions --
+                # signalé comme gênant). TOUT part groupé, dans l'ordre
+                # 1..12, depuis _on_qc_complete une fois la séquence ENTIÈRE
+                # terminée (cf. _dispatch_all_boxes_ordered).
                 pass
             else:
                 # v1.4 : l'allocation du code se fait DANS le thread de
                 # dispatch, en fin de test (PASS -> YMSL-/YMSP-, FAIL ->
-                # QCFL-). Séquence (sans stress_all) et re-test passent par
-                # le même chemin.
+                # QCFL-). Re-test unitaire (pas de stress_all, un seul
+                # boîtier -> aucun enjeu d'ordre) : feedback immédiat.
                 threading.Thread(target=self._dispatch_box,
                                  args=(test_id, result), daemon=True).start()
-        elif is_yms and test_id == STRESS_ALL_TEST_ID:
-            threading.Thread(target=self._dispatch_stress_batch,
-                             daemon=True).start()
         # Run next test if available
         test = self.engine.get_current_test()
         if test and self.engine.state == QCState.RUNNING:
@@ -1088,6 +1087,14 @@ class Panel(ScreenPanel):
                 open(path + ".sent", "w").close()
             except OSError as e:
                 logger.warning("QC YMS: sauvegarde session: %s", e)
+            # v3 (22/08) : séquence ENTIÈRE terminée (stress_all inclus) --
+            # dispatch (allocation + rapport + étiquette) de TOUS les
+            # boîtiers, DANS L'ORDRE des positions 1..12, un par un (pas de
+            # threads concurrents ici -> l'ordre de sortie des étiquettes
+            # est garanti, plus de course entre boîtiers).
+            if any(t.get("id") == STRESS_ALL_TEST_ID for t in self.engine.tests):
+                threading.Thread(target=self._dispatch_all_boxes_ordered,
+                                 daemon=True).start()
         else:
             # Envoi AUTOMATIQUE au compteur en fin de QC — indépendant du
             # bouton Terminer et de la présence d'un backup.
@@ -1152,34 +1159,43 @@ class Panel(ScreenPanel):
         """measures{} depuis les logs du test (fail_reason = 7 valeurs normées)."""
         return extract_measures(logs, passed)
 
-    def _dispatch_stress_batch(self, widget=None):
-        """Fin du sweep stress groupé (stress_all, v2 22/08) : le firmware a
-        déjà loggé le résultat de CHAQUE position dans le log PARTAGÉ
-        stress_all, chaque ligne taguée "QC E<n>_HEAD: ..." (même format que
-        l'ancien sweep solo -> extract_measures() les reconnaît sans aucun
-        changement). Pour chaque boîtier ayant passé la phase 1 : filtre SES
-        lignes, les fusionne dans son propre log (comme s'il avait tout fait
-        seul), décide FAIL si son suivi a été perdu, puis dispatch (comme un
-        _dispatch_box normal) — un thread par boîtier, en parallèle."""
+    def _dispatch_all_boxes_ordered(self):
+        """Séquence ENTIÈRE terminée (stress_all inclus, v3 22/08) : dispatch
+        TOUS les boîtiers (allocation + rapport + étiquette), DANS L'ORDRE
+        des positions 1..12, un par un et SÉQUENTIEL (pas de thread par
+        boîtier ici) -- garantit que les étiquettes sortent dans l'ordre des
+        postes, pas dans l'ordre où chaque dispatch réseau finit par hasard
+        (signalé 22/08 : source de confusion à l'usine).
+
+        Un FAIL phase 1 est déjà définitif. Un PASS phase 1 doit encore être
+        fusionné avec SON morceau du log stress_all PARTAGÉ, chaque ligne
+        taguée "QC E<n>_HEAD: ..." (même format que l'ancien sweep solo ->
+        extract_measures() les reconnaît sans aucun changement), pour
+        connaître son résultat final (perdu le suivi -> FAIL). Une position
+        SKIPPÉE (banc désactivée) ou jamais lancée n'a ni rapport ni
+        étiquette."""
         stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
         for pos in range(1, YMS_BENCH_TOTAL + 1):
             test_id = test_id_for_position(pos)
             phase1 = self.engine.results.get(test_id, {})
-            if phase1.get("result") != QCResult.PASS:
-                continue  # FAIL/skip phase 1 déjà traité (ou jamais lancé)
-            tag = "QC E%d_HEAD:" % (pos - 1)
-            mine = [l for l in stress_log if l.startswith(tag)]
-            lost = any("PERDU le suivi" in l for l in mine)
-            final = QCResult.FAIL if lost else QCResult.PASS
-            self.engine._test_log.setdefault(test_id, []).extend(mine)
-            self.engine.results[test_id] = {
-                "result": final,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "details": "" if final == QCResult.PASS
-                           else "Stress sweep (groupé) : suivi perdu",
-            }
-            threading.Thread(target=self._dispatch_box,
-                             args=(test_id, final), daemon=True).start()
+            result = phase1.get("result")
+            if result == QCResult.PASS:
+                tag = "QC E%d_HEAD:" % (pos - 1)
+                mine = [l for l in stress_log if l.startswith(tag)]
+                lost = any("PERDU le suivi" in l for l in mine)
+                final = QCResult.FAIL if lost else QCResult.PASS
+                self.engine._test_log.setdefault(test_id, []).extend(mine)
+                self.engine.results[test_id] = {
+                    "result": final,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": "" if final == QCResult.PASS
+                               else "Stress sweep (groupé) : suivi perdu",
+                }
+            elif result == QCResult.FAIL:
+                final = QCResult.FAIL
+            else:
+                continue  # skippé (ou jamais lancé) -> pas de rapport
+            self._dispatch_box(test_id, final)
 
     def _dispatch_box(self, test_id, result):
         """Thread de fin de test d'un boîtier (v1.4) :
