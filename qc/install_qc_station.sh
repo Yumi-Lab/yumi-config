@@ -42,6 +42,12 @@ if [ -d "$KS/panels" ]; then
     ln -sf "$QC/qc_wizard.py" "$KS/panels/qc_wizard.py"
     ln -sf "$QC/qc_engine.py" "$KS/ks_includes/qc_engine.py"
     ln -sf "$QC/qc_yms.py" "$KS/ks_includes/qc_yms.py"
+    # render_qc_tspl.py (gabarit d'étiquette QC) + qrcodegen.py (vendorisé) :
+    # qc_yms.py les importe, sans symlink son "from .render_qc_tspl import"
+    # échoue une fois chargé comme ks_includes.qc_yms (le repli sys.path du
+    # code gère ce cas, mais autant que le fichier soit là directement).
+    ln -sf "$QC/render_qc_tspl.py" "$KS/ks_includes/render_qc_tspl.py"
+    ln -sf "$QC/qrcodegen.py" "$KS/ks_includes/qrcodegen.py"
     for sd in material-dark material-darker; do
         if [ -d "$KS/styles/$sd/images" ] && [ -f "$QC/qc-check.svg" ]; then
             cp "$QC/qc-check.svg" "$KS/styles/$sd/images/qc-check.svg"

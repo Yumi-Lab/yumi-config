@@ -401,7 +401,18 @@ def build_label_tspl(report):
     Returns:
         bytes encodés en ASCII, lignes terminées par CRLF.
     """
-    from .render_qc_tspl import render_qc_label
+    # Import relatif si qc_yms est chargé comme partie d'un paquet (qc.qc_yms
+    # depuis mes tests) ; repli sys.path sinon — c'est le cas RÉEL sur le pad,
+    # où KlipperScreen charge ce fichier via le symlink ks_includes/qc_yms.py
+    # (donc comme ks_includes.qc_yms, pas qc.qc_yms) : ".render_qc_tspl"
+    # chercherait alors ks_includes.render_qc_tspl, qui n'existe pas.
+    try:
+        from .render_qc_tspl import render_qc_label
+    except ImportError:
+        import os
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        from render_qc_tspl import render_qc_label
 
     overall = report.get("overall_result", "?")
     code = report.get("printer_id", "?")
