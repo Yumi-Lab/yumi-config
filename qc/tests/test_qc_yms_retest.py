@@ -7,11 +7,15 @@ from qc.qc_yms import build_box_report, build_retest_sequence
 class TestRetest(unittest.TestCase):
     def test_retest_sequence(self):
         tests = build_retest_sequence(6)
-        self.assertEqual(len(tests), 2)
+        # v3 (23/08) : meme chemin que la sequence principale (load_all +
+        # stress_all), juste TOOLS= reduit a cette seule position.
+        self.assertEqual(len(tests), 3)
         self.assertEqual(tests[0]["id"], "mcu_check")
         self.assertTrue(tests[0].get("skipped"))
-        self.assertEqual(tests[1]["id"], "e5_head")
-        self.assertEqual(tests[1]["macro"], "QC_HEAD_FEED TOOL=6")
+        self.assertEqual(tests[1]["id"], "load_all")
+        self.assertEqual(tests[1]["macro"], "QC_LOAD_ALL TOOLS=6 DIST=300")
+        self.assertEqual(tests[2]["id"], "stress_all")
+        self.assertEqual(tests[2]["macro"], "QC_STRESS_ALL TOOLS=6")
 
     def test_retest_report_single_code(self):
         r = build_box_report(

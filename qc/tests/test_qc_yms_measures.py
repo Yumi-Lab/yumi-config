@@ -5,10 +5,10 @@ from qc.qc_yms import extract_measures
 
 PASS_LOGS = [
     "QC E5_HEAD: motion sensor YMS-6 a change d'etat (mouvement detecte)",
-    "QC E5_HEAD: filament a la tete apres 625mm + motion sensor YMS-6 OK -> stress aller-retour",
+    "QC E5_HEAD: charge 300mm, motion sensor OK -> pret pour stress groupe",
     "QC: YMS-6 decrochage encodeur E=370.5",
-    "QC E5_HEAD: stress 16/16 detected=True",
-    "QC E5_HEAD: stress OK — 16 segments ±100mm (10→100→10mm/s), suivi capteur permanent",
+    "QC E5_HEAD: stress 6/6 detected=True",
+    "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), suivi capteur permanent",
 ]
 
 SENSOR_MUTE_LOGS = [
@@ -25,26 +25,26 @@ TMC_LOGS = [
     "TMC 'extruder_stepper extruder1' reports error: DRV_STATUS: 00150050 s2vsa=1(ShortToSupply_A!) ola=1(OpenLoad_A!) cs_actual=21",
 ]
 
-HEAD_NOT_REACHED_LOGS = [
-    "QC E5_HEAD: filament pas a la tete apres 900mm (chemin bouche / moteur / capteur HS)",
+NO_MOTION_ON_LOAD_LOGS = [
+    "QC E5_HEAD: aucun mouvement detecte sur 300mm (feeder ou capteur HS)",
 ]
 
 STRESS_LOST_LOGS = [
-    "QC E5_HEAD: motion sensor YMS-6 a PERDU le suivi au segment 3/16",
+    "QC E5_HEAD: motion sensor YMS-6 a PERDU le suivi au segment 3/6",
 ]
 
 
 class TestExtractMeasures(unittest.TestCase):
     def test_pass_yms6(self):
         m = extract_measures(PASS_LOGS, passed=True)
-        self.assertEqual(m["feed_mm"], 625)
-        self.assertTrue(m["head_reached"])
+        self.assertEqual(m["feed_mm"], 300)
+        self.assertFalse(m["head_reached"])  # v3 : plus jamais verifie
         self.assertTrue(m["motion_first_detect"])
         self.assertEqual(m["dropouts_e"], [370.5])
         self.assertEqual(m["dropout_count"], 1)
-        self.assertEqual(m["stress_segments_ok"], 16)
-        self.assertEqual(m["stress_segments_total"], 16)
-        self.assertEqual(m["retract_mm"], 625)
+        self.assertEqual(m["stress_segments_ok"], 6)
+        self.assertEqual(m["stress_segments_total"], 6)
+        self.assertEqual(m["retract_mm"], 300)
         self.assertIsNone(m["fail_reason"])
 
     def test_fail_sensor_mute(self):
@@ -64,11 +64,11 @@ class TestExtractMeasures(unittest.TestCase):
         self.assertIn("DRV_STATUS", m["tmc_error"])
         self.assertEqual(m["fail_reason"], "tmc_error")
 
-    def test_fail_head_not_reached(self):
-        m = extract_measures(HEAD_NOT_REACHED_LOGS, passed=False)
-        self.assertEqual(m["feed_mm"], 900)
+    def test_fail_no_motion_on_load(self):
+        m = extract_measures(NO_MOTION_ON_LOAD_LOGS, passed=False)
+        self.assertEqual(m["feed_mm"], 300)
         self.assertFalse(m["head_reached"])
-        self.assertEqual(m["fail_reason"], "head_not_reached")
+        self.assertEqual(m["fail_reason"], "no_motion_on_load")
 
     def test_fail_timeout_no_signature(self):
         m = extract_measures([], passed=False)

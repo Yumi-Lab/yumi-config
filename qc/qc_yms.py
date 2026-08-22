@@ -53,15 +53,15 @@ def extract_measures(logs, passed):
     """
     m = {
         "feed_mm": None,
-        "feed_budget_mm": 900,
+        "feed_budget_mm": LOAD_DIST_MM,
         "head_reached": False,
         "motion_first_detect": False,
         "dropouts_e": [],
         "dropout_count": 0,
         "feed_dropout": False,
         "stress_segments_ok": 0,
-        "stress_segments_total": 16,
-        "stress_speeds_mms": [10, 30, 60, 100],
+        "stress_segments_total": 6,
+        "stress_speeds_mms": [10, 40, 80],
         "retract_mm": None,
         "tmc_error": None,
         "fail_reason": None,
@@ -69,15 +69,16 @@ def extract_measures(logs, passed):
     for line in logs:
         if "a change d'etat" in line:
             m["motion_first_detect"] = True
-        r = re.search(r"filament a la tete apres (\d+)mm", line)
+        # v3 (23/08) : plus de capteur tete -- charge groupee a distance
+        # FIXE (load_all). "head_reached" reste toujours False (jamais
+        # verifie), feed_mm vient de la charge reussie/echouee.
+        r = re.search(r"charge (\d+)mm, motion sensor OK", line)
         if r:
             m["feed_mm"] = int(r.group(1))
-            m["head_reached"] = True
-        r = re.search(r"pas a la tete apres (\d+)mm", line)
+        r = re.search(r"aucun mouvement detecte sur (\d+)mm", line)
         if r:
             m["feed_mm"] = int(r.group(1))
-            m["head_reached"] = False
-            m["fail_reason"] = "head_not_reached"
+            m["fail_reason"] = "no_motion_on_load"
         r = re.search(r"decrochage encodeur E=([\d.]+)", line)
         if r:
             m["dropouts_e"].append(float(r.group(1)))
@@ -104,7 +105,7 @@ def extract_measures(logs, passed):
             m["tmc_error"] = line.strip()[:200]
             m["fail_reason"] = "tmc_error"
     m["dropout_count"] = len(m["dropouts_e"])
-    if m["head_reached"] and m["feed_mm"]:
+    if m["feed_mm"]:
         m["retract_mm"] = m["feed_mm"]
     if passed:
         m["fail_reason"] = None
@@ -172,32 +173,36 @@ def test_id_for_position(pos):
     return "e%d_head" % (pos - 1)
 
 
+LOAD_ALL_TEST_ID = "load_all"
 STRESS_ALL_TEST_ID = "stress_all"
+LOAD_DIST_MM = 300
 
 
 def build_yms_tests(disabled_positions=None):
     """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
 
-    v2 (22/08) — deux phases : PHASE 1 = feed jusqu'au capteur tête, un
-    boîtier après l'autre (le capteur tête !PA8 est UNIQUE et partagé par
-    les 12, impossible d'attribuer une détection à la bonne position si
-    2+ poussent en même temps -> reste séquentiel, structurellement). PHASE
-    2 = un DERNIER test "stress_all" qui sweep TOUS les boîtiers ayant
-    passé la phase 1 EN MÊME TEMPS (chaque motion sensor YMS-n a sa PROPRE
-    pin -> le suivi reste correctement attribué même groupé) — remplace les
-    12 sweeps individuels par 1 seul, le gros du temps économisé.
+    v3 (23/08) — le capteur tête est retiré du protocole banc : il ne
+    validait que le chemin tube DU BANC (partagé, unique), jamais le YMS
+    testé. Ce qui valide réellement le YMS = le feeder qui pousse + le
+    motion sensor qui suit, y compris sous charge dynamique (le sweep
+    stress). Sans capteur tête à atteindre, plus besoin de séquentiel du
+    tout : TOUS les boîtiers actifs chargent ENSEMBLE (load_all, distance
+    FIXE LOAD_DIST_MM, tous synchronisés) puis stressent ENSEMBLE
+    (stress_all) — 2 étapes groupées au lieu de 12 individuelles + 1
+    groupée. Chaque motion sensor YMS-n a sa PROPRE pin -> l'attribution
+    par position reste correcte même en mouvement groupé.
 
     Returns:
-        liste de dicts test (compatible avec QCEngine.tests). Les positions
-        désactivées portent la clé ``skipped: True`` pour que le wizard les
-        saute sans envoyer de macro. Le dernier test ``stress_all`` reçoit
-        la liste des positions ÉLIGIBLES (non désactivées) via TOOLS= —
-        celles qui échouent la phase 1 s'auto-excluent (ok_n jamais mis à 1
-        côté firmware), mais TOOLS= reste la source de vérité pour ne
-        jamais inclure une position désactivée dont ok_n serait resté à 1
-        depuis un run précédent où elle était active.
+        liste de dicts test (compatible avec QCEngine.tests) : mcu_check +
+        load_all + stress_all, chacun des deux derniers portant TOOLS=
+        la liste des positions ACTIVES (non désactivées) — source de
+        vérité indépendante de tout état firmware résiduel d'un run
+        précédent. Aucun test individuel par position : le rapport de
+        chaque boîtier est reconstruit après coup depuis les logs
+        partagés (cf. qc_wizard._dispatch_all_boxes_ordered).
     """
     disabled = set(disabled_positions or [])
+    enabled = [p for p in range(1, YMS_BENCH_TOTAL + 1) if p not in disabled]
     tests = [{
         "id": "mcu_check",
         "name": "主板×3 + 固件 / MCUs + firmware",
@@ -205,35 +210,21 @@ def build_yms_tests(disabled_positions=None):
         "macro": "QC_MCU_CHECK",
         "timeout": 60,
     }]
-    enabled = []
-    for pos in range(1, YMS_BENCH_TOTAL + 1):
-        test_id = test_id_for_position(pos)
-        name = "YMS-%d 送料+传感器 / feed+sensor" % pos
-        if pos in disabled:
-            tests.append({
-                "id": test_id,
-                "name": name,
-                "type": "automated",
-                "macro": "",
-                "timeout": 0,
-                "skipped": True,
-            })
-        else:
-            enabled.append(pos)
-            tests.append({
-                "id": test_id,
-                "name": name,
-                "type": "automated",
-                "macro": "QC_HEAD_FEED_REACH TOOL=%d" % pos,
-                "timeout": 180,
-            })
     if enabled:
+        tools_arg = ",".join(str(p) for p in enabled)
+        tests.append({
+            "id": LOAD_ALL_TEST_ID,
+            "name": "全部并行加载 / Load all (parallel, %dmm)" % LOAD_DIST_MM,
+            "type": "automated",
+            "macro": "QC_LOAD_ALL TOOLS=%s DIST=%d" % (tools_arg, LOAD_DIST_MM),
+            "timeout": 60,
+        })
         tests.append({
             "id": STRESS_ALL_TEST_ID,
             "name": "全部并行应力测试 / Stress sweep (parallel, all boxes)",
             "type": "automated",
-            "macro": "QC_STRESS_ALL TOOLS=%s" % ",".join(str(p) for p in enabled),
-            "timeout": 180,
+            "macro": "QC_STRESS_ALL TOOLS=%s" % tools_arg,
+            "timeout": 60,
         })
     return tests
 
@@ -241,11 +232,13 @@ def build_yms_tests(disabled_positions=None):
 def build_retest_sequence(position):
     """Mini-séquence pour re-tester un seul boîtier YMS en échec.
 
-    Le mcu_check est inclus comme skipped (déjà validé en séquence principale)
-    pour conserver la structure du rapport ; seul e<n>_head est réellement
-    exécuté.
+    v3 (23/08) : même chemin que la séquence principale (load_all +
+    stress_all), juste avec TOOLS= réduit à cette seule position — le
+    dispatch (qc_wizard._dispatch_all_boxes_ordered) fonctionne sans
+    changement, les positions absentes du lot sont simplement ignorées.
+    mcu_check inclus comme skipped (déjà validé en séquence principale)
+    pour conserver la structure du rapport.
     """
-    test_id = test_id_for_position(position)
     return [
         {
             "id": "mcu_check",
@@ -256,11 +249,18 @@ def build_retest_sequence(position):
             "skipped": True,
         },
         {
-            "id": test_id,
-            "name": "YMS-%d 送料+传感器 / feed+sensor" % position,
+            "id": LOAD_ALL_TEST_ID,
+            "name": "YMS-%d 加载 / load" % position,
             "type": "automated",
-            "macro": "QC_HEAD_FEED TOOL=%d" % position,
-            "timeout": 420,
+            "macro": "QC_LOAD_ALL TOOLS=%d DIST=%d" % (position, LOAD_DIST_MM),
+            "timeout": 60,
+        },
+        {
+            "id": STRESS_ALL_TEST_ID,
+            "name": "YMS-%d 应力测试 / stress" % position,
+            "type": "automated",
+            "macro": "QC_STRESS_ALL TOOLS=%d" % position,
+            "timeout": 60,
         },
     ]
 

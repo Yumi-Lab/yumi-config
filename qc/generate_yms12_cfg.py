@@ -307,7 +307,7 @@ def main():
 
     STRESS = """    {% if v.phase == "stress" %}
         {% set seg = v.seg|int %}
-        {% set speeds = [600, 1800, 3600, 4800, 4800, 3600, 1800, 600] %}
+        {% set speeds = [600, 2400, 4800] %}
         {% set nseg = speeds|length * 2 %}
         {% if seg > 0 %}
             {action_respond_info("QC %s: stress %d/%d detected=%s" % (id, seg, nseg, yms))}
@@ -321,7 +321,7 @@ def main():
             SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
             RESPOND MSG="QC:{id}:FAIL"
         {% elif seg >= nseg %}
-            {action_respond_info("QC %s: stress OK — %d segments ±100mm (10→100→10mm/s), suivi capteur permanent" % (id, nseg))}
+            {action_respond_info("QC %s: stress OK — %d segments ±100mm (10→40→80mm/s), suivi capteur permanent" % (id, nseg))}
             M83
             SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=extruder
             G1 E-{[pushed - 150, 0]|max} F1200
@@ -503,143 +503,74 @@ gcode:
         for n in range(12)
     ) + """\
 
-[gcode_macro _QC_REACH_QUEUE]
-description: QC banc - file d'attente pour QC_REACH_ALL (test manuel console) : liste des TOOL restants a enchainer automatiquement.
-variable_remaining: []
+[gcode_macro QC_LOAD_ALL]
+description: QC banc — CHARGE tous les TOOL= EN MEME TEMPS (synchronises), d'une distance FIXE (defaut 300mm), SANS viser le capteur tete (retire du protocole banc le 23/08 -- ne validait que le chemin tube du banc, pas le YMS lui-meme). Valide juste que chaque feeder + son motion sensor bougent. TOOLS=1,2,3,... DIST=300 (mm, optionnel)
+gcode:
+    {% set tools = params.TOOLS.split(",")|map("int")|list %}
+    RESPOND MSG="QC:LOAD_ALL:START"
+    _QC_BOARD_FAN_ON
+    T0
+    {% for t in tools %}
+        SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=0
+        SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=pushed_{t} VALUE=0
+        SET_FILAMENT_SENSOR SENSOR=YMS-{t} ENABLE=1
+        SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=extruder
+    {% endfor %}
+    SET_GCODE_VARIABLE MACRO=_QC_LOAD_ALL_STEP VARIABLE=tools VALUE="{tools}"
+    SET_GCODE_VARIABLE MACRO=_QC_LOAD_ALL_STEP VARIABLE=pushed VALUE=0
+    SET_GCODE_VARIABLE MACRO=_QC_LOAD_ALL_STEP VARIABLE=dist VALUE={params.DIST|default(300)|int}
+    UPDATE_DELAYED_GCODE ID=_qc_load_all_step DURATION=0.3
+
+[gcode_macro _QC_LOAD_ALL_STEP]
+description: QC banc - Etat de la boucle chargement groupe
+variable_tools: []
+variable_pushed: 0
+variable_dist: 300
+variable_chunk: 50
 gcode:
     # macro porte-etat, jamais appelee directement
 
-[gcode_macro QC_REACH_ALL]
-description: QC banc — PRATIQUE (test manuel console) : enchaine QC_HEAD_FEED_REACH pour TOUS les TOOL= de la liste, un a la fois, en ATTENDANT chaque PASS/FAIL avant de lancer le suivant (evite le tir groupe depuis la console qui ecrase l'etat d'un feed encore en cours -> positions "sautees" avec ok_n resté a 0). TOOLS=1,2,3,...
+# Boucle chargement groupe : pousse TOUS les extruder_steppers synchronises
+# (un G1 E deplace tout le lot en meme temps), par paliers de 50mm, jusqu'a
+# DIST. A chaque palier, verifie le motion sensor de CHAQUE position (pin
+# independante) -> une position qui n'a JAMAIS bouge une fois DIST atteint
+# est marquee FAIL (feeder ou capteur HS), les autres PASS -- sans capteur
+# tete, plus besoin de sequentiel : tout le lot avance ensemble d'un coup.
+[delayed_gcode _qc_load_all_step]
 gcode:
-    {% set tools = params.TOOLS.split(",")|map("int")|list %}
-    SET_GCODE_VARIABLE MACRO=_QC_REACH_QUEUE VARIABLE=remaining VALUE="{tools[1:]}"
-    QC_HEAD_FEED_REACH TOOL={tools[0]} MAXD={params.MAXD|default(900)|int}
-
-[gcode_macro QC_HEAD_FEED_REACH]
-description: QC banc — PHASE 1 (sequentiel) : feed YMS jusqu'au capteur tete + valide le motion sensor, retracte 150mm (pret pour le sweep stress groupe). TOOL=1..12.
-gcode:
-    {% set tool = params.TOOL|int %}
-    {% set id = "E" ~ (tool - 1) ~ "_HEAD" %}
-    {% set feeder = "extruder" ~ (tool - 1) %}
-    {% set sensor = "YMS-" ~ tool %}
-    RESPOND MSG="QC:{id}:START"
-    SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{tool} VALUE=0
-    SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=pushed_{tool} VALUE=0
-    _QC_BOARD_FAN_ON
-    T0
-    {% for name in printer %}
-      {% if name.startswith("filament_motion_sensor ") %}
-        SET_FILAMENT_SENSOR SENSOR={name.split(" ", 1)[1]} ENABLE=0
-      {% endif %}
-    {% endfor %}
-    M83
-    G92 E0
-    G1 E150 F6000
-    M400
-    SET_FILAMENT_SENSOR SENSOR={sensor} ENABLE=1
-    _QC_HEAD_REACH_STEP FEEDER={feeder} ID={id} SENSOR={sensor} TOOL={tool} MAXD={params.MAXD|default(900)|int}
-
-[gcode_macro _QC_HEAD_REACH_STEP]
-description: QC banc PHASE 1 - Setup boucle feed (clone de _QC_HEAD_FEED, sans la phase stress -> objet variable_* separe pour ne jamais interferer avec le re-test unitaire qui utilise _QC_HEAD_FEED)
-variable_id: ""
-variable_feeder: ""
-variable_sensor: ""
-variable_tool: 0
-variable_pushed: 0
-variable_chunk: 50
-variable_maxd: 900
-variable_yms_seen: 0
-gcode:
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=id VALUE="'{params.ID}'"
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=feeder VALUE="'{params.FEEDER}'"
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=sensor VALUE="'{params.SENSOR}'"
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=tool VALUE={params.TOOL|int}
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=pushed VALUE=0
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=yms_seen VALUE=0
-    SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=maxd VALUE={params.MAXD|default(900)|int}
-    SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=extruder
-    UPDATE_DELAYED_GCODE ID=_qc_reach_step DURATION=0.3
-
-# Boucle PHASE 1 — feed jusqu'au capteur tete (identique en substance a
-# _qc_head_step, sans le branchement stress) : memes 4 issues (deja a la
-# tete, capteur muet, decrochage en cours de feed, maxd depasse) + succes
-# -> retracte 150mm SEULEMENT (pas tout, le stress groupe part de la),
-# persiste pushed/ok dans _QC_YMS_STATE pour la phase 2.
-[delayed_gcode _qc_reach_step]
-gcode:
-    {% set v = printer["gcode_macro _QC_HEAD_REACH_STEP"] %}
-    {% set id = v.id %}
-    {% set feeder = v.feeder %}
-    {% set sensor = v.sensor %}
-    {% set tool = v.tool|int %}
+    {% set v = printer["gcode_macro _QC_LOAD_ALL_STEP"] %}
+    {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
+    {% set tools = v.tools %}
     {% set pushed = v.pushed|int %}
-    {% set head = printer["filament_switch_sensor head_sensor"].filament_detected %}
-    {% set yms = printer["filament_motion_sensor " ~ sensor].filament_detected %}
-    {% if yms and v.yms_seen|int == 0 %}
-        SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=yms_seen VALUE=1
-        {action_respond_info("QC %s: motion sensor %s a change d'etat (mouvement detecte)" % (id, sensor))}
-    {% endif %}
-    {% if head %}
-        {% if pushed == 0 %}
-            RESPOND TYPE=error MSG="QC {id}: filament deja a la tete avant feed (pas retire ?)"
-            SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
-            RESPOND MSG="QC:{id}:FAIL"
-            _QC_REACH_QUEUE_NEXT
-        {% elif v.yms_seen|int == 1 or yms %}
-            {action_respond_info("QC %s: filament a la tete apres %dmm + motion sensor %s OK -> pret pour stress groupe" % (id, pushed, sensor))}
-            M83
-            G1 E-250 F1200
-            M400
-            SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
-            SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=pushed_{tool} VALUE={pushed}
-            SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{tool} VALUE=1
-            RESPOND MSG="QC:{id}:PASS"
-            _QC_REACH_QUEUE_NEXT
-        {% else %}
-            RESPOND TYPE=error MSG="QC {id}: filament a la tete mais motion sensor {sensor} n'a PAS change d'etat (cablage / capteur HS)"
-            M83
-            G1 E-{[pushed, 200]|min} F1200
-            M400
-            SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
-            RESPOND MSG="QC:{id}:FAIL"
-            _QC_REACH_QUEUE_NEXT
+    {% set dist = v.dist|int %}
+    {% for t in tools %}
+        {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
+        {% if yms and st["ok_" ~ t]|int == 0 %}
+            SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=1
+            {action_respond_info("QC E%d_HEAD: motion sensor YMS-%d a change d'etat (mouvement detecte)" % (t - 1, t))}
         {% endif %}
-    {% elif pushed >= v.maxd|int %}
-        RESPOND TYPE=error MSG="QC {id}: filament pas a la tete apres {v.maxd}mm (chemin bouche / moteur / capteur HS)"
-        M83
-        G1 E-{pushed} F1200
-        M400
-        SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
-        RESPOND MSG="QC:{id}:FAIL"
-        _QC_REACH_QUEUE_NEXT
-    {% elif v.yms_seen|int == 1 and not yms %}
-        RESPOND TYPE=error MSG="QC {id}: motion sensor {sensor} a CESSE de suivre pendant le feed (a {pushed}mm)"
-        M83
-        G1 E-{pushed} F1200
-        M400
-        SYNC_EXTRUDER_MOTION EXTRUDER={feeder} MOTION_QUEUE=
-        RESPOND MSG="QC:{id}:FAIL"
-        _QC_REACH_QUEUE_NEXT
+    {% endfor %}
+    {% if pushed >= dist %}
+        {% for t in tools %}
+            SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=
+            {% if st["ok_" ~ t]|int == 1 %}
+                SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=pushed_{t} VALUE={pushed}
+                {action_respond_info("QC E%d_HEAD: charge %dmm, motion sensor OK -> pret pour stress groupe" % (t - 1, pushed))}
+            {% else %}
+                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: aucun mouvement detecte sur {pushed}mm (feeder ou capteur HS)"
+            {% endif %}
+        {% endfor %}
+        RESPOND MSG="QC:LOAD_ALL:PASS"
     {% else %}
         M83
-        G1 E{v.chunk|int} F600
+        G1 E{v.chunk|int} F1200
         M400
-        SET_GCODE_VARIABLE MACRO=_QC_HEAD_REACH_STEP VARIABLE=pushed VALUE={pushed + v.chunk|int}
-        UPDATE_DELAYED_GCODE ID=_qc_reach_step DURATION=0.3
-    {% endif %}
-
-[gcode_macro _QC_REACH_QUEUE_NEXT]
-description: QC banc - Enchaine le TOOL suivant de la file QC_REACH_ALL (no-op si aucune file en cours, càd appel normal via le wizard). Macro dediee (plutot que le Jinja inline) car SET_GCODE_VARIABLE + un appel de macro dans la MEME branche if/elif d'un delayed_gcode a un ordre d'evaluation fragile.
-gcode:
-    {% set q = printer["gcode_macro _QC_REACH_QUEUE"].remaining %}
-    {% if q %}
-        SET_GCODE_VARIABLE MACRO=_QC_REACH_QUEUE VARIABLE=remaining VALUE="{q[1:]}"
-        QC_HEAD_FEED_REACH TOOL={q[0]}
+        SET_GCODE_VARIABLE MACRO=_QC_LOAD_ALL_STEP VARIABLE=pushed VALUE={pushed + v.chunk|int}
+        UPDATE_DELAYED_GCODE ID=_qc_load_all_step DURATION=0.3
     {% endif %}
 
 [gcode_macro QC_STRESS_ALL]
-description: QC banc — PHASE 2 (parallele) : sweep ±100mm 10→100→10mm/s sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
+description: QC banc — PHASE 2 (parallele) : sweep ±100mm 10→40→80mm/s sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
 gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
@@ -674,7 +605,7 @@ gcode:
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
     {% set tools = v.tools %}
     {% set seg = v.seg|int %}
-    {% set speeds = [600, 1800, 3600, 4800, 4800, 3600, 1800, 600] %}
+    {% set speeds = [600, 2400, 4800] %}
     {% set nseg = speeds|length * 2 %}
     {% if seg > 0 %}
         {% for t in tools %}
@@ -693,7 +624,7 @@ gcode:
     {% if seg >= nseg %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
-                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±100mm (10→100→10mm/s), suivi capteur permanent" % (t - 1, nseg))}
+                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±100mm (10→40→80mm/s), suivi capteur permanent" % (t - 1, nseg))}
             {% endif %}
         {% endfor %}
         {% set ns = namespace(maxpush=0) %}

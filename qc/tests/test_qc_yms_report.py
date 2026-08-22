@@ -17,8 +17,8 @@ class TestBuildBoxReport(unittest.TestCase):
             pad_mac="AABBCCDDEEFF",
             technician="op1",
             test_log={"e5_head": [
-                "QC E5_HEAD: filament a la tete apres 625mm + motion sensor YMS-6 OK -> stress aller-retour",
-                "QC E5_HEAD: stress OK — 16 segments ±100mm (10→100→10mm/s), suivi capteur permanent",
+                "QC E5_HEAD: charge 625mm, motion sensor OK -> pret pour stress groupe",
+                "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), suivi capteur permanent",
             ]},
             engine_results={
                 "mcu_check": {"result": "pass", "timestamp": "ts", "details": ""},
@@ -57,7 +57,7 @@ class TestBuildBoxReport(unittest.TestCase):
             pad_mac="MAC",
             technician="op",
             test_log={"e9_head": [
-                "QC E9_HEAD: filament pas a la tete apres 900mm (chemin bouche / moteur / capteur HS)",
+                "QC E9_HEAD: aucun mouvement detecte sur 900mm (feeder ou capteur HS)",
             ]},
             engine_results={
                 "mcu_check": {"result": "pass"},
@@ -68,7 +68,7 @@ class TestBuildBoxReport(unittest.TestCase):
         self.assertEqual(r["bench_slot"], "hyperdrive_usb:3")
         self.assertEqual(r["overall_result"], "FAIL")
         self.assertEqual(r["failed_tests"], ["e9_head"])
-        self.assertEqual(r["measures"]["fail_reason"], "head_not_reached")
+        self.assertEqual(r["measures"]["fail_reason"], "no_motion_on_load")
         self.assertEqual(r["tests"][1]["result"], "fail")
 
     def test_pro_model(self):

@@ -86,6 +86,7 @@ try:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
+        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -110,6 +111,7 @@ except ImportError:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
+        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -1022,34 +1024,14 @@ class Panel(ScreenPanel):
     def _on_test_complete(self, test_id, result):
         self._cancel_timeout()
         GLib.idle_add(self._add_log_entry, test_id, result)
-        is_yms = self._selected_size.upper().startswith("YMS")
-        is_yms_head = re.fullmatch(r"e\d+_head", test_id)
-        # v2 (22/08) : la séquence PRINCIPALE (build_yms_tests) porte un
-        # dernier test stress_all -- le sweep stress groupé de TOUS les
-        # boîtiers qui ont passé la phase 1 (feed), en une fois. Le RE-TEST
-        # unitaire (build_retest_sequence) n'a PAS ce test -- il garde
-        # l'ancien chemin complet (feed+stress) en un seul _dispatch_box,
-        # une seule position n'ayant rien à gagner à être "parallélisée".
-        has_stress_all = any(t.get("id") == STRESS_ALL_TEST_ID
-                             for t in self.engine.tests)
-        if is_yms and is_yms_head and result in (QCResult.PASS, QCResult.FAIL):
-            if has_stress_all:
-                # v3 (22/08) : PLUS de dispatch au fil de l'eau ici, ni pour
-                # un PASS (rapport pas complet avant stress_all) ni pour un
-                # FAIL (sinon les étiquettes sortent dans l'ordre où les
-                # boîtiers FINISSENT, pas dans l'ordre des positions --
-                # signalé comme gênant). TOUT part groupé, dans l'ordre
-                # 1..12, depuis _on_qc_complete une fois la séquence ENTIÈRE
-                # terminée (cf. _dispatch_all_boxes_ordered).
-                pass
-            else:
-                # v1.4 : l'allocation du code se fait DANS le thread de
-                # dispatch, en fin de test (PASS -> YMSL-/YMSP-, FAIL ->
-                # QCFL-). Re-test unitaire (pas de stress_all, un seul
-                # boîtier -> aucun enjeu d'ordre) : feedback immédiat.
-                threading.Thread(target=self._dispatch_box,
-                                 args=(test_id, result), daemon=True).start()
-        # Run next test if available
+        # v3 (23/08) : plus aucun dispatch par-test ici. load_all et
+        # stress_all sont des étapes GROUPÉES (tous les boîtiers actifs à la
+        # fois, plus de capteur tête à atteindre donc plus de test individuel
+        # par position) -- même pour le re-test unitaire (build_retest_sequence
+        # utilise les mêmes deux étapes, juste TOOLS= réduit à 1 position).
+        # Le dispatch (allocation + rapport + étiquette), pour TOUS les cas,
+        # part groupé dans l'ordre 1..12 depuis _on_qc_complete une fois la
+        # séquence ENTIÈRE terminée (cf. _dispatch_all_boxes_ordered).
         test = self.engine.get_current_test()
         if test and self.engine.state == QCState.RUNNING:
             GLib.idle_add(self._run_test, test)
@@ -1173,34 +1155,41 @@ class Panel(ScreenPanel):
         postes, pas dans l'ordre où chaque dispatch réseau finit par hasard
         (signalé 22/08 : source de confusion à l'usine).
 
-        Un FAIL phase 1 est déjà définitif. Un PASS phase 1 doit encore être
-        fusionné avec SON morceau du log stress_all PARTAGÉ, chaque ligne
-        taguée "QC E<n>_HEAD: ..." (même format que l'ancien sweep solo ->
-        extract_measures() les reconnaît sans aucun changement), pour
-        connaître son résultat final (perdu le suivi -> FAIL). Une position
-        SKIPPÉE (banc désactivée) ou jamais lancée n'a ni rapport ni
-        étiquette."""
+        v3 (23/08) : load_all ET stress_all sont maintenant TOUS LES DEUX des
+        étapes GROUPÉES (plus de capteur tête -> plus de test individuel par
+        position, cf. qc_yms.build_yms_tests) -- donc PLUS de résultat
+        engine.results par position à lire. Chaque position est reconstruite
+        depuis SON morceau des DEUX logs partagés, chaque ligne taguée
+        "QC E<n>_HEAD: ..." (même format qu'avant -> extract_measures() les
+        reconnaît sans changement) : absente de load_all -> position hors de
+        ce lot (désactivée), jamais de rapport. "aucun mouvement detecte" ->
+        FAIL définitif au chargement, jamais éligible au stress. Sinon,
+        résultat final tranché par le morceau stress_all (perdu le suivi ->
+        FAIL)."""
+        load_log = self.engine._test_log.get(LOAD_ALL_TEST_ID, [])
         stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
         for pos in range(1, YMS_BENCH_TOTAL + 1):
             test_id = test_id_for_position(pos)
-            phase1 = self.engine.results.get(test_id, {})
-            result = phase1.get("result")
-            if result == QCResult.PASS:
-                tag = "QC E%d_HEAD:" % (pos - 1)
-                mine = [l for l in stress_log if l.startswith(tag)]
-                lost = any("PERDU le suivi" in l for l in mine)
-                final = QCResult.FAIL if lost else QCResult.PASS
-                self.engine._test_log.setdefault(test_id, []).extend(mine)
-                self.engine.results[test_id] = {
-                    "result": final,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "details": "" if final == QCResult.PASS
-                               else "Stress sweep (groupé) : suivi perdu",
-                }
-            elif result == QCResult.FAIL:
+            tag = "QC E%d_HEAD:" % (pos - 1)
+            mine_load = [l for l in load_log if l.startswith(tag)]
+            if not mine_load:
+                continue  # position absente de ce lot (désactivée) -> pas de rapport
+            self.engine._test_log.setdefault(test_id, []).extend(mine_load)
+            load_failed = any("aucun mouvement detecte" in l for l in mine_load)
+            if load_failed:
                 final = QCResult.FAIL
+                details = "Chargement : aucun mouvement détecté"
             else:
-                continue  # skippé (ou jamais lancé) -> pas de rapport
+                mine_stress = [l for l in stress_log if l.startswith(tag)]
+                lost = any("PERDU le suivi" in l for l in mine_stress)
+                self.engine._test_log[test_id].extend(mine_stress)
+                final = QCResult.FAIL if lost else QCResult.PASS
+                details = "" if final == QCResult.PASS else "Stress sweep (groupé) : suivi perdu"
+            self.engine.results[test_id] = {
+                "result": final,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": details,
+            }
             self._dispatch_box(test_id, final)
 
     def _dispatch_box(self, test_id, result):
