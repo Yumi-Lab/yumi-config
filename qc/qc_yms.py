@@ -187,7 +187,8 @@ def test_id_for_position(pos):
 
 LOAD_ALL_TEST_ID = "load_all"
 STRESS_ALL_TEST_ID = "stress_all"
-HEAT_ALL_TEST_ID = "heat_all"
+HEAT_START_TEST_ID = "heat_start"
+HEAT_ALL_TEST_ID = "heat_wait"
 LOAD_DIST_MM = 300
 
 # YMS Pro seulement : plateau chauffant + sonde intégrés, câblés sur le banc
@@ -231,7 +232,8 @@ def build_yms_tests(disabled_positions=None, model=None):
     """
     disabled = set(disabled_positions or [])
     enabled = [p for p in range(1, YMS_BENCH_TOTAL + 1) if p not in disabled]
-    if (model or "").lower() == "pro":
+    is_pro = (model or "").lower() == "pro"
+    if is_pro:
         enabled = [p for p in enabled if p in HEAT_CAPABLE_POSITIONS]
     tests = [{
         "id": "mcu_check",
@@ -242,6 +244,20 @@ def build_yms_tests(disabled_positions=None, model=None):
     }]
     if enabled:
         tools_arg = ",".join(str(p) for p in enabled)
+        if is_pro:
+            # v4 (23/08) : la chauffe DEMARRE en premier, non-bloquant --
+            # elle monte en tâche de fond PENDANT load_all/stress_all
+            # (qui n'ont pas besoin d'attendre), au lieu de s'ajouter APRÈS
+            # coup au temps total. QC_HEAT_WAIT (fin de séquence) ne
+            # décompte son timeout QUE depuis son propre appel -- le temps
+            # déjà chauffé pendant load/stress est "gratuit".
+            tests.append({
+                "id": HEAT_START_TEST_ID,
+                "name": "全部并行加热启动 / Heat start (parallel, %d°C)" % HEAT_TARGET_C,
+                "type": "automated",
+                "macro": "QC_HEAT_START TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
+                "timeout": 30,
+            })
         tests.append({
             "id": LOAD_ALL_TEST_ID,
             "name": "全部并行加载 / Load all (parallel, %dmm)" % LOAD_DIST_MM,
@@ -256,15 +272,12 @@ def build_yms_tests(disabled_positions=None, model=None):
             "macro": "QC_STRESS_ALL TOOLS=%s" % tools_arg,
             "timeout": 60,
         })
-        if (model or "").lower() == "pro":
-            # enabled est déjà restreint aux positions câblées chauffe
-            # (filtre plus haut) -- tous les boîtiers de ce lot sont donc
-            # éligibles au heat_all.
+        if is_pro:
             tests.append({
                 "id": HEAT_ALL_TEST_ID,
-                "name": "全部并行加热测试 / Heat test (parallel, %d°C)" % HEAT_TARGET_C,
+                "name": "全部并行加热测试 / Heat wait (parallel, %d°C)" % HEAT_TARGET_C,
                 "type": "automated",
-                "macro": "QC_HEAT_ALL TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
+                "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
                 "timeout": 330,
             })
     return tests
@@ -273,44 +286,52 @@ def build_yms_tests(disabled_positions=None, model=None):
 def build_retest_sequence(position, model=None):
     """Mini-séquence pour re-tester un seul boîtier YMS en échec.
 
-    v3 (23/08) : même chemin que la séquence principale (load_all +
-    stress_all [+ heat_all si model="pro" et position câblée chauffe]), juste
-    avec TOOLS= réduit à cette seule position — le dispatch
-    (qc_wizard._dispatch_all_boxes_ordered) fonctionne sans changement, les
-    positions absentes du lot sont simplement ignorées. mcu_check inclus
-    comme skipped (déjà validé en séquence principale) pour conserver la
-    structure du rapport.
+    v4 (23/08) : même chemin que la séquence principale — heat_start
+    (non-bloquant, si model="pro" et position câblée chauffe) démarre AVANT
+    load_all/stress_all pour chauffer en tâche de fond pendant ceux-ci,
+    heat_wait ferme la séquence. TOOLS= réduit à cette seule position — le
+    dispatch (qc_wizard._dispatch_all_boxes_ordered) fonctionne sans
+    changement, les positions absentes du lot sont simplement ignorées.
+    mcu_check inclus comme skipped (déjà validé en séquence principale)
+    pour conserver la structure du rapport.
     """
-    tests = [
-        {
-            "id": "mcu_check",
-            "name": "主板×3 + 固件 / MCUs + firmware",
+    heat_capable = (model or "").lower() == "pro" and position in HEAT_CAPABLE_POSITIONS
+    tests = [{
+        "id": "mcu_check",
+        "name": "主板×3 + 固件 / MCUs + firmware",
+        "type": "automated",
+        "macro": "",
+        "timeout": 0,
+        "skipped": True,
+    }]
+    if heat_capable:
+        tests.append({
+            "id": HEAT_START_TEST_ID,
+            "name": "YMS-%d 加热启动 / heat start (%d°C)" % (position, HEAT_TARGET_C),
             "type": "automated",
-            "macro": "",
-            "timeout": 0,
-            "skipped": True,
-        },
-        {
-            "id": LOAD_ALL_TEST_ID,
-            "name": "YMS-%d 加载 / load" % position,
-            "type": "automated",
-            "macro": "QC_LOAD_ALL TOOLS=%d DIST=%d" % (position, LOAD_DIST_MM),
-            "timeout": 60,
-        },
-        {
-            "id": STRESS_ALL_TEST_ID,
-            "name": "YMS-%d 应力测试 / stress" % position,
-            "type": "automated",
-            "macro": "QC_STRESS_ALL TOOLS=%d" % position,
-            "timeout": 60,
-        },
-    ]
-    if (model or "").lower() == "pro" and position in HEAT_CAPABLE_POSITIONS:
+            "macro": "QC_HEAT_START TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
+            "timeout": 30,
+        })
+    tests.append({
+        "id": LOAD_ALL_TEST_ID,
+        "name": "YMS-%d 加载 / load" % position,
+        "type": "automated",
+        "macro": "QC_LOAD_ALL TOOLS=%d DIST=%d" % (position, LOAD_DIST_MM),
+        "timeout": 60,
+    })
+    tests.append({
+        "id": STRESS_ALL_TEST_ID,
+        "name": "YMS-%d 应力测试 / stress" % position,
+        "type": "automated",
+        "macro": "QC_STRESS_ALL TOOLS=%d" % position,
+        "timeout": 60,
+    })
+    if heat_capable:
         tests.append({
             "id": HEAT_ALL_TEST_ID,
-            "name": "YMS-%d 加热测试 / heat (%d°C)" % (position, HEAT_TARGET_C),
+            "name": "YMS-%d 加热测试 / heat wait (%d°C)" % (position, HEAT_TARGET_C),
             "type": "automated",
-            "macro": "QC_HEAT_ALL TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
+            "macro": "QC_HEAT_WAIT TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
             "timeout": 330,
         })
     return tests

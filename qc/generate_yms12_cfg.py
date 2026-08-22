@@ -714,6 +714,73 @@ gcode:
         SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE={seg + 1}
         UPDATE_DELAYED_GCODE ID=_qc_stress_all_step DURATION=0.3
     {% endif %}
+
+[gcode_macro QC_HEAT_START]
+description: QC banc — YMS Pro : DEMARRE la chauffe de TOUS les TOOL= (plateau intégré) EN MEME TEMPS et retourne IMMEDIATEMENT (non-bloquant) -- la montée continue en tâche de fond PENDANT le reste du protocole (load_all/stress_all), qui n'attend plus la chauffe pour démarrer. TOOLS=3,4,5,... TARGET=85 (optionnel) — à faire suivre plus tard de QC_HEAT_WAIT avec les MÊMES TOOLS pour valider/couper.
+gcode:
+    {% set tools = params.TOOLS.split(",")|map("int")|list %}
+    {% set target = params.TARGET|default(85)|int %}
+    RESPOND MSG="QC:HEAT_START:START"
+    {% for t in tools %}
+        SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET={target}
+    {% endfor %}
+    RESPOND MSG="QC:HEAT_START:PASS"
+
+[gcode_macro QC_HEAT_WAIT]
+description: QC banc — YMS Pro : ATTEND que TOUS les TOOL= (chauffe déjà lancée via QC_HEAT_START) atteignent TARGET (tolérance 2C) ou TIMEOUT secondes (défaut 300, décompté depuis CET appel -- le temps déjà chauffé pendant load_all/stress_all est donc "gratuit"). Une position en timeout est marquée FAIL sans bloquer les autres. TOOLS=3,4,5,... TARGET=85 (optionnel, doit matcher QC_HEAT_START)
+gcode:
+    {% set tools = params.TOOLS.split(",")|map("int")|list %}
+    {% set target = params.TARGET|default(85)|int %}
+    RESPOND MSG="QC:HEAT_WAIT:START"
+    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=tools VALUE="{tools}"
+    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=target VALUE={target}
+    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE=0
+    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=timeout VALUE={params.TIMEOUT|default(300)|int}
+    UPDATE_DELAYED_GCODE ID=_qc_heat_all_step DURATION=1.0
+
+[gcode_macro _QC_HEAT_ALL_STEP]
+description: QC banc - Etat de la boucle chauffe groupee (YMS Pro)
+variable_tools: []
+variable_target: 85
+variable_elapsed: 0
+variable_timeout: 300
+gcode:
+    # macro porte-etat, jamais appelee directement
+
+# Boucle chauffe groupee — poll 1x/s la temperature de CHAQUE heater_generic
+# (pin independante par position, meme principe que les motion sensors) ;
+# des que TOUS ont atteint TARGET-2C -> PASS pour tous, coupe les heaters.
+# A TIMEOUT, tranche position par position (celles qui ont atteint la cible
+# entre-temps -> OK, les autres -> FAIL) -- une position lente ne bloque
+# jamais les autres indefiniment.
+[delayed_gcode _qc_heat_all_step]
+gcode:
+    {% set v = printer["gcode_macro _QC_HEAT_ALL_STEP"] %}
+    {% set tools = v.tools %}
+    {% set target = v.target|int %}
+    {% set elapsed = v.elapsed|int %}
+    {% set ns = namespace(alldone=true) %}
+    {% for t in tools %}
+        {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
+        {% if h.temperature < target - 2 %}
+            {% set ns.alldone = false %}
+        {% endif %}
+    {% endfor %}
+    {% if ns.alldone or elapsed >= v.timeout|int %}
+        {% for t in tools %}
+            {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
+            {% if h.temperature < target - 2 %}
+                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: chauffe timeout, {"%.1f" % h.temperature}C apres {elapsed}s (cible {target}C)"
+            {% else %}
+                {action_respond_info("QC E%d_HEAD: chauffe OK, %.1fC atteint (cible %dC)" % (t - 1, h.temperature, target))}
+            {% endif %}
+            SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET=0
+        {% endfor %}
+        RESPOND MSG="QC:HEAT_WAIT:PASS"
+    {% else %}
+        SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE={elapsed + 1}
+        UPDATE_DELAYED_GCODE ID=_qc_heat_all_step DURATION=1.0
+    {% endif %}
 """
 
 

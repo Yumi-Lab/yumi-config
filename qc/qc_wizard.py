@@ -88,6 +88,7 @@ try:
         test_id_for_position,
         LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
+        HEAT_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -113,6 +114,7 @@ except ImportError:
         test_id_for_position,
         LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
+        HEAT_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -859,7 +861,7 @@ class Panel(ScreenPanel):
         # Démarre l'engine, puis remplace la séquence par la vraie liste YMS12
         # incluant les positions désactivées (marquées skipped).
         self.engine.start(printer_id, model=self._selected_size)
-        self.engine.tests = build_yms_tests(self._disabled_positions)
+        self.engine.tests = build_yms_tests(self._disabled_positions, model=self._yms_model)
         self.engine.results = {}
         self.engine._test_log = {}
         for test in self.engine.tests:
@@ -911,7 +913,7 @@ class Panel(ScreenPanel):
         self._build_running_screen()
         self.engine.start(printer_id, model=self._selected_size)
         pos = position_from_test_id(self._yms_retest_test_id)
-        self.engine.tests = build_retest_sequence(pos)
+        self.engine.tests = build_retest_sequence(pos, model=self._yms_model)
         self.engine.results = {}
         self.engine._test_log = {}
         for test in self.engine.tests:
@@ -1155,19 +1157,21 @@ class Panel(ScreenPanel):
         postes, pas dans l'ordre où chaque dispatch réseau finit par hasard
         (signalé 22/08 : source de confusion à l'usine).
 
-        v3 (23/08) : load_all ET stress_all sont maintenant TOUS LES DEUX des
-        étapes GROUPÉES (plus de capteur tête -> plus de test individuel par
-        position, cf. qc_yms.build_yms_tests) -- donc PLUS de résultat
+        v3 (23/08) : load_all, stress_all ET heat_all (YMS Pro seulement) sont
+        des étapes GROUPÉES (plus de capteur tête -> plus de test individuel
+        par position, cf. qc_yms.build_yms_tests) -- donc PLUS de résultat
         engine.results par position à lire. Chaque position est reconstruite
-        depuis SON morceau des DEUX logs partagés, chaque ligne taguée
+        depuis SON morceau des logs partagés, chaque ligne taguée
         "QC E<n>_HEAD: ..." (même format qu'avant -> extract_measures() les
         reconnaît sans changement) : absente de load_all -> position hors de
         ce lot (désactivée), jamais de rapport. "aucun mouvement detecte" ->
-        FAIL définitif au chargement, jamais éligible au stress. Sinon,
-        résultat final tranché par le morceau stress_all (perdu le suivi ->
-        FAIL)."""
+        FAIL définitif au chargement, jamais éligible au stress/chauffe.
+        Sinon, résultat final tranché par le stress (perdu le suivi -> FAIL)
+        PUIS, si heat_all a tourné pour cette position (YMS Pro, position
+        câblée chauffe), par le chauffage (timeout -> FAIL)."""
         load_log = self.engine._test_log.get(LOAD_ALL_TEST_ID, [])
         stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
+        heat_log = self.engine._test_log.get(HEAT_ALL_TEST_ID, [])
         for pos in range(1, YMS_BENCH_TOTAL + 1):
             test_id = test_id_for_position(pos)
             tag = "QC E%d_HEAD:" % (pos - 1)
@@ -1181,10 +1185,21 @@ class Panel(ScreenPanel):
                 details = "Chargement : aucun mouvement détecté"
             else:
                 mine_stress = [l for l in stress_log if l.startswith(tag)]
-                lost = any("PERDU le suivi" in l for l in mine_stress)
                 self.engine._test_log[test_id].extend(mine_stress)
-                final = QCResult.FAIL if lost else QCResult.PASS
-                details = "" if final == QCResult.PASS else "Stress sweep (groupé) : suivi perdu"
+                stress_lost = any("PERDU le suivi" in l for l in mine_stress)
+                mine_heat = [l for l in heat_log if l.startswith(tag)]
+                if mine_heat:
+                    self.engine._test_log[test_id].extend(mine_heat)
+                heat_failed = any("chauffe timeout" in l for l in mine_heat)
+                if stress_lost:
+                    final = QCResult.FAIL
+                    details = "Stress sweep (groupé) : suivi perdu"
+                elif heat_failed:
+                    final = QCResult.FAIL
+                    details = "Chauffe (groupée) : température cible non atteinte"
+                else:
+                    final = QCResult.PASS
+                    details = ""
             self.engine.results[test_id] = {
                 "result": final,
                 "timestamp": datetime.now(timezone.utc).isoformat(),

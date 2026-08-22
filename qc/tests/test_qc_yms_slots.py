@@ -62,12 +62,18 @@ class TestDisabledSlots(unittest.TestCase):
         self.assertNotIn("heat_all", [t["id"] for t in tests_default])
 
     def test_build_yms_tests_pro_adds_heat_step_capable_positions_only(self):
-        # model="pro" : heat_all ajoute, TOOLS= seulement les positions a la
-        # fois ACTIVES et CABLEES chauffe (3,4,5,8,9,10) -- 1,2,6,7,11,12
-        # n'ont jamais cette option quel que soit le modele.
+        # v4 (23/08) : model="pro" ajoute heat_start EN PREMIER (non-bloquant,
+        # demarre la chauffe pendant que load_all/stress_all tournent) et
+        # heat_wait EN DERNIER (attend/tranche) -- TOOLS= seulement les
+        # positions a la fois ACTIVES et CABLEES chauffe (3,4,5,8,9,10) --
+        # 1,2,6,7,11,12 n'ont jamais cette option quel que soit le modele.
         tests = build_yms_tests([], model="pro")
-        self.assertEqual(tests[-1]["id"], "heat_all")
-        self.assertEqual(tests[-1]["macro"], "QC_HEAT_ALL TOOLS=3,4,5,8,9,10 TARGET=85")
+        self.assertEqual(tests[1]["id"], "heat_start")
+        self.assertEqual(tests[1]["macro"],
+                         "QC_HEAT_START TOOLS=3,4,5,8,9,10 TARGET=85")
+        self.assertEqual(tests[-1]["id"], "heat_wait")
+        self.assertEqual(tests[-1]["macro"],
+                         "QC_HEAT_WAIT TOOLS=3,4,5,8,9,10 TARGET=85")
 
     def test_build_yms_tests_pro_restricts_load_and_stress_too(self):
         # v3 (23/08) : "quand on fait les YMS Pro, on ne fait que le

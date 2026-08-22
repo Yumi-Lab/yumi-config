@@ -33,6 +33,14 @@ STRESS_LOST_LOGS = [
     "QC E5_HEAD: motion sensor YMS-6 a PERDU le suivi au segment 3/6",
 ]
 
+HEAT_OK_LOGS = [
+    "QC E2_HEAD: chauffe OK, 85.3C atteint (cible 85C)",
+]
+
+HEAT_TIMEOUT_LOGS = [
+    "QC E2_HEAD: chauffe timeout, 61.2C apres 300s (cible 85C)",
+]
+
 
 class TestExtractMeasures(unittest.TestCase):
     def test_pass_yms6(self):
@@ -77,6 +85,18 @@ class TestExtractMeasures(unittest.TestCase):
     def test_fail_stress_lost(self):
         m = extract_measures(STRESS_LOST_LOGS, passed=False)
         self.assertEqual(m["fail_reason"], "sensor_lost_stress")
+
+    def test_pass_heat_ok(self):
+        m = extract_measures(HEAT_OK_LOGS, passed=True)
+        self.assertEqual(m["heat_target_c"], 85)
+        self.assertEqual(m["heat_reached_c"], 85.3)
+        self.assertIsNone(m["fail_reason"])
+
+    def test_fail_heat_timeout(self):
+        m = extract_measures(HEAT_TIMEOUT_LOGS, passed=False)
+        self.assertEqual(m["heat_target_c"], 85)
+        self.assertEqual(m["heat_reached_c"], 61.2)
+        self.assertEqual(m["fail_reason"], "heat_timeout")
 
 
 if __name__ == "__main__":
