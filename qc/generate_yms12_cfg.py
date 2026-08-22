@@ -307,7 +307,7 @@ def main():
 
     STRESS = """    {% if v.phase == "stress" %}
         {% set seg = v.seg|int %}
-        {% set speeds = [600, 1800, 3600, 6000, 6000, 3600, 1800, 600] %}
+        {% set speeds = [600, 1800, 3600, 4800, 4800, 3600, 1800, 600] %}
         {% set nseg = speeds|length * 2 %}
         {% if seg > 0 %}
             {action_respond_info("QC %s: stress %d/%d detected=%s" % (id, seg, nseg, yms))}
@@ -674,7 +674,7 @@ gcode:
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
     {% set tools = v.tools %}
     {% set seg = v.seg|int %}
-    {% set speeds = [600, 1800, 3600, 6000, 6000, 3600, 1800, 600] %}
+    {% set speeds = [600, 1800, 3600, 4800, 4800, 3600, 1800, 600] %}
     {% set nseg = speeds|length * 2 %}
     {% if seg > 0 %}
         {% for t in tools %}
