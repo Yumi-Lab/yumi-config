@@ -143,10 +143,14 @@ def render(section_elements, data, w_mm, h_mm):
         if t == "frame":
             x1, y1 = DOT(e["x"]), DOT(e["y"])
             x2, y2 = DOT(e["x"] + e["w"]), DOT(e["y"] + e["h"])
+            # `radius` (mm, optionnel) = coins arrondis, comme le cadre « quick » de l'étiquette
+            # bobine (cadre autour du numéro de poste) — même rendu que l'éditeur Label Expert.
+            radius = DOT(e["radius"]) if e.get("radius") else 0
+            draw_rect = (lambda box, **kw: d.rounded_rectangle(box, radius=radius, **kw)) if radius else d.rectangle
             if e.get("thick"):
-                d.rectangle([x1, y1, x2, y2], outline=0, width=max(1, DOT(e["thick"])))
+                draw_rect([x1, y1, x2, y2], outline=0, width=max(1, DOT(e["thick"])))
             elif e.get("fill"):
-                d.rectangle([x1, y1, x2, y2], fill=0)
+                draw_rect([x1, y1, x2, y2], fill=0)
         elif t == "line":
             x1, y1 = DOT(e["x"]), DOT(e["y"])
             x2 = DOT(e["x"] + e["w"])
