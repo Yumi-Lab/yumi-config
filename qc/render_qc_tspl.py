@@ -28,7 +28,12 @@ import base64, io, json, os, sys
 from PIL import Image, ImageDraw, ImageFont
 
 DPMM = 8  # 203 dpi ~ 8 dots/mm (POS80L / HS-584)
-HERE = os.path.dirname(os.path.abspath(__file__))
+# realpath, PAS abspath : ce module est chargé sur le pad via le symlink
+# ks_includes/render_qc_tspl.py -> yumi-config/qc/render_qc_tspl.py. abspath()
+# ne résout PAS les symlinks, donc HERE pointait vers ks_includes/ (pas de
+# assets/ là-bas) -> chaque logo échouait en silence (except Exception: return
+# dans _draw_logo). Confirmé sur le pad le 22/08 : aucun logo ne sortait.
+HERE = os.path.dirname(os.path.realpath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 
 # qrcodegen.py est vendorisé À CÔTÉ de ce fichier (pas un paquet pip) — un simple
