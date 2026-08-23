@@ -138,6 +138,8 @@ class Panel(ScreenPanel):
         self._current_report = None
         self._timeout_id = None
         self._restart_retries = 0
+        self._poller_lock = threading.Lock()
+        self._poller_stop = None
         self._selected_size = QC_SIZES[0]
         self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
         self._bench_config = {}     # v1.5 : yms_version + composants montés
@@ -762,13 +764,31 @@ class Panel(ScreenPanel):
     # ignorés), donc la double livraison est sans effet.
 
     def _start_gcode_poller(self):
-        self._stop_gcode_poller()
-        self._poller_stop = threading.Event()
-        threading.Thread(target=self._gcode_poller_worker,
-                         args=(self._poller_stop,), daemon=True).start()
+        # v4 (23/08) : start/stop DOIVENT être atomiques (self._poller_lock).
+        # Sans lock, deux appels concurrents à _start_gcode_poller (déclenché
+        # à chaque run/re-test/reconnect) peuvent tous les deux lire le même
+        # ancien Event AVANT que l'un des deux écrase self._poller_stop -->
+        # le thread créé par le second perd toute référence à son propre
+        # stop Event, devient un ZOMBIE qui tourne toutes les 2s pour
+        # toujours (jamais arrêtable). Vécu en réel le 23/08 : accumulation
+        # de zombies sur une session de plusieurs heures pleine de
+        # relances -> des dizaines de threads qui repollent en boucle,
+        # rejouent les mêmes vieux messages en rafale (des centaines/s),
+        # CPU explosé -> "Timer too close" -> shutdown MCU.
+        with self._poller_lock:
+            self._stop_gcode_poller_locked()
+            self._poller_stop = threading.Event()
+            stop = self._poller_stop
+            threading.Thread(target=self._gcode_poller_worker,
+                             args=(stop,), daemon=True).start()
 
     def _stop_gcode_poller(self):
-        if getattr(self, "_poller_stop", None):
+        with self._poller_lock:
+            self._stop_gcode_poller_locked()
+
+    def _stop_gcode_poller_locked(self):
+        """Appelant DOIT déjà tenir self._poller_lock."""
+        if self._poller_stop is not None:
             self._poller_stop.set()
             self._poller_stop = None
 
@@ -778,6 +798,12 @@ class Panel(ScreenPanel):
         # completeraient faussement le test courant.
         last = time.time()
         while not stop.wait(2.0):
+            # Filet de sécurité supplémentaire : si le QC n'est plus en
+            # cours (terminé/abandonné), plus rien à rejouer -- s'arrêter
+            # tout seul, même si un appelant a oublié de le faire.
+            if self.engine.state not in (QCState.RUNNING, QCState.WAITING_GCODE,
+                                         QCState.WAITING_VISUAL):
+                return
             try:
                 with urllib.request.urlopen(
                         "http://127.0.0.1:7125/server/gcode_store?count=60",
