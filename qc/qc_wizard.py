@@ -815,8 +815,15 @@ class Panel(ScreenPanel):
             for g in entries:
                 if g.get("type") == "response" and g.get("time", 0) > last:
                     last = g["time"]
-                    GLib.idle_add(self.engine.process_gcode_response,
-                                  g.get("message", ""))
+                    GLib.idle_add(self._replay_response, g.get("message", ""))
+
+    def _replay_response(self, msg):
+        # process_gcode_response retourne True sur presque tous ses chemins ;
+        # passé tel quel à GLib.idle_add, ce True signifie "replanifie-moi" et
+        # chaque message rejoué devenait un callback idle éternel (~1000
+        # logs/s, /var/log zram saturé). Toujours retirer la source.
+        self.engine.process_gcode_response(msg)
+        return GLib.SOURCE_REMOVE
 
     def _show_yms_model_selector(self, printer_id):
         """Dialogue 2 gros boutons LIGHT / PRO avant allocation YMS."""
