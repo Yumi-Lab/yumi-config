@@ -169,7 +169,7 @@ def heater_sections():
 heater_pin: %(m)s:%(heater)s
 sensor_type: %(sensor_type)s
 sensor_pin: %(m)s:%(sensor)s
-max_power: 0.3
+max_power: 1.0
 control: pid
 pid_Kp: 50
 pid_Ki: 50
