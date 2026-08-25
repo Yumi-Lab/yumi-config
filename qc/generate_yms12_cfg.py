@@ -151,18 +151,17 @@ runout_gcode:
 # carte, confirme sur banc reel (voir commit 23/08). PID Kp/Ki/Kd =
 # valeurs GENERIQUES de depart (non calibrees) -- PID_CALIBRATE a
 # lancer une fois le materiel reel disponible.
-# Ordre logique slot1/slot2/slot3 -> position physique 1/2/3. Constate en
-# reel le 24/08 (les DEUX cartes, pas juste l'USB) : chauffer la position 2
-# (YMS-4/YMS-9) demarrait en fait le heater de la position 3 (YMS-5/YMS-10)
-# et vice versa -- slots 2 et 3 croises dans le harnais physique. Corrige
-# ICI (les entrees 2 et 3 sont inversees dans la liste) plutot qu'en
-# recablant : chaque entree garde son heater+sensor+fan du MEME canal
-# physique (HE1 avec TH1, HBED avec THB), juste l'ORDRE dans la liste
-# change pour matcher la realite du cablage.
+# Valeurs corrigees A LA MAIN par Nicolas en direct sur le banc le 24-25/08
+# (printer.cfg), recuperees ici comme source de verite -- PAS un simple
+# echange de paire heater+sensor comme la 1ere hypothese : le cablage reel
+# melange les canaux independamment (heater et sensor NE viennent PAS du
+# meme "canal" carte pour les slots 2/3), et le ventilateur tourne sur les
+# 3 slots (pas juste 2/3). Reconstituee en interrogeant configfile.settings
+# sur le Klipper reellement en cours (pas juste relu le fichier).
 HEAT_SLOTS = [
-    dict(heater="PC8", sensor="PC1", sensor_type="100K4190YUMI", fan="PC7"),
-    dict(heater="PB6", sensor="PA3", sensor_type="100K4190YUMI", fan="PA2"),
-    dict(heater="PC9", sensor="PC0", sensor_type="100K3950YUMI", fan="PC6"),
+    dict(heater="PC8", sensor="PC1", sensor_type="100K4190YUMI", fan="PC6"),
+    dict(heater="PC9", sensor="PA3", sensor_type="100K4190YUMI", fan="PC7"),
+    dict(heater="PB6", sensor="PC0", sensor_type="100K3950YUMI", fan="PA2"),
 ]
 
 
