@@ -140,6 +140,7 @@ class Panel(ScreenPanel):
         self._restart_retries = 0
         self._poller_lock = threading.Lock()
         self._poller_stop = None
+        self._dispatch_lock = threading.Lock()
         self._selected_size = QC_SIZES[0]
         self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
         self._bench_config = {}     # v1.5 : yms_version + composants montés
@@ -878,6 +879,20 @@ class Panel(ScreenPanel):
 
     def _yms_start_sequence(self, printer_id):
         """Main thread : démarre la séquence 12 positions (slots HS sautés)."""
+        # v4 (25/08) : bloque un NOUVEAU lot tant que le PRÉCÉDENT est encore
+        # en train d'imprimer ses étiquettes (_dispatch_all_boxes_ordered,
+        # sous self._dispatch_lock). self.engine (test_log, results,
+        # bench_session, yms_model...) est une INSTANCE UNIQUE PARTAGÉE --
+        # démarrer un 2e lot pendant que le 1er dispatch encore en cours la
+        # RÉÉCRIT en place, donc le 1er lot finit par imprimer avec les
+        # données du 2e. Constaté en réel 25/08 : deux lots entiers
+        # imprimaient leurs étiquettes entrelacées (YMS-1..12 x2, mélangés).
+        if self._dispatch_lock.locked():
+            self._screen.show_popup_message(
+                "上一批标签还在打印，请稍等 / Étiquettes du lot précédent "
+                "encore en cours d'impression, patiente un instant",
+                level=2)
+            return
         slots_path = os.path.join(CONFIG_DIR, "qc_bench_slots.json")
         self._disabled_positions = load_disabled_positions(slots_path)
         # v1.5 : version produit + composants montés (fichier éditable opérateur)
@@ -934,6 +949,15 @@ class Panel(ScreenPanel):
     def _on_yms_retest_confirmed(self, dialog, response_id, test_id):
         self._gtk.remove_dialog(dialog)
         if response_id != Gtk.ResponseType.YES:
+            return
+        # v4 (25/08) : même garde que _yms_start_sequence -- le re-test
+        # réutilise self.engine, ne pas le réécrire pendant qu'un dispatch
+        # précédent l'utilise encore.
+        if self._dispatch_lock.locked():
+            self._screen.show_popup_message(
+                "上一批标签还在打印，请稍等 / Étiquettes du lot précédent "
+                "encore en cours d'impression, patiente un instant",
+                level=2)
             return
         printer_id = self.labels["printer_id"].get_text().strip()
         self._yms_retest_test_id = test_id
@@ -1201,44 +1225,51 @@ class Panel(ScreenPanel):
         FAIL définitif au chargement, jamais éligible au stress/chauffe.
         Sinon, résultat final tranché par le stress (perdu le suivi -> FAIL)
         PUIS, si heat_all a tourné pour cette position (YMS Pro, position
-        câblée chauffe), par le chauffage (timeout -> FAIL)."""
-        load_log = self.engine._test_log.get(LOAD_ALL_TEST_ID, [])
-        stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
-        heat_log = self.engine._test_log.get(HEAT_ALL_TEST_ID, [])
-        for pos in range(1, YMS_BENCH_TOTAL + 1):
-            test_id = test_id_for_position(pos)
-            tag = "QC E%d_HEAD:" % (pos - 1)
-            mine_load = [l for l in load_log if l.startswith(tag)]
-            if not mine_load:
-                continue  # position absente de ce lot (désactivée) -> pas de rapport
-            self.engine._test_log.setdefault(test_id, []).extend(mine_load)
-            load_failed = any("aucun mouvement detecte" in l for l in mine_load)
-            if load_failed:
-                final = QCResult.FAIL
-                details = "Chargement : aucun mouvement détecté"
-            else:
-                mine_stress = [l for l in stress_log if l.startswith(tag)]
-                self.engine._test_log[test_id].extend(mine_stress)
-                stress_lost = any("PERDU le suivi" in l for l in mine_stress)
-                mine_heat = [l for l in heat_log if l.startswith(tag)]
-                if mine_heat:
-                    self.engine._test_log[test_id].extend(mine_heat)
-                heat_failed = any("chauffe timeout" in l for l in mine_heat)
-                if stress_lost:
+        câblée chauffe), par le chauffage (timeout -> FAIL).
+
+        v4 (25/08) : tout le corps sous self._dispatch_lock -- si un 2e lot
+        réussissait quand même à démarrer pendant que ce dispatch tourne
+        encore (malgré la garde dans _yms_start_sequence), ce lock le fait
+        ATTENDRE ici plutôt que d'entrelacer ses impressions avec celles du
+        1er lot (constaté en réel : YMS-1..12 de deux lots mélangés)."""
+        with self._dispatch_lock:
+            load_log = self.engine._test_log.get(LOAD_ALL_TEST_ID, [])
+            stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
+            heat_log = self.engine._test_log.get(HEAT_ALL_TEST_ID, [])
+            for pos in range(1, YMS_BENCH_TOTAL + 1):
+                test_id = test_id_for_position(pos)
+                tag = "QC E%d_HEAD:" % (pos - 1)
+                mine_load = [l for l in load_log if l.startswith(tag)]
+                if not mine_load:
+                    continue  # position absente de ce lot (désactivée) -> pas de rapport
+                self.engine._test_log.setdefault(test_id, []).extend(mine_load)
+                load_failed = any("aucun mouvement detecte" in l for l in mine_load)
+                if load_failed:
                     final = QCResult.FAIL
-                    details = "Stress sweep (groupé) : suivi perdu"
-                elif heat_failed:
-                    final = QCResult.FAIL
-                    details = "Chauffe (groupée) : température cible non atteinte"
+                    details = "Chargement : aucun mouvement détecté"
                 else:
-                    final = QCResult.PASS
-                    details = ""
-            self.engine.results[test_id] = {
-                "result": final,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "details": details,
-            }
-            self._dispatch_box(test_id, final)
+                    mine_stress = [l for l in stress_log if l.startswith(tag)]
+                    self.engine._test_log[test_id].extend(mine_stress)
+                    stress_lost = any("PERDU le suivi" in l for l in mine_stress)
+                    mine_heat = [l for l in heat_log if l.startswith(tag)]
+                    if mine_heat:
+                        self.engine._test_log[test_id].extend(mine_heat)
+                    heat_failed = any("chauffe timeout" in l for l in mine_heat)
+                    if stress_lost:
+                        final = QCResult.FAIL
+                        details = "Stress sweep (groupé) : suivi perdu"
+                    elif heat_failed:
+                        final = QCResult.FAIL
+                        details = "Chauffe (groupée) : température cible non atteinte"
+                    else:
+                        final = QCResult.PASS
+                        details = ""
+                self.engine.results[test_id] = {
+                    "result": final,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": details,
+                }
+                self._dispatch_box(test_id, final)
 
     def _dispatch_box(self, test_id, result):
         """Thread de fin de test d'un boîtier (v1.4) :
