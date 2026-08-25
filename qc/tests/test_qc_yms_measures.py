@@ -41,6 +41,13 @@ HEAT_TIMEOUT_LOGS = [
     "QC E2_HEAD: chauffe timeout, 61.2C apres 300s (cible 85C)",
 ]
 
+HEAT_CURVE_LOGS = [
+    "QC E2_HEAD: heat 0s 21.4C",
+    "QC E2_HEAD: heat 10s 34.1C",
+    "QC E2_HEAD: heat 20s 48.7C",
+    "QC E2_HEAD: chauffe OK, 85.3C atteint (cible 85C)",
+]
+
 
 class TestExtractMeasures(unittest.TestCase):
     def test_pass_yms6(self):
@@ -97,6 +104,12 @@ class TestExtractMeasures(unittest.TestCase):
         self.assertEqual(m["heat_target_c"], 85)
         self.assertEqual(m["heat_reached_c"], 61.2)
         self.assertEqual(m["fail_reason"], "heat_timeout")
+
+    def test_heat_curve_points(self):
+        m = extract_measures(HEAT_CURVE_LOGS, passed=True)
+        self.assertEqual(m["heat_curve"],
+                         [[0, 21.4], [10, 34.1], [20, 48.7]])
+        self.assertEqual(m["heat_reached_c"], 85.3)
 
 
 if __name__ == "__main__":

@@ -761,6 +761,14 @@ gcode:
 # A TIMEOUT, tranche position par position (celles qui ont atteint la cible
 # entre-temps -> OK, les autres -> FAIL) -- une position lente ne bloque
 # jamais les autres indefiniment.
+#
+# Point de mesure toutes les 10s (Nicolas 25/08) : une ligne par position,
+# taguee "QC E<n>_HEAD:" -> routee par qc_engine dans le buffer DEDIE de
+# cette position (cf. v5 25/08), donc jamais en concurrence avec les 5 autres
+# positions chauffantes. A TIMEOUT=300s par defaut : ~30 points + la ligne
+# finale = 31 lignes, large marge sous le plafond de 40/position. Sert a
+# reconstruire la courbe de chauffe cote rapport (extract_measures ->
+# measures.heat_curve).
 [delayed_gcode _qc_heat_all_step]
 gcode:
     {% set v = printer["gcode_macro _QC_HEAT_ALL_STEP"] %}
@@ -768,6 +776,12 @@ gcode:
     {% set target = v.target|int %}
     {% set elapsed = v.elapsed|int %}
     {% set ns = namespace(alldone=true) %}
+    {% if elapsed % 10 == 0 %}
+        {% for t in tools %}
+            {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
+            {action_respond_info("QC E%d_HEAD: heat %ds %.1fC" % (t - 1, elapsed, h.temperature))}
+        {% endfor %}
+    {% endif %}
     {% for t in tools %}
         {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
         {% if h.temperature < target - 2 %}

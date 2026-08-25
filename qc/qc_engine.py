@@ -11,6 +11,11 @@ from enum import Enum
 
 logger = logging.getLogger("KlipperScreen.qc_engine")
 
+# Une ligne "QC E<n>_HEAD: ..." decrit TOUJOURS UNE position banc precise,
+# quel que soit le test GROUPE (load_all/stress_all/heat_wait) qui l'emet --
+# cf. process_gcode_response.
+_QC_HEAD_TAG_RE = re.compile(r"^QC E(\d+)_HEAD:")
+
 # Répétabilité du Z tap plein course. Comme le homing : on retape plusieurs
 # fois et on valide dès que Z_TAP_WINDOW taps CONSECUTIFS convergent dans la
 # fenêtre Z_TAP_SPREAD_TOL (fenêtre glissante). Ça écarte le tassement/jeu des
@@ -308,20 +313,25 @@ class QCEngine:
 
         # Log par test : capture les lignes d'info (// ...) et erreurs (!! ...)
         # pour le rapport (distances feed, spread Z, corrections vis, mesh...).
-        # Plafond dimensionne pour stress_all (v3, 23/08) : ce test_id est
-        # desormais GROUPE (une seule execution pour les 12 positions a la
-        # fois, plus de test individuel par position) -- pire cas 12 positions
-        # x 6 segments + 12 lignes recap + meta START/PASS = ~86 lignes. A 40
-        # (dimensionne pour l'ancien monde 1 position = 1 test_id), les
-        # dernieres positions de la boucle {% for t in tools %} perdaient
-        # silencieusement toutes leurs lignes stress une fois le plafond
-        # atteint -> measures.stress_segments_ok figeait a 0 malgre un PASS
-        # reel (constate 25/08 sur YMS-10, cf. rapport YMSLV1.020260825...).
+        # v5 (25/08) : une ligne taguee "QC E<n>_HEAD: ..." decrit TOUJOURS une
+        # position banc precise, quel que soit le test GROUPE qui l'emet
+        # (load_all/stress_all/heat_wait) -- elle va DIRECTEMENT dans le
+        # buffer de CETTE position (meme id que le rapport final, "e<n>_head")
+        # au lieu du buffer partage du test courant. Chaque position garde
+        # ainsi son propre budget de lignes, isolee des 11 autres : plus
+        # besoin de deviner un plafond au pire cas (12 positions x 6 segments
+        # dans UN SEUL buffer partage -> les dernieres positions de la boucle
+        # perdaient silencieusement leurs lignes stress une fois le plafond
+        # atteint, measures.stress_segments_ok figeait a 0 malgre un PASS reel
+        # -- constate 25/08 sur YMS-7 et YMS-10). _dispatch_all_boxes_ordered
+        # n'a plus a re-trier les lignes par prefixe apres coup non plus.
         if cur and (message.startswith("// ") or message.startswith("!! ")):
             line = message[3:].strip()
             if line:
-                buf = self._test_log.setdefault(cur["id"], [])
-                if len(buf) < 150 and line not in buf:
+                tag = _QC_HEAD_TAG_RE.match(line)
+                key = ("e%s_head" % tag.group(1)) if tag else cur["id"]
+                buf = self._test_log.setdefault(key, [])
+                if len(buf) < 40 and line not in buf:
                     buf.append(line)
 
         # Capture des trigger_z (YUMI_Z_TAP "VALIDATED: trigger_z=X.XXXX")

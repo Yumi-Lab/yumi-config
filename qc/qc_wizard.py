@@ -86,9 +86,7 @@ try:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
-        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
-        HEAT_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -112,9 +110,7 @@ except ImportError:
         load_disabled_positions,
         position_from_test_id,
         test_id_for_position,
-        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
-        HEAT_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
         MODELS,
@@ -1217,15 +1213,22 @@ class Panel(ScreenPanel):
         v3 (23/08) : load_all, stress_all ET heat_all (YMS Pro seulement) sont
         des étapes GROUPÉES (plus de capteur tête -> plus de test individuel
         par position, cf. qc_yms.build_yms_tests) -- donc PLUS de résultat
-        engine.results par position à lire. Chaque position est reconstruite
-        depuis SON morceau des logs partagés, chaque ligne taguée
-        "QC E<n>_HEAD: ..." (même format qu'avant -> extract_measures() les
-        reconnaît sans changement) : absente de load_all -> position hors de
-        ce lot (désactivée), jamais de rapport. "aucun mouvement detecte" ->
-        FAIL définitif au chargement, jamais éligible au stress/chauffe.
-        Sinon, résultat final tranché par le stress (perdu le suivi -> FAIL)
-        PUIS, si heat_all a tourné pour cette position (YMS Pro, position
-        câblée chauffe), par le chauffage (timeout -> FAIL).
+        engine.results par position à lire.
+
+        v5 (25/08) : qc_engine.process_gcode_response route déjà CHAQUE ligne
+        taguée "QC E<n>_HEAD: ..." dans le buffer de SA position (même id que
+        le rapport final, "e<n>_head") au moment de la capture -- quel que
+        soit le test groupé qui l'émet. self.engine._test_log[test_id] est
+        donc DÉJÀ le log complet et dans l'ordre de cette position (plus
+        besoin de re-trier 3 buffers partagés par préfixe après coup, cf.
+        ancienne version dans l'historique git si besoin de comparer).
+        Absente -> position hors de ce lot (désactivée), jamais de rapport.
+        "aucun mouvement detecte" -> FAIL définitif au chargement, jamais
+        éligible au stress/chauffe. Sinon, résultat tranché par le stress
+        (perdu le suivi, ou aucune ligne stress captée -> FAIL, jamais de
+        PASS par défaut faute de preuve) PUIS, si heat_wait a tourné pour
+        cette position (YMS Pro, position câblée chauffe), par le chauffage
+        (timeout -> FAIL).
 
         v4 (25/08) : tout le corps sous self._dispatch_lock -- si un 2e lot
         réussissait quand même à démarrer pendant que ce dispatch tourne
@@ -1233,34 +1236,23 @@ class Panel(ScreenPanel):
         ATTENDRE ici plutôt que d'entrelacer ses impressions avec celles du
         1er lot (constaté en réel : YMS-1..12 de deux lots mélangés)."""
         with self._dispatch_lock:
-            load_log = self.engine._test_log.get(LOAD_ALL_TEST_ID, [])
-            stress_log = self.engine._test_log.get(STRESS_ALL_TEST_ID, [])
-            heat_log = self.engine._test_log.get(HEAT_ALL_TEST_ID, [])
             for pos in range(1, YMS_BENCH_TOTAL + 1):
                 test_id = test_id_for_position(pos)
-                tag = "QC E%d_HEAD:" % (pos - 1)
-                mine_load = [l for l in load_log if l.startswith(tag)]
-                if not mine_load:
+                logs = self.engine._test_log.get(test_id, [])
+                if not logs:
                     continue  # position absente de ce lot (désactivée) -> pas de rapport
-                self.engine._test_log.setdefault(test_id, []).extend(mine_load)
-                load_failed = any("aucun mouvement detecte" in l for l in mine_load)
+                load_failed = any("aucun mouvement detecte" in l for l in logs)
                 if load_failed:
                     final = QCResult.FAIL
                     details = "Chargement : aucun mouvement détecté"
                 else:
-                    mine_stress = [l for l in stress_log if l.startswith(tag)]
-                    self.engine._test_log[test_id].extend(mine_stress)
-                    stress_lost = any("PERDU le suivi" in l for l in mine_stress)
+                    stress_lost = any("PERDU le suivi" in l for l in logs)
                     # Aucune ligne stress captée pour cette position = son
-                    # résultat n'a jamais été confirmé (plafond de buffer,
-                    # ligne perdue...) -- ne JAMAIS retomber sur un PASS par
-                    # défaut faute de preuve (constaté 25/08 : YMS-10 validé
-                    # PASS avec 0 ligne stress, cf. qc_engine.py plafond 150).
-                    stress_missing = not mine_stress
-                    mine_heat = [l for l in heat_log if l.startswith(tag)]
-                    if mine_heat:
-                        self.engine._test_log[test_id].extend(mine_heat)
-                    heat_failed = any("chauffe timeout" in l for l in mine_heat)
+                    # résultat n'a jamais été confirmé -- ne JAMAIS retomber
+                    # sur un PASS par défaut faute de preuve (constaté 25/08 :
+                    # YMS-7 et YMS-10 validés PASS avec 0 ligne stress).
+                    stress_missing = not any("stress" in l for l in logs)
+                    heat_failed = any("chauffe timeout" in l for l in logs)
                     if stress_lost:
                         final = QCResult.FAIL
                         details = "Stress sweep (groupé) : suivi perdu"

@@ -66,6 +66,7 @@ def extract_measures(logs, passed):
         "tmc_error": None,
         "heat_target_c": None,
         "heat_reached_c": None,
+        "heat_curve": [],
         "fail_reason": None,
     }
     for line in logs:
@@ -107,6 +108,11 @@ def extract_measures(logs, passed):
             m["tmc_error"] = line.strip()[:200]
             m["fail_reason"] = "tmc_error"
         # YMS Pro : chauffe groupee (heat_all), positions cablees seulement.
+        # Point de mesure toutes les 10s (25/08) -- reconstruit la courbe de
+        # chauffe cote rapport (heat_curve = [[secondes, degres], ...]).
+        r = re.search(r"heat (\d+)s ([\d.]+)C", line)
+        if r:
+            m["heat_curve"].append([int(r.group(1)), float(r.group(2))])
         r = re.search(r"chauffe OK, ([\d.]+)C atteint \(cible (\d+)C\)", line)
         if r:
             m["heat_reached_c"] = float(r.group(1))
