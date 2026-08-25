@@ -308,11 +308,20 @@ class QCEngine:
 
         # Log par test : capture les lignes d'info (// ...) et erreurs (!! ...)
         # pour le rapport (distances feed, spread Z, corrections vis, mesh...).
+        # Plafond dimensionne pour stress_all (v3, 23/08) : ce test_id est
+        # desormais GROUPE (une seule execution pour les 12 positions a la
+        # fois, plus de test individuel par position) -- pire cas 12 positions
+        # x 6 segments + 12 lignes recap + meta START/PASS = ~86 lignes. A 40
+        # (dimensionne pour l'ancien monde 1 position = 1 test_id), les
+        # dernieres positions de la boucle {% for t in tools %} perdaient
+        # silencieusement toutes leurs lignes stress une fois le plafond
+        # atteint -> measures.stress_segments_ok figeait a 0 malgre un PASS
+        # reel (constate 25/08 sur YMS-10, cf. rapport YMSLV1.020260825...).
         if cur and (message.startswith("// ") or message.startswith("!! ")):
             line = message[3:].strip()
             if line:
                 buf = self._test_log.setdefault(cur["id"], [])
-                if len(buf) < 40 and line not in buf:
+                if len(buf) < 150 and line not in buf:
                     buf.append(line)
 
         # Capture des trigger_z (YUMI_Z_TAP "VALIDATED: trigger_z=X.XXXX")

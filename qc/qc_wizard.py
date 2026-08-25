@@ -1251,6 +1251,12 @@ class Panel(ScreenPanel):
                     mine_stress = [l for l in stress_log if l.startswith(tag)]
                     self.engine._test_log[test_id].extend(mine_stress)
                     stress_lost = any("PERDU le suivi" in l for l in mine_stress)
+                    # Aucune ligne stress captée pour cette position = son
+                    # résultat n'a jamais été confirmé (plafond de buffer,
+                    # ligne perdue...) -- ne JAMAIS retomber sur un PASS par
+                    # défaut faute de preuve (constaté 25/08 : YMS-10 validé
+                    # PASS avec 0 ligne stress, cf. qc_engine.py plafond 150).
+                    stress_missing = not mine_stress
                     mine_heat = [l for l in heat_log if l.startswith(tag)]
                     if mine_heat:
                         self.engine._test_log[test_id].extend(mine_heat)
@@ -1258,6 +1264,9 @@ class Panel(ScreenPanel):
                     if stress_lost:
                         final = QCResult.FAIL
                         details = "Stress sweep (groupé) : suivi perdu"
+                    elif stress_missing:
+                        final = QCResult.FAIL
+                        details = "Stress sweep (groupé) : aucune donnée reçue"
                     elif heat_failed:
                         final = QCResult.FAIL
                         details = "Chauffe (groupée) : température cible non atteinte"
