@@ -13,7 +13,7 @@ class TestRetest(unittest.TestCase):
         self.assertEqual(tests[0]["id"], "mcu_check")
         self.assertTrue(tests[0].get("skipped"))
         self.assertEqual(tests[1]["id"], "load_all")
-        self.assertEqual(tests[1]["macro"], "QC_LOAD_ALL TOOLS=6 DIST=30")
+        self.assertEqual(tests[1]["macro"], "QC_LOAD_ALL TOOLS=6 DIST=80")
         self.assertEqual(tests[2]["id"], "stress_all")
         self.assertEqual(tests[2]["macro"], "QC_STRESS_ALL TOOLS=6")
 

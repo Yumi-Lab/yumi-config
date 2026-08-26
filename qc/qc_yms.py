@@ -60,9 +60,10 @@ def extract_measures(logs, passed):
         "dropout_count": 0,
         "feed_dropout": False,
         "stress_segments_ok": 0,
-        "stress_segments_total": 6,
-        "stress_speeds_mms": [10, 40, 80],
+        "stress_segments_total": 8,
+        "stress_speeds_mms": [10, 30, 50, 80],
         "stress_points": [],
+        "stress_segments_ignored": 8,
         "retract_mm": None,
         "tmc_error": None,
         "heat_target_c": None,
@@ -96,20 +97,33 @@ def extract_measures(logs, passed):
             m["fail_reason"] = "sensor_mute"
         if "already at head before feed" in line:
             m["fail_reason"] = "already_at_head"
+        # "LOST tracking at segment" (majuscules) = decrochage sur un segment
+        # COMPTE -> echec reel. "lost tracking during ramp segment" (rampe,
+        # non compte, 26/08) est volontairement une AUTRE chaine -- ignore
+        # ici, jamais de fail_reason pour un decrochage pendant la rampe
+        # d'acceleration/deceleration.
         if "LOST tracking at segment" in line:
             m["fail_reason"] = "sensor_lost_stress"
         # Point de mesure par segment (26/08) : reconstruit le detail du
         # sweep stress cote rapport (stress_points = [{"seg","speed_mms",
-        # "detected"}, ...]), pas seulement le compte agrege.
-        r = re.search(r"stress (\d+)/(\d+) speed=(\d+)mm/s detected=(True|False)", line)
+        # "detected","counted"}, ...]). "counted" distingue le plateau
+        # vitesse constante (mesure retenue pour le verdict/total affiche)
+        # de la rampe accel/decel qui l'entoure (mecanique uniquement, les 4
+        # premiers/derniers segments -- demande du 26/08 : "mesure propre").
+        r = re.search(
+            r"stress (\d+)/(\d+) speed=(\d+)mm/s detected=(True|False) counted=(True|False)",
+            line)
         if r:
-            seg, total, speed, detected = r.groups()
+            seg, total, speed, detected, counted = r.groups()
             m["stress_points"].append({
-                "seg": int(seg), "speed_mms": int(speed), "detected": detected == "True",
+                "seg": int(seg), "speed_mms": int(speed),
+                "detected": detected == "True", "counted": counted == "True",
             })
-            if detected == "True":
-                m["stress_segments_ok"] = max(m["stress_segments_ok"], int(seg))
-            m["stress_segments_total"] = int(total)
+            if counted == "True" and detected == "True":
+                m["stress_segments_ok"] += 1
+            # stress_segments_total reste le defaut (8, le plateau compte) --
+            # "total" capture ici est nseg (16, la rampe ENTIERE), pas la
+            # bonne valeur pour le total affiche (26/08 : "mesure propre").
         r = re.search(r"stress OK.*?(\d+) segments", line)
         if r:
             m["stress_segments_ok"] = int(r.group(1))
@@ -204,7 +218,14 @@ LOAD_ALL_TEST_ID = "load_all"
 STRESS_ALL_TEST_ID = "stress_all"
 HEAT_START_TEST_ID = "heat_start"
 HEAT_ALL_TEST_ID = "heat_wait"
-LOAD_DIST_MM = 30
+# v9 (26/08) : 30 -> 80mm -- le sweep stress passe a une rampe accel/decel
+# ±70mm (cf. generate_yms12_cfg.py QC_STRESS_ALL) pour une mesure "propre"
+# sur le plateau haute vitesse (les 4 premiers/derniers segments, en rampe,
+# ne comptent plus dans le verdict). 80mm de charge laisse 10mm de marge
+# avant le point d'insertion initial (80-70=10) -- jamais en arriere de la
+# ou l'operateur a engage le filament, contrairement a un ±70mm sur une
+# charge de 30mm qui aurait recule jusqu'a -40mm (hors prise extrudeur).
+LOAD_DIST_MM = 80
 
 # YMS Pro seulement : plateau chauffant + sonde intégrés, câblés sur le banc
 # UNIQUEMENT aux 3 premiers slots de chaque hyperdrive (positions 3,4,5 et

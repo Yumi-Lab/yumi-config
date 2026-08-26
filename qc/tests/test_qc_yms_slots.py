@@ -48,7 +48,7 @@ class TestDisabledSlots(unittest.TestCase):
         self.assertEqual(tests[0]["id"], "mcu_check")
         self.assertEqual(tests[1]["id"], "load_all")
         self.assertEqual(tests[1]["macro"],
-                         "QC_LOAD_ALL TOOLS=1,3,4,5,6,7,8,9,10,12 DIST=30")
+                         "QC_LOAD_ALL TOOLS=1,3,4,5,6,7,8,9,10,12 DIST=80")
         self.assertEqual(tests[2]["id"], "stress_all")
         self.assertEqual(tests[2]["macro"],
                          "QC_STRESS_ALL TOOLS=1,3,4,5,6,7,8,9,10,12")
@@ -84,7 +84,7 @@ class TestDisabledSlots(unittest.TestCase):
         tests = build_yms_tests([], model="pro")
         by_id = {t["id"]: t for t in tests}
         self.assertEqual(by_id["load_all"]["macro"],
-                         "QC_LOAD_ALL TOOLS=3,4,5,8,9,10 DIST=30")
+                         "QC_LOAD_ALL TOOLS=3,4,5,8,9,10 DIST=80")
         self.assertEqual(by_id["stress_all"]["macro"],
                          "QC_STRESS_ALL TOOLS=3,4,5,8,9,10")
 

@@ -641,7 +641,7 @@ gcode:
     {% endif %}
 
 [gcode_macro QC_STRESS_ALL]
-description: QC banc — PHASE 2 (parallele) : sweep ±20mm 10→40→80mm/s sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
+description: QC banc — PHASE 2 (parallele) : rampe accel/decel ±70mm 10→30→50→80→80→50→30→10mm/s (16 segments, seuls les 8 du plateau 50-80mm/s comptent -- les 4 premiers/derniers ne sont qu'une rampe mecanique douce, cf. _qc_stress_all_step) sur TOUS les TOOL= a la fois (extruder_steppers synchronises ENSEMBLE sur la meme queue E -> un seul G1 E les bouge tous en lockstep), chaque filament_motion_sensor YMS-n lu INDEPENDAMMENT (pin propre par position) -> attribution correcte par YMS meme en mouvement groupe. TOOLS=1,3,4,... (positions ayant deja passe la phase 1, calcule cote panel).
 gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
@@ -664,31 +664,42 @@ variable_seg: 0
 gcode:
     # macro porte-etat, jamais appelee directement
 
-# Boucle PHASE 2 — meme sweep 16 segments que l'ancien mode solo, mais
+# Boucle PHASE 2 — rampe accel/decel 16 segments (Nicolas 26/08 : 8 paliers
+# de vitesse 10->30->50->80->80->50->30->10mm/s, chacun tenu 2 segments),
 # appliquee UNE SEULE FOIS a tous les extruder_steppers synchronises
-# ensemble : un G1 E{dist} deplace tout le lot en meme temps. Verifie
-# CHAQUE motion sensor a CHAQUE segment (pin independante par YMS) -> une
-# position qui decroche est marquee FAIL + desynchronisee immediatement
-# (elle arrete de bouger avec le groupe) SANS interrompre les autres.
+# ensemble : un G1 E{dist} deplace tout le lot en meme temps. Les 4 premiers
+# et 4 derniers segments (le tiers bas de la rampe, 10-30mm/s) ne servent
+# qu'a demarrer/arreter en douceur -- SEULS les 8 segments du plateau
+# 50-80mm/s (5..12) comptent dans le verdict et le total affiche ("mesure
+# propre", hors transitoire d'acceleration). Verifie CHAQUE motion sensor a
+# CHAQUE segment (pin independante par YMS) -> une position qui decroche
+# SUR UN SEGMENT COMPTE est marquee FAIL + desynchronisee immediatement
+# (elle arrete de bouger avec le groupe) SANS interrompre les autres ; un
+# decrochage pendant la rampe (non compte) est journalise mais ignore.
 [delayed_gcode _qc_stress_all_step]
 gcode:
     {% set v = printer["gcode_macro _QC_STRESS_ALL_STEP"] %}
     {% set st = printer["gcode_macro _QC_YMS_STATE"] %}
     {% set tools = v.tools %}
     {% set seg = v.seg|int %}
-    {% set speeds = [600, 2400, 4800] %}
+    {% set speeds = [600, 1800, 3000, 4800, 4800, 3000, 1800, 600] %}
     {% set nseg = speeds|length * 2 %}
     {% if seg > 0 %}
         {% set seg_speed = speeds[((seg - 1) // 2) % speeds|length] // 60 %}
+        {% set counted = seg > 4 and seg <= (nseg - 4) %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
                 {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
                 {% if (seg % 2) == 1 and not yms %}
                     SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=0
-                    RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: motion sensor YMS-{t} LOST tracking at segment {seg}/{nseg}"
                     SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=
+                    {% if counted %}
+                        RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: motion sensor YMS-{t} LOST tracking at segment {seg}/{nseg}"
+                    {% else %}
+                        {action_respond_info("QC E%d_HEAD: motion sensor YMS-%d lost tracking during ramp segment %d/%d (ignored, not counted)" % (t - 1, t, seg, nseg))}
+                    {% endif %}
                 {% else %}
-                    {action_respond_info("QC E%d_HEAD: stress %d/%d speed=%dmm/s detected=%s" % (t - 1, seg, nseg, seg_speed, yms))}
+                    {action_respond_info("QC E%d_HEAD: stress %d/%d speed=%dmm/s detected=%s counted=%s" % (t - 1, seg, nseg, seg_speed, yms, counted))}
                 {% endif %}
             {% endif %}
         {% endfor %}
@@ -696,7 +707,7 @@ gcode:
     {% if seg >= nseg %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
-                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±20mm (10→40→80mm/s), sensor tracked throughout" % (t - 1, nseg))}
+                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±70mm (10→30→50→80→80→50→30→10mm/s), sensor tracked throughout" % (t - 1, nseg - 8))}
             {% endif %}
         {% endfor %}
         {% set ns = namespace(maxpush=0) %}
@@ -721,7 +732,7 @@ gcode:
         RESPOND MSG="QC:STRESS_ALL:PASS"
     {% else %}
         {% set spd = speeds[(seg // 2) % speeds|length] %}
-        {% set dist = 20 if seg % 2 == 0 else -20 %}
+        {% set dist = 70 if seg % 2 == 0 else -70 %}
         M83
         G1 E{dist} F{spd}
         M400
