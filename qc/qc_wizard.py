@@ -559,7 +559,20 @@ class Panel(ScreenPanel):
         # 12 tiennent sur UNE ligne (demande du 22/08 : plus lisible que 2
         # rangées de 6, et l'écran est en 800px de large). ──
         self._pos_buttons = {}
-        if self._selected_size.upper().startswith("YMS") and self._box_reports:
+        # v7 (26/08) : la grille doit TOUJOURS se construire pour un run YMS,
+        # même si self._box_reports est encore vide -- ce qui est désormais
+        # TOUJOURS le cas ici : _on_qc_complete affiche ce résumé puis lance
+        # _dispatch_all_boxes_ordered dans un thread d'arrière-plan (v3,
+        # 23/08), qui remplit self._box_reports et déclenche
+        # _refresh_pos_button progressivement APRÈS. Avec le "and
+        # self._box_reports" d'origine (hérité du modèle séquentiel où le
+        # dispatch était déjà terminé à ce stade), la grille entière ne se
+        # construisait plus jamais -- aucun carré, donc aucun moyen de
+        # réimprimer une étiquette manquante (constaté en réel 26/08 :
+        # YMS-7 jamais sortie, YMS-2 imprimée avec un chiffre manquant, et
+        # plus de panneau pour les rattraper). Les carrés démarrent gris/
+        # désactivés (rep is None ci-dessous) et se colorent au fil de l'eau.
+        if self._selected_size.upper().startswith("YMS"):
             pos_grid = Gtk.Grid(column_spacing=4, row_spacing=6)
             pos_grid.set_halign(Gtk.Align.CENTER)
             for pos in range(1, YMS_BENCH_TOTAL + 1):
