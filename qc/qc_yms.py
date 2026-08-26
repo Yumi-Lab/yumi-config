@@ -62,6 +62,7 @@ def extract_measures(logs, passed):
         "stress_segments_ok": 0,
         "stress_segments_total": 6,
         "stress_speeds_mms": [10, 40, 80],
+        "stress_points": [],
         "retract_mm": None,
         "tmc_error": None,
         "heat_target_c": None,
@@ -70,40 +71,48 @@ def extract_measures(logs, passed):
         "fail_reason": None,
     }
     for line in logs:
-        if "a change d'etat" in line:
+        if "state changed" in line:
             m["motion_first_detect"] = True
         # v3 (23/08) : plus de capteur tete -- charge groupee a distance
         # FIXE (load_all). "head_reached" reste toujours False (jamais
         # verifie), feed_mm vient de la charge reussie/echouee.
-        r = re.search(r"charge (\d+)mm, motion sensor OK", line)
+        r = re.search(r"loaded (\d+)mm, motion sensor OK", line)
         if r:
             m["feed_mm"] = int(r.group(1))
-        r = re.search(r"aucun mouvement detecte sur (\d+)mm", line)
+        r = re.search(r"no motion detected over (\d+)mm", line)
         if r:
             m["feed_mm"] = int(r.group(1))
             m["fail_reason"] = "no_motion_on_load"
-        r = re.search(r"decrochage encodeur E=([\d.]+)", line)
+        r = re.search(r"encoder dropout E=([\d.]+)", line)
         if r:
             m["dropouts_e"].append(float(r.group(1)))
-        if "a CESSE de suivre pendant le feed" in line:
+        if "STOPPED tracking during feed" in line:
             m["feed_dropout"] = True
             m["fail_reason"] = "sensor_lost_feed"
-            r = re.search(r"\(a (\d+)mm\)", line)
+            r = re.search(r"\(at (\d+)mm\)", line)
             if r:
                 m["feed_mm"] = int(r.group(1))
-        if "n'a PAS change d'etat" in line:
+        if "did NOT change state" in line:
             m["fail_reason"] = "sensor_mute"
-        if "deja a la tete avant feed" in line:
+        if "already at head before feed" in line:
             m["fail_reason"] = "already_at_head"
-        if "PERDU le suivi au segment" in line:
+        if "LOST tracking at segment" in line:
             m["fail_reason"] = "sensor_lost_stress"
+        # Point de mesure par segment (26/08) : reconstruit le detail du
+        # sweep stress cote rapport (stress_points = [{"seg","speed_mms",
+        # "detected"}, ...]), pas seulement le compte agrege.
+        r = re.search(r"stress (\d+)/(\d+) speed=(\d+)mm/s detected=(True|False)", line)
+        if r:
+            seg, total, speed, detected = r.groups()
+            m["stress_points"].append({
+                "seg": int(seg), "speed_mms": int(speed), "detected": detected == "True",
+            })
+            if detected == "True":
+                m["stress_segments_ok"] = max(m["stress_segments_ok"], int(seg))
+            m["stress_segments_total"] = int(total)
         r = re.search(r"stress OK.*?(\d+) segments", line)
         if r:
             m["stress_segments_ok"] = int(r.group(1))
-        r = re.search(r"stress (\d+)/(\d+) detected=True", line)
-        if r:
-            m["stress_segments_ok"] = max(m["stress_segments_ok"], int(r.group(1)))
-            m["stress_segments_total"] = int(r.group(2))
         if "DRV_STATUS" in line:
             m["tmc_error"] = line.strip()[:200]
             m["fail_reason"] = "tmc_error"
@@ -113,11 +122,11 @@ def extract_measures(logs, passed):
         r = re.search(r"heat (\d+)s ([\d.]+)C", line)
         if r:
             m["heat_curve"].append([int(r.group(1)), float(r.group(2))])
-        r = re.search(r"chauffe OK, ([\d.]+)C atteint \(cible (\d+)C\)", line)
+        r = re.search(r"heat OK, ([\d.]+)C reached \(target (\d+)C\)", line)
         if r:
             m["heat_reached_c"] = float(r.group(1))
             m["heat_target_c"] = int(r.group(2))
-        r = re.search(r"chauffe timeout, ([\d.]+)C apres \d+s \(cible (\d+)C\)", line)
+        r = re.search(r"heat timeout, ([\d.]+)C after \d+s \(target (\d+)C\)", line)
         if r:
             m["heat_reached_c"] = float(r.group(1))
             m["heat_target_c"] = int(r.group(2))

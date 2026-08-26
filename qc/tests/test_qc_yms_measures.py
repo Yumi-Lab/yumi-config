@@ -4,21 +4,21 @@ from qc.qc_yms import extract_measures
 
 
 PASS_LOGS = [
-    "QC E5_HEAD: motion sensor YMS-6 a change d'etat (mouvement detecte)",
-    "QC E5_HEAD: charge 300mm, motion sensor OK -> pret pour stress groupe",
-    "QC: YMS-6 decrochage encodeur E=370.5",
-    "QC E5_HEAD: stress 6/6 detected=True",
-    "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), suivi capteur permanent",
+    "QC E5_HEAD: motion sensor YMS-6 state changed (motion detected)",
+    "QC E5_HEAD: loaded 300mm, motion sensor OK -> ready for group stress",
+    "QC: YMS-6 encoder dropout E=370.5",
+    "QC E5_HEAD: stress 6/6 speed=80mm/s detected=True",
+    "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), sensor tracked throughout",
 ]
 
 SENSOR_MUTE_LOGS = [
-    "QC E10_HEAD: filament a la tete mais motion sensor YMS-11 n'a PAS change d'etat (cablage / capteur HS)",
+    "QC E10_HEAD: filament at head but motion sensor YMS-11 did NOT change state (wiring / sensor faulty)",
 ]
 
 LOST_FEED_LOGS = [
-    "QC: YMS-6 decrochage encodeur E=370.5",
-    "QC: YMS-6 decrochage encodeur E=384.8",
-    "QC E5_HEAD: motion sensor a CESSE de suivre pendant le feed (a 250mm)",
+    "QC: YMS-6 encoder dropout E=370.5",
+    "QC: YMS-6 encoder dropout E=384.8",
+    "QC E5_HEAD: motion sensor STOPPED tracking during feed (at 250mm)",
 ]
 
 TMC_LOGS = [
@@ -26,26 +26,41 @@ TMC_LOGS = [
 ]
 
 NO_MOTION_ON_LOAD_LOGS = [
-    "QC E5_HEAD: aucun mouvement detecte sur 300mm (feeder ou capteur HS)",
+    "QC E5_HEAD: no motion detected over 300mm (feeder or sensor faulty)",
 ]
 
 STRESS_LOST_LOGS = [
-    "QC E5_HEAD: motion sensor YMS-6 a PERDU le suivi au segment 3/6",
+    "QC E5_HEAD: motion sensor YMS-6 LOST tracking at segment 3/6",
+]
+
+STRESS_POINTS_LOGS = [
+    "QC E5_HEAD: stress 1/6 speed=10mm/s detected=True",
+    "QC E5_HEAD: stress 2/6 speed=10mm/s detected=True",
+    "QC E5_HEAD: stress 3/6 speed=40mm/s detected=True",
+    "QC E5_HEAD: stress 4/6 speed=40mm/s detected=True",
+    "QC E5_HEAD: stress 5/6 speed=80mm/s detected=True",
+    "QC E5_HEAD: stress 6/6 speed=80mm/s detected=True",
+    "QC E5_HEAD: stress OK — 6 segments ±20mm (10→40→80mm/s), sensor tracked throughout",
+]
+
+STRESS_POINTS_LOST_LOGS = [
+    "QC E5_HEAD: stress 1/6 speed=10mm/s detected=True",
+    "QC E5_HEAD: motion sensor YMS-6 LOST tracking at segment 2/6",
 ]
 
 HEAT_OK_LOGS = [
-    "QC E2_HEAD: chauffe OK, 85.3C atteint (cible 85C)",
+    "QC E2_HEAD: heat OK, 85.3C reached (target 85C)",
 ]
 
 HEAT_TIMEOUT_LOGS = [
-    "QC E2_HEAD: chauffe timeout, 61.2C apres 300s (cible 85C)",
+    "QC E2_HEAD: heat timeout, 61.2C after 300s (target 85C)",
 ]
 
 HEAT_CURVE_LOGS = [
     "QC E2_HEAD: heat 0s 21.4C",
     "QC E2_HEAD: heat 10s 34.1C",
     "QC E2_HEAD: heat 20s 48.7C",
-    "QC E2_HEAD: chauffe OK, 85.3C atteint (cible 85C)",
+    "QC E2_HEAD: heat OK, 85.3C reached (target 85C)",
 ]
 
 
@@ -110,6 +125,29 @@ class TestExtractMeasures(unittest.TestCase):
         self.assertEqual(m["heat_curve"],
                          [[0, 21.4], [10, 34.1], [20, 48.7]])
         self.assertEqual(m["heat_reached_c"], 85.3)
+
+    def test_stress_points_full_sweep(self):
+        m = extract_measures(STRESS_POINTS_LOGS, passed=True)
+        self.assertEqual(m["stress_points"], [
+            {"seg": 1, "speed_mms": 10, "detected": True},
+            {"seg": 2, "speed_mms": 10, "detected": True},
+            {"seg": 3, "speed_mms": 40, "detected": True},
+            {"seg": 4, "speed_mms": 40, "detected": True},
+            {"seg": 5, "speed_mms": 80, "detected": True},
+            {"seg": 6, "speed_mms": 80, "detected": True},
+        ])
+        self.assertEqual(m["stress_segments_ok"], 6)
+        self.assertEqual(m["stress_segments_total"], 6)
+
+    def test_stress_points_stop_at_loss(self):
+        # Segment 2 PERD le suivi -> aucune ligne "stress 2/6 ... detected="
+        # n'est jamais emise pour ce segment (le gcode bascule direct sur le
+        # marqueur d'echec) -- seul le segment 1 laisse un point.
+        m = extract_measures(STRESS_POINTS_LOST_LOGS, passed=False)
+        self.assertEqual(m["stress_points"], [
+            {"seg": 1, "speed_mms": 10, "detected": True},
+        ])
+        self.assertEqual(m["fail_reason"], "sensor_lost_stress")
 
 
 if __name__ == "__main__":

@@ -128,7 +128,7 @@ pause_on_runout: False
 extruder: extruder
 event_delay: 0.5
 runout_gcode:
-    {action_respond_info("QC: YMS-%(y)d decrochage encodeur E=%%.1f" %% printer.motion_report.live_position[3])}
+    {action_respond_info("QC: YMS-%(y)d encoder dropout E=%%.1f" %% printer.motion_report.live_position[3])}
 """ % dict(y=yms, m=name, p=s["sensor"], e=yms - 1, slot=i + 1))
     return "\n".join(out)
 
@@ -618,7 +618,7 @@ gcode:
         {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
         {% if yms and st["ok_" ~ t]|int == 0 %}
             SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=1
-            {action_respond_info("QC E%d_HEAD: motion sensor YMS-%d a change d'etat (mouvement detecte)" % (t - 1, t))}
+            {action_respond_info("QC E%d_HEAD: motion sensor YMS-%d state changed (motion detected)" % (t - 1, t))}
         {% endif %}
     {% endfor %}
     {% if pushed >= dist %}
@@ -626,9 +626,9 @@ gcode:
             SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=
             {% if st["ok_" ~ t]|int == 1 %}
                 SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=pushed_{t} VALUE={pushed}
-                {action_respond_info("QC E%d_HEAD: charge %dmm, motion sensor OK -> pret pour stress groupe" % (t - 1, pushed))}
+                {action_respond_info("QC E%d_HEAD: loaded %dmm, motion sensor OK -> ready for group stress" % (t - 1, pushed))}
             {% else %}
-                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: aucun mouvement detecte sur {pushed}mm (feeder ou capteur HS)"
+                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: no motion detected over {pushed}mm (feeder or sensor faulty)"
             {% endif %}
         {% endfor %}
         RESPOND MSG="QC:LOAD_ALL:PASS"
@@ -679,15 +679,16 @@ gcode:
     {% set speeds = [600, 2400, 4800] %}
     {% set nseg = speeds|length * 2 %}
     {% if seg > 0 %}
+        {% set seg_speed = speeds[((seg - 1) // 2) % speeds|length] // 60 %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
                 {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
                 {% if (seg % 2) == 1 and not yms %}
                     SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=0
-                    RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: motion sensor YMS-{t} a PERDU le suivi au segment {seg}/{nseg}"
+                    RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: motion sensor YMS-{t} LOST tracking at segment {seg}/{nseg}"
                     SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=
                 {% else %}
-                    {action_respond_info("QC E%d_HEAD: stress %d/%d detected=%s" % (t - 1, seg, nseg, yms))}
+                    {action_respond_info("QC E%d_HEAD: stress %d/%d speed=%dmm/s detected=%s" % (t - 1, seg, nseg, seg_speed, yms))}
                 {% endif %}
             {% endif %}
         {% endfor %}
@@ -695,7 +696,7 @@ gcode:
     {% if seg >= nseg %}
         {% for t in tools %}
             {% if st["ok_" ~ t]|int == 1 %}
-                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±20mm (10→40→80mm/s), suivi capteur permanent" % (t - 1, nseg))}
+                {action_respond_info("QC E%d_HEAD: stress OK — %d segments ±20mm (10→40→80mm/s), sensor tracked throughout" % (t - 1, nseg))}
             {% endif %}
         {% endfor %}
         {% set ns = namespace(maxpush=0) %}
@@ -797,9 +798,9 @@ gcode:
         {% for t in tools %}
             {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
             {% if h.temperature < target - 2 %}
-                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: chauffe timeout, {"%.1f" % h.temperature}C apres {elapsed}s (cible {target}C)"
+                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: heat timeout, {"%.1f" % h.temperature}C after {elapsed}s (target {target}C)"
             {% else %}
-                {action_respond_info("QC E%d_HEAD: chauffe OK, %.1fC atteint (cible %dC)" % (t - 1, h.temperature, target))}
+                {action_respond_info("QC E%d_HEAD: heat OK, %.1fC reached (target %dC)" % (t - 1, h.temperature, target))}
             {% endif %}
             SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET=0
         {% endfor %}

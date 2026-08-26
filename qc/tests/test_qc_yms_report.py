@@ -17,8 +17,8 @@ class TestBuildBoxReport(unittest.TestCase):
             pad_mac="AABBCCDDEEFF",
             technician="op1",
             test_log={"e5_head": [
-                "QC E5_HEAD: charge 625mm, motion sensor OK -> pret pour stress groupe",
-                "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), suivi capteur permanent",
+                "QC E5_HEAD: loaded 625mm, motion sensor OK -> ready for group stress",
+                "QC E5_HEAD: stress OK — 6 segments ±100mm (10→40→80mm/s), sensor tracked throughout",
             ]},
             engine_results={
                 "mcu_check": {"result": "pass", "timestamp": "ts", "details": ""},
@@ -57,7 +57,7 @@ class TestBuildBoxReport(unittest.TestCase):
             pad_mac="MAC",
             technician="op",
             test_log={"e9_head": [
-                "QC E9_HEAD: aucun mouvement detecte sur 900mm (feeder ou capteur HS)",
+                "QC E9_HEAD: no motion detected over 900mm (feeder or sensor faulty)",
             ]},
             engine_results={
                 "mcu_check": {"result": "pass"},

@@ -1320,27 +1320,27 @@ class Panel(ScreenPanel):
                 logs = self.engine._test_log.get(test_id, [])
                 if not logs:
                     continue  # position absente de ce lot (désactivée) -> pas de rapport
-                load_failed = any("aucun mouvement detecte" in l for l in logs)
+                load_failed = any("no motion detected" in l for l in logs)
                 if load_failed:
                     final = QCResult.FAIL
-                    details = "Chargement : aucun mouvement détecté"
+                    details = "Load: no motion detected"
                 else:
-                    stress_lost = any("PERDU le suivi" in l for l in logs)
+                    stress_lost = any("LOST tracking" in l for l in logs)
                     # Aucune ligne stress captée pour cette position = son
                     # résultat n'a jamais été confirmé -- ne JAMAIS retomber
                     # sur un PASS par défaut faute de preuve (constaté 25/08 :
                     # YMS-7 et YMS-10 validés PASS avec 0 ligne stress).
                     stress_missing = not any("stress" in l for l in logs)
-                    heat_failed = any("chauffe timeout" in l for l in logs)
+                    heat_failed = any("heat timeout" in l for l in logs)
                     if stress_lost:
                         final = QCResult.FAIL
-                        details = "Stress sweep (groupé) : suivi perdu"
+                        details = "Stress sweep (group): tracking lost"
                     elif stress_missing:
                         final = QCResult.FAIL
-                        details = "Stress sweep (groupé) : aucune donnée reçue"
+                        details = "Stress sweep (group): no data received"
                     elif heat_failed:
                         final = QCResult.FAIL
-                        details = "Chauffe (groupée) : température cible non atteinte"
+                        details = "Heat (group): target temperature not reached"
                     else:
                         final = QCResult.PASS
                         details = ""
