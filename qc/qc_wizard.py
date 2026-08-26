@@ -62,6 +62,11 @@ QC_TOKEN_FILE = os.path.join(CONFIG_DIR, "qc_token")
 # PASS = numéro de série + QR ; FAIL = étiquette de rejet (position + raison).
 QC_YMS_ALLOCATE_URL = "https://qc.yumi-lab.com/api/qc/yms/allocate"
 QC_REPORT_URL_BASE = "https://qc.yumi-lab.com/report/"
+# Relais impression réseau (26/08) : quand le pad n'a pas d'accès LAN/VPN
+# direct à smartpi-printer-factory, on pousse le job via qc.yumi-lab.com
+# (même token que /api/qc/report) -> gs1-proxy -> file que le boîtier
+# imprimante va lui-même chercher en HTTPS normal. Voir _print_qc_label_relay.
+QC_PRINT_RELAY_URL = "https://qc.yumi-lab.com/api/qc/print/factory"
 YMS_BENCH_TOTAL = 12
 # Position banc (1..12) -> slot physique
 YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
@@ -77,6 +82,7 @@ try:
     from ks_includes.qc_yms import (
         allocate_yms_codes,
         build_box_report,
+        build_label_png_job,
         build_label_tspl,
         build_retest_sequence,
         build_yms_tests,
@@ -104,6 +110,7 @@ except ImportError:
     from qc_yms import (
         allocate_yms_codes,
         build_box_report,
+        build_label_png_job,
         build_label_tspl,
         build_retest_sequence,
         build_yms_tests,
@@ -1519,24 +1526,63 @@ class Panel(ScreenPanel):
     def _print_qc_label_network(self, report):
         """Imprime l'étiquette QC machine via le serveur d'impression réseau
         usine (TSPL brut, queue CUPS raw). Renvoie (ok, message). Ne bloque
-        jamais le QC : réseau/imprimante indisponibles = échec rapide."""
-        if not shutil.which("lp"):
-            return False, "client CUPS (lp) absent"
-        tspl = build_label_tspl(report)
-        try:
-            proc = subprocess.run(
-                ["lp", "-h", self.NETWORK_PRINTER_HOST,
-                 "-d", self.NETWORK_PRINTER_QUEUE, "-o", "raw"],
-                input=tspl, capture_output=True, timeout=10)
-            if proc.returncode != 0:
+        jamais le QC : réseau/imprimante indisponibles = échec rapide.
+
+        v2 (26/08) : si le pad n'est pas sur le LAN/VPN de smartpi-printer-
+        factory (lp échoue), bascule sur le relais réseau (qc.yumi-lab.com ->
+        gs1-proxy -> file que le boîtier va chercher lui-même) -- cf.
+        _print_qc_label_relay. Toujours tenté en second, jamais à la place :
+        le LAN direct reste plus rapide/fiable quand il marche."""
+        if shutil.which("lp"):
+            tspl = build_label_tspl(report)
+            try:
+                proc = subprocess.run(
+                    ["lp", "-h", self.NETWORK_PRINTER_HOST,
+                     "-d", self.NETWORK_PRINTER_QUEUE, "-o", "raw"],
+                    input=tspl, capture_output=True, timeout=10)
+                if proc.returncode == 0:
+                    return True, "étiquette imprimée"
                 err = proc.stderr.decode("utf-8", "replace").strip()
-                return False, "étiquette réseau: %s" % (err or "échec lp")
-            return True, "étiquette imprimée"
-        except subprocess.TimeoutExpired:
-            return False, "étiquette réseau: timeout"
-        except OSError as e:
-            logger.warning("QC: impression étiquette réseau: %s", e)
-            return False, "étiquette réseau: %s" % e
+                lan_msg = "étiquette réseau: %s" % (err or "échec lp")
+            except subprocess.TimeoutExpired:
+                lan_msg = "étiquette réseau: timeout"
+            except OSError as e:
+                logger.warning("QC: impression étiquette réseau: %s", e)
+                lan_msg = "étiquette réseau: %s" % e
+        else:
+            lan_msg = "client CUPS (lp) absent"
+        ok, relay_msg = self._print_qc_label_relay(report)
+        if ok:
+            return True, "étiquette imprimée (relais)"
+        return False, "%s -- relais: %s" % (lan_msg, relay_msg)
+
+    def _print_qc_label_relay(self, report):
+        """Relais réseau (26/08) : pousse l'étiquette (PNG data URL) sur
+        qc.yumi-lab.com/api/qc/print/factory, authentifié avec le MÊME token
+        que l'upload de rapport -- aucun nouveau secret sur le pad. Le
+        serveur relaie ensuite vers gs1-proxy avec SA propre clé GS1 (jamais
+        distribuée aux pads). Renvoie (ok, message)."""
+        token = self._qc_token()
+        if not token:
+            return False, "token QC manquant"
+        try:
+            job = build_label_png_job(report)
+        except Exception as e:
+            logger.warning("QC: rendu PNG etiquette (relais): %s", e)
+            return False, "rendu PNG: %s" % e
+        data = json.dumps(job).encode("utf-8")
+        req = urllib.request.Request(
+            QC_PRINT_RELAY_URL, data=data, method="POST",
+            headers={"Content-Type": "application/json", "X-QC-Token": token})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status == 200:
+                    return True, "job envoyé"
+                return False, "HTTP %d" % resp.status
+        except urllib.error.HTTPError as e:
+            return False, "HTTP %d" % e.code
+        except Exception as e:
+            return False, "réseau: %s" % e
 
     # ─── BASCULE MODE IMPRESSION QC MACHINE (réseau / local secours) ───
 

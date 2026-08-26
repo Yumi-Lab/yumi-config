@@ -570,39 +570,25 @@ def _failed_test_labels(report):
     return shown
 
 
-def build_label_tspl(report):
-    """Génère le TSPL de l'étiquette QC pour imprimante POS80L, via le gabarit
-    template-driven (render_qc_tspl.py) — même principe que la plaque M3
-    (m3-driver/render_plaque.py, repo YUMI-POS-Printer) : layout fetché en
-    direct sur label.yumi-lab.com, éditable dans Label Expert (panneau QC
-    Factory), repli sur un défaut embarqué si injoignable.
-
-    Boîtiers YMS (qc_model commence par "YMS") : média 50x30 mm. QC machine
-    (C235/C335/C435...) : média 39x39 mm.
-
-    v1.4 : une étiquette à CHAQUE test (aucun décalage possible dans la pile
-    de boîtiers). PASS -> étiquette numéro de série (code + QR). FAIL ->
-    cadre gras (jamais confondue avec un PASS au coup d'œil) + QR (rapport
-    complet accessible malgré le rejet) : YMS -> position banc + raison ;
-    machine -> liste des tests en échec (pour savoir quoi réparer sans
-    ouvrir le rapport).
-
-    Returns:
-        bytes encodés en ASCII, lignes terminées par CRLF.
-    """
+def _import_render_qc_tspl():
     # Import relatif si qc_yms est chargé comme partie d'un paquet (qc.qc_yms
     # depuis mes tests) ; repli sys.path sinon — c'est le cas RÉEL sur le pad,
     # où KlipperScreen charge ce fichier via le symlink ks_includes/qc_yms.py
-    # (donc comme ks_includes.qc_yms, pas qc.qc_yms) : ".render_qc_tspl"
+    # (donc comme ks_includes.qc_yms, pas qc.qc_yms) : import relatif
     # chercherait alors ks_includes.render_qc_tspl, qui n'existe pas.
     try:
-        from .render_qc_tspl import render_qc_label
+        from . import render_qc_tspl
     except ImportError:
         import os
         import sys
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-        from render_qc_tspl import render_qc_label
+        import render_qc_tspl
+    return render_qc_tspl
 
+
+def _label_kind_section_data(report):
+    """kind/section/data communs à build_label_tspl et build_label_png_job --
+    UNE SEULE fois la logique de mapping report -> placeholders gabarit."""
     overall = report.get("overall_result", "?")
     code = report.get("printer_id", "?")
     qc_model = report.get("qc_model", "")
@@ -640,5 +626,53 @@ def build_label_tspl(report):
             data["fail_reason"] = str((report.get("measures") or {}).get("fail_reason") or "")
         else:
             data["failed_tests"] = _failed_test_labels(report)
+    return kind, section, data
 
-    return render_qc_label(kind, section, data)
+
+def build_label_tspl(report):
+    """Génère le TSPL de l'étiquette QC pour imprimante POS80L, via le gabarit
+    template-driven (render_qc_tspl.py) — même principe que la plaque M3
+    (m3-driver/render_plaque.py, repo YUMI-POS-Printer) : layout fetché en
+    direct sur label.yumi-lab.com, éditable dans Label Expert (panneau QC
+    Factory), repli sur un défaut embarqué si injoignable.
+
+    Boîtiers YMS (qc_model commence par "YMS") : média 50x30 mm. QC machine
+    (C235/C335/C435...) : média 39x39 mm.
+
+    v1.4 : une étiquette à CHAQUE test (aucun décalage possible dans la pile
+    de boîtiers). PASS -> étiquette numéro de série (code + QR). FAIL ->
+    cadre gras (jamais confondue avec un PASS au coup d'œil) + QR (rapport
+    complet accessible malgré le rejet) : YMS -> position banc + raison ;
+    machine -> liste des tests en échec (pour savoir quoi réparer sans
+    ouvrir le rapport).
+
+    Returns:
+        bytes encodés en ASCII, lignes terminées par CRLF.
+    """
+    render_qc_tspl = _import_render_qc_tspl()
+    kind, section, data = _label_kind_section_data(report)
+    return render_qc_tspl.render_qc_label(kind, section, data)
+
+
+# Média physique par kind, mm -- même table que render_qc_tspl.MEDIA, dupliquée
+# ici pour rester un module PUR (pas d'import Pillow) tant que
+# build_label_png_job n'a besoin QUE des dimensions, pas du rendu lui-même.
+LABEL_MEDIA_MM = {"yms": (50, 30), "machine": (39, 39)}
+
+
+def build_label_png_job(report, qty=1):
+    """Génère le job JSON attendu par la file d'impression réseau (gs1-proxy
+    /api/gs1/print/factory -> pos80l-cloud -> pos80l-bridge, cf. skill
+    factory-printer-proxy) : {"image": "data:image/png;base64,...", "qty",
+    "gap_mm", "width_mm", "height_mm", "peel"}. Relais réseau (26/08) utilisé
+    quand l'impression LAN directe (build_label_tspl + lp -h smartpi-printer-
+    factory.local:631) échoue -- le pad peut être hors du LAN usine tout en
+    gardant un accès HTTPS normal (même chemin que l'upload de rapport QC)."""
+    render_qc_tspl = _import_render_qc_tspl()
+    kind, section, data = _label_kind_section_data(report)
+    w_mm, h_mm = LABEL_MEDIA_MM[kind]
+    image = render_qc_tspl.render_qc_label_png_data_url(kind, section, data)
+    return {
+        "image": image, "qty": qty, "gap_mm": 2,
+        "width_mm": w_mm, "height_mm": h_mm, "peel": True,
+    }

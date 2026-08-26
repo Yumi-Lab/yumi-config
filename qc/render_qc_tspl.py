@@ -134,6 +134,14 @@ def render(section_elements, data, w_mm, h_mm):
     """Compose TOUS les éléments d'une section (pass OU fail) sur UN canevas Pillow, puis
     l'encode en TSPL BITMAP unique. `data` porte les placeholders (code, qc_model, date, qr,
     bench_position, fail_reason, failed_tests…)."""
+    img = render_image(section_elements, data, w_mm, h_mm)
+    return _to_tspl(img, w_mm, h_mm)
+
+
+def render_image(section_elements, data, w_mm, h_mm):
+    """Comme render(), mais renvoie le canevas Pillow AVANT conversion TSPL -- réutilisé pour
+    le relais impression réseau (26/08, PNG data URL via label.yumi-lab.com/gs1-proxy), le
+    boîtier smartpi-printer-factory attend déjà des jobs PNG (pos80l-cloud), pas du TSPL."""
     W, H = DOT(w_mm), DOT(h_mm)
     img = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(img)
@@ -190,7 +198,7 @@ def render(section_elements, data, w_mm, h_mm):
                 name = os.path.splitext(os.path.basename(str(src)))[0]
             _draw_logo(img, e["x"], e["y"], e["w"], e["h"], name, src)
 
-    return _to_tspl(img, w_mm, h_mm)
+    return img
 
 
 def _to_tspl(img, w_mm, h_mm, threshold=160):
@@ -306,6 +314,26 @@ def render_qc_label(kind, section, data):
     if not elements:
         elements = DEFAULTS[kind][section]
     return render(elements, data, w_mm, h_mm)
+
+
+def render_qc_label_png_data_url(kind, section, data):
+    """Comme render_qc_label(), mais renvoie une data URL PNG ("data:image/png;base64,...")
+    au lieu de TSPL -- format attendu par la file d'attente gs1-proxy/print/factory (relais
+    réseau 26/08, cf. qc_wizard._print_qc_label_relay). PNG "L" (niveaux de gris) tel quel,
+    à la taille RÉELLE du canevas (DOT(w_mm) x DOT(h_mm), déjà ~8 dots/mm) -- pos80l-bridge
+    fait SON PROPRE resize + seuillage noir/blanc (png_to_tspl), un pré-seuillage ici ferait
+    doublon et pourrait introduire des artefacts sur le resize."""
+    w_mm, h_mm = MEDIA[kind]
+    tpl = load_template(TEMPLATE_URL[kind])
+    elements = None
+    if tpl and isinstance(tpl.get(section), dict) and tpl[section].get("elements"):
+        elements = tpl[section]["elements"]
+    if not elements:
+        elements = DEFAULTS[kind][section]
+    img = render_image(elements, data, w_mm, h_mm)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 if __name__ == "__main__":
