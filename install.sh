@@ -372,6 +372,50 @@ else
     echo "QC directory not found, skipping QC installation."
 fi
 
+# === M3 nameplate printer (NIIMBOT M3 driver + QC_PRINT_PLAQUE macro) ===
+# Deploye a la main sur les pads d'origine (yumi-m3-plaque/ + m3_plaque_macros.cfg
+# jamais commites nulle part) -> aucune mise a jour ne partait, y compris les
+# correctifs de bug. Vendorise ici, meme principe que qc_engine.py/qc_wizard.py
+# plus haut : source unique versionnee dans le repo, deployee par YUMI_SYNC.
+# Chemins identiques a l'existant deploye a la main (aucune edition pad requise).
+echo "Installing M3 nameplate driver..."
+M3_DIR="$QC_DIR/m3-plaque"
+if [ -d "$M3_DIR" ]; then
+    cp "$QC_DIR/m3_plaque_macros.cfg" "$KLIPPER_CONFIG_DIR/m3_plaque_macros.cfg" \
+        && echo "m3_plaque_macros.cfg copied successfully." || echo "Error copying m3_plaque_macros.cfg."
+    chown "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/m3_plaque_macros.cfg" 2>/dev/null || true
+
+    if [ -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
+        if ! grep -q "m3_plaque_macros.cfg" "$KLIPPER_CONFIG_DIR/printer.cfg"; then
+            sed -i '1i [include m3_plaque_macros.cfg]' "$KLIPPER_CONFIG_DIR/printer.cfg"
+            chown "$OWNER:$OWNER" "$KLIPPER_CONFIG_DIR/printer.cfg"
+            echo "Added [include m3_plaque_macros.cfg] to printer.cfg"
+        else
+            echo "[include m3_plaque_macros.cfg] already in printer.cfg"
+        fi
+    fi
+
+    # Driver Python (meme chemin que le deploiement manuel : ~/yumi-m3-plaque/)
+    mkdir -p "$USER_HOME/yumi-m3-plaque/assets"
+    cp "$M3_DIR"/*.py "$USER_HOME/yumi-m3-plaque/" \
+        && echo "yumi-m3-plaque driver copied successfully." || echo "Error copying yumi-m3-plaque driver."
+    cp "$M3_DIR"/assets/*.png "$USER_HOME/yumi-m3-plaque/assets/" \
+        && echo "yumi-m3-plaque assets copied successfully." || echo "Error copying yumi-m3-plaque assets."
+    chown -R "$OWNER:$OWNER" "$USER_HOME/yumi-m3-plaque"
+
+    # Dependances systeme python3 (gcode_shell_command tourne hors venv KlipperScreen)
+    if ! python3 -c "import PIL, serial" >/dev/null 2>&1; then
+        echo "Installing Pillow + pyserial for M3 driver..."
+        run_privileged apt-get install -y python3-pil python3-serial \
+            && echo "python3-pil/python3-serial installed." || echo "WARNING: failed to install python3-pil/python3-serial -- plaque printing will fail."
+    else
+        echo "Pillow + pyserial already present."
+    fi
+else
+    echo "M3 nameplate driver directory not found, skipping."
+fi
+echo "M3 nameplate driver ...[Done]"
+
 # Timezone Chine pour les STATIONS QC (usine). Un pad qui a un qc_token est une
 # station QC d'usine (Chine) -> on force Asia/Shanghai. Corrige le decalage des
 # timestamps QC : les pads etaient en UTC, donc un test du soir CST etait
