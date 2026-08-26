@@ -205,6 +205,39 @@ HEAT_CAPABLE_POSITIONS = (3, 4, 5, 8, 9, 10)
 HEAT_TARGET_C = 85
 
 
+def heat_positions_for_run(disabled_positions=None, model=None):
+    """Positions câblées chauffe ET actives pour ce run -- [] si model n'est
+    pas "pro". Même filtre que build_yms_tests (extrait ici pour être
+    réutilisé par le contrôle préalable des capteurs, cf. qc_wizard)."""
+    if (model or "").lower() != "pro":
+        return []
+    disabled = set(disabled_positions or [])
+    return [p for p in HEAT_CAPABLE_POSITIONS if p not in disabled]
+
+
+def find_unready_heat_positions(positions, temperatures):
+    """Contrôle avant de lancer un test PRO (demande du 26/08) : si une seule
+    des positions câblées chauffe du lot ne renvoie pas une température
+    plausible, on ne lance PAS le test -- évite de découvrir 30min plus tard
+    qu'une sonde est débranchée/HS alors que c'était visible avant de
+    démarrer.
+
+    positions : positions câblées chauffe actives pour ce run.
+    temperatures : {position: température°C|None}, lue EN DIRECT sur le
+        printer juste avant de lancer.
+
+    Renvoie la liste des positions en défaut (température absente ou <= 0 --
+    une sonde qui fonctionne lit au moins la température ambiante, toujours
+    positive). [] = toutes les sondes répondent, le test peut démarrer.
+    """
+    bad = []
+    for p in positions:
+        t = temperatures.get(p)
+        if t is None or t <= 0:
+            bad.append(p)
+    return bad
+
+
 def build_yms_tests(disabled_positions=None, model=None):
     """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
 
@@ -240,7 +273,7 @@ def build_yms_tests(disabled_positions=None, model=None):
     enabled = [p for p in range(1, YMS_BENCH_TOTAL + 1) if p not in disabled]
     is_pro = (model or "").lower() == "pro"
     if is_pro:
-        enabled = [p for p in enabled if p in HEAT_CAPABLE_POSITIONS]
+        enabled = heat_positions_for_run(disabled_positions, model)
     tests = [{
         "id": "mcu_check",
         "name": "主板×3 + 固件 / MCUs + firmware",

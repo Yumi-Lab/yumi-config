@@ -84,6 +84,8 @@ try:
         extract_measures,
         load_bench_config,
         load_disabled_positions,
+        find_unready_heat_positions,
+        heat_positions_for_run,
         position_from_test_id,
         test_id_for_position,
         STRESS_ALL_TEST_ID,
@@ -108,6 +110,8 @@ except ImportError:
         extract_measures,
         load_bench_config,
         load_disabled_positions,
+        find_unready_heat_positions,
+        heat_positions_for_run,
         position_from_test_id,
         test_id_for_position,
         STRESS_ALL_TEST_ID,
@@ -308,6 +312,30 @@ class Panel(ScreenPanel):
             return
         import threading
         threading.Thread(target=self._worker_mcu_uid, daemon=True).start()
+
+    def _query_heat_temperatures(self, positions):
+        """Lecture Moonraker EN DIRECT (pas le cache self._screen.printer --
+        les objets heater_generic YMS-N-heater ne sont pas garantis souscrits)
+        des températures de positions chauffantes, même pattern que
+        _worker_mcu_uid. Renvoie {position: température°C|None} ; appel
+        synchrone volontairement (localhost, ~ms) pour bloquer le démarrage
+        tant que le résultat n'est pas connu -- cf. _yms_start_sequence."""
+        import urllib.parse
+        if not positions:
+            return {}
+        names = ["heater_generic YMS-%d-heater" % p for p in positions]
+        qs = "&".join("%s=temperature" % urllib.parse.quote(n) for n in names)
+        temps = {}
+        try:
+            raw = urllib.request.urlopen(
+                "http://localhost:7125/printer/objects/query?%s" % qs,
+                timeout=4).read()
+            status = json.loads(raw)["result"]["status"]
+            for p, n in zip(positions, names):
+                temps[p] = (status.get(n) or {}).get("temperature")
+        except Exception as e:
+            logger.warning("QC YMS: lecture temperatures chauffe echouee: %s", e)
+        return temps
 
     def _worker_mcu_uid(self):
         import urllib.request, urllib.parse, json
@@ -891,6 +919,24 @@ class Panel(ScreenPanel):
             return
         slots_path = os.path.join(CONFIG_DIR, "qc_bench_slots.json")
         self._disabled_positions = load_disabled_positions(slots_path)
+        # v6 (26/08) : PRO seulement -- si une SEULE des positions câblées
+        # chauffe du lot ne renvoie pas une température plausible (sonde
+        # débranchée/HS), on ne lance PAS le test. Évite de découvrir le
+        # problème 30min plus tard alors qu'il était visible avant de
+        # démarrer (constaté en réel 26/08 : YMS-9 à -38.1°C, thermistance
+        # flottante). Lecture Moonraker directe (pas le cache _screen.printer,
+        # ces objets custom ne sont pas garantis souscrits).
+        heat_positions = heat_positions_for_run(self._disabled_positions, self._yms_model)
+        if heat_positions:
+            bad = find_unready_heat_positions(
+                heat_positions, self._query_heat_temperatures(heat_positions))
+            if bad:
+                names = ", ".join("YMS-%d" % p for p in bad)
+                self._screen.show_popup_message(
+                    "温度传感器异常 %s，测试未启动 / capteur(s) température "
+                    "%s non fonctionnel(s) -- test PRO NON lancé" % (names, names),
+                    level=3)
+                return
         # v1.5 : version produit + composants montés (fichier éditable opérateur)
         self._bench_config = load_bench_config(
             os.path.join(CONFIG_DIR, "qc_bench_config.json"))
