@@ -88,6 +88,7 @@ try:
         heat_positions_for_run,
         position_from_test_id,
         test_id_for_position,
+        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -114,6 +115,7 @@ except ImportError:
         heat_positions_for_run,
         position_from_test_id,
         test_id_for_position,
+        LOAD_ALL_TEST_ID,
         STRESS_ALL_TEST_ID,
         YMS_BENCH_SLOTS,
         YMS_BENCH_TOTAL,
@@ -147,6 +149,7 @@ class Panel(ScreenPanel):
         self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
+        self._batch_ended = None    # v8 (26/08) : datetime de fin du lot (durée/boîtier)
         self._box_reports = {}      # position -> rapport envoyé (carte + réimpression)
 
         # Build the UI
@@ -954,6 +957,7 @@ class Panel(ScreenPanel):
         self._bench_config = load_bench_config(
             os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
+        self._batch_ended = None
         self._box_reports = {}
         self._bench_session = "%s-%s" % (printer_id,
                                          datetime.now().strftime("%Y%m%d-%H%M"))
@@ -1158,6 +1162,13 @@ class Panel(ScreenPanel):
     def _on_qc_complete(self, report):
         self._cancel_timeout()
         self._stop_gcode_poller()
+        # v8 (26/08) : fin RÉELLE du lot -- self._build_box_report l'utilise
+        # comme "now" pour CHAQUE position au lieu de re-lire l'horloge à
+        # chaque dispatch (cf. _build_box_report). Les positions sont testées
+        # en parallèle (load_all/stress_all groupés) : elles finissent toutes
+        # au même instant réel, l'impression séquentielle qui suit n'est que
+        # de la paperasse, pas une nouvelle mesure.
+        self._batch_ended = datetime.now(timezone.utc)
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
         # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
@@ -1249,8 +1260,17 @@ class Panel(ScreenPanel):
             model=self._yms_model,
             bench_total=YMS_BENCH_TOTAL,
             bench_slots=YMS_BENCH_SLOTS,
-            started=self._box_started.get(test_id) or datetime.now(timezone.utc),
-            now=datetime.now(timezone.utc),
+            # v8 (26/08) : test_id ("e8_head"...) n'est JAMAIS une clé de
+            # self._box_started -- ce dict n'est rempli que par _run_test
+            # avec l'id du test GROUPÉ en cours ("load_all", "stress_all"...,
+            # cf. v3 23/08), donc ce lookup renvoyait toujours None et
+            # "started" retombait sur l'heure du DISPATCH (après coup), quasi
+            # identique à "now" -> Début/Fin affichaient la même heure à la
+            # microseconde près et une durée de 0s (constaté en réel 26/08).
+            # LOAD_ALL_TEST_ID est la bonne clé : c'est le début RÉEL du lot,
+            # partagé par toutes les positions (elles chargent ensemble).
+            started=self._box_started.get(LOAD_ALL_TEST_ID) or datetime.now(timezone.utc),
+            now=self._batch_ended or datetime.now(timezone.utc),
             extruder_model=(self._bench_config or {}).get("extruder_model", ""),
             spring_model=(self._bench_config or {}).get("spring_model", ""),
             yms_version=(self._bench_config or {}).get("yms_version", "1.0"),
