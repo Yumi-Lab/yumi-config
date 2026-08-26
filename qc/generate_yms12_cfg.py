@@ -705,8 +705,13 @@ gcode:
             SYNC_EXTRUDER_MOTION EXTRUDER=extruder{t - 1} MOTION_QUEUE=extruder
         {% endfor %}
         {% if ns.maxpush > 0 %}
+            # Retrait final 300mm (Nicolas 26/08) : PAS juste annuler le
+            # chargement (ns.maxpush ~30mm), on va bien plus loin en arriere
+            # pour degager le filament HORS de l'extrudeur -- l'operateur n'a
+            # plus besoin de basculer l'extrudeur a la main pour le retirer,
+            # les 12 (synchronises) reculent ensemble en une seule passe.
             M83
-            G1 E-{ns.maxpush} F1200
+            G1 E-300 F1200
             M400
         {% endif %}
         {% for t in tools %}
