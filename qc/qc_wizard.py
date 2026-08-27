@@ -1337,7 +1337,18 @@ class Panel(ScreenPanel):
                     # résultat n'a jamais été confirmé -- ne JAMAIS retomber
                     # sur un PASS par défaut faute de preuve (constaté 25/08 :
                     # YMS-7 et YMS-10 validés PASS avec 0 ligne stress).
-                    stress_missing = not any("stress" in l for l in logs)
+                    # v10 (27/08) : "stress" en simple sous-chaine matchait
+                    # AUSSI la ligne de fin de charge ("...ready for group
+                    # stress") -> stress_missing valait TOUJOURS False des
+                    # qu'un chargement reussissait, meme sans une seule
+                    # ligne de stress reelle (constate en reel : arret moteur
+                    # manuel en plein stress -> 12/12 boitiers PASS avec
+                    # "0/8 segments"). Motif precis : uniquement les VRAIES
+                    # lignes de la phase stress (progression "stress N/M
+                    # speed=...", recap "stress OK", ou perte de suivi).
+                    stress_missing = not any(
+                        re.search(r"stress \d+/\d+ speed=", l) or "stress OK" in l
+                        for l in logs)
                     heat_failed = any("heat timeout" in l for l in logs)
                     if stress_lost:
                         final = QCResult.FAIL
