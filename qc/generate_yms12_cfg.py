@@ -208,12 +208,18 @@ pid_Kd: 50
 min_temp: -50
 max_temp: 110
 
-[heater_fan YMS-%(y)d-fan]
+# fan_generic (PAS heater_fan, 28/08) : un heater_fan demarre tout seul des
+# que le heater depasse heater_temp (25C, quasi toujours) -- il tournait
+# donc PENDANT TOUTE la chauffe et soufflait la chaleur, rendant 85C long
+# voire jamais atteint dans le timeout ("on n'a pas toujours le temps de
+# chauffer a 85"). Decouple du heater : coupe explicitement PENDANT la
+# chauffe (QC_HEAT_START) et rallume a la fin (_qc_heat_all_step) -- reste
+# allume le reste du temps (_QC_HEAT_FANS_ON, des QC_LOAD_ALL) pour une
+# verification visuelle qu'il tourne bien.
+[fan_generic YMS-%(y)d-fan]
 pin: %(m)s:%(fan)s
 max_power: 1
 off_below: 0.31
-heater: YMS-%(y)d-heater
-heater_temp: 25
 shutdown_speed: 0
 
 [verify_heater YMS-%(y)d-heater]
@@ -223,6 +229,24 @@ hysteresis: 10
 heating_gain: 2
 """ % dict(h, y=yms, m=name, slot=i + 1))
     return "\n".join(out)
+
+
+def heat_positions():
+    """Les 6 positions cablees chauffe (YMS-3/4/5/8/9/10) -- memes positions
+    que HEAT_CAPABLE_POSITIONS cote qc_yms.py, calculees ici depuis la meme
+    source (HYPERDRIVES x HEAT_SLOTS) plutot que dupliquees en dur."""
+    return [first + i + 1 for _n, _s, first in HYPERDRIVES for i in range(len(HEAT_SLOTS))]
+
+
+def heat_fans_on_macro():
+    positions = heat_positions()
+    on_lines = "".join(
+        "    SET_FAN_SPEED FAN=YMS-%d-fan SPEED=1.0\n" % y for y in positions)
+    return """\
+[gcode_macro _QC_HEAT_FANS_ON]
+description: QC banc — YMS Pro : (re)allume les 6 ventilateurs de plateau chauffant (YMS-%s), decouples du heater -- verification visuelle qu'ils tournent en dehors de la chauffe elle-meme (QC_HEAT_START les coupe, _qc_heat_all_step les rallume).
+gcode:
+%s""" % ("/".join(str(y) for y in positions), on_lines)
 
 
 def autotune_sections():
@@ -614,6 +638,7 @@ gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     RESPOND MSG="QC:LOAD_ALL:START"
     _QC_BOARD_FAN_ON
+    _QC_HEAT_FANS_ON
     T0
     {% for t in tools %}
         SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=0
@@ -782,6 +807,11 @@ gcode:
     {% set target = params.TARGET|default(85)|int %}
     RESPOND MSG="QC:HEAT_START:START"
     {% for t in tools %}
+        # Ventilo coupe PENDANT la chauffe (28/08) : un heater_fan soufflait
+        # la chaleur en continu des que le heater depassait 25C, rendant
+        # 85C long voire hors timeout -- fan_generic decouple, rallume par
+        # _qc_heat_all_step des que cette position atteint sa cible/timeout.
+        SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=0
         SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET={target}
     {% endfor %}
     RESPOND MSG="QC:HEAT_START:PASS"
@@ -795,7 +825,10 @@ gcode:
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=tools VALUE="{tools}"
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=target VALUE={target}
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE=0
-    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=timeout VALUE={params.TIMEOUT|default(300)|int}
+    # 300 -> 360 (28/08, +1 minute) : le ventilo coupe pendant la chauffe
+    # (SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=0 dans QC_HEAT_START) laisse
+    # deja plus de marge pour atteindre 85C, +1 minute en plus au cas ou.
+    SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=timeout VALUE={params.TIMEOUT|default(360)|int}
     UPDATE_DELAYED_GCODE ID=_qc_heat_all_step DURATION=1.0
 
 [gcode_macro _QC_HEAT_ALL_STEP]
@@ -849,13 +882,14 @@ gcode:
                 {action_respond_info("QC E%d_HEAD: heat OK, %.1fC reached (target %dC)" % (t - 1, h.temperature, target))}
             {% endif %}
             SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET=0
+            SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=1.0
         {% endfor %}
         RESPOND MSG="QC:HEAT_WAIT:PASS"
     {% else %}
         SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE={elapsed + 1}
         UPDATE_DELAYED_GCODE ID=_qc_heat_all_step DURATION=1.0
     {% endif %}
-"""
+""" + "\n" + heat_fans_on_macro()
 
 
 if __name__ == "__main__":

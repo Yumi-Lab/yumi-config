@@ -375,7 +375,10 @@ def build_yms_tests(disabled_positions=None, model=None):
                 "name": "全部并行加热测试 / Heat wait (parallel, %d°C)" % HEAT_TARGET_C,
                 "type": "automated",
                 "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
-                "timeout": 330,
+                # 330 -> 390 (28/08, +1 minute) : suit le timeout interne de
+                # la macro (300 -> 360, cf. generate_yms12_cfg.py
+                # _qc_heat_all_step) avec la meme marge de ~30s.
+                "timeout": 390,
             })
     return tests
 
@@ -431,7 +434,8 @@ def build_retest_sequence(position, model=None):
             "name": "YMS-%d 加热测试 / heat wait (%d°C)" % (position, HEAT_TARGET_C),
             "type": "automated",
             "macro": "QC_HEAT_WAIT TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
-            "timeout": 330,
+            # cf. build_yms_tests -- meme marge (+1 minute, 28/08).
+            "timeout": 390,
         })
     return tests
 
