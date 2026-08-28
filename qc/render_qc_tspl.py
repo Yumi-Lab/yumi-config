@@ -229,13 +229,22 @@ def _to_tspl(img, w_mm, h_mm, threshold=160):
 
 
 def load_template(src):
-    """Charge un template depuis une URL http(s) (timeout 6s) ou un fichier. None si échec —
-    le pad doit TOUJOURS pouvoir imprimer même si label.yumi-lab.com est injoignable."""
+    """Charge un template depuis une URL http(s) (timeout 6s, 2 tentatives) ou un fichier.
+    None si échec -- le pad doit TOUJOURS pouvoir imprimer même si label.yumi-lab.com est
+    injoignable (repli sur DEFAULTS, cf. render_qc_label). 2 tentatives (28/08) : un blip
+    réseau ponctuel faisait retomber sur DEFAULTS plus souvent que nécessaire -- DEFAULTS
+    est maintenant resynchronisé avec le template live, mais reste volontairement un
+    second filet, pas la voie normale."""
+    if str(src).startswith("http"):
+        import urllib.request
+        for _attempt in range(2):
+            try:
+                with urllib.request.urlopen(src, timeout=6) as r:
+                    return json.load(r)
+            except Exception:
+                pass
+        return None
     try:
-        if str(src).startswith("http"):
-            import urllib.request
-            with urllib.request.urlopen(src, timeout=6) as r:
-                return json.load(r)
         with open(src, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
@@ -253,28 +262,31 @@ DEFAULTS = {
     "yms": {
         "pass": [
             {"t": "qr", "x": 2.4, "y": 7.23, "sz": 15, "c": "{qr}"},
-            {"t": "text", "x": 18.93, "y": 6.34, "sz": 3.6, "weight": "bold", "c": "QC PASS"},
-            {"t": "text", "x": 19.01, "y": 2.94, "sz": 2.6, "weight": "bold", "c": "{qc_model}"},
-            {"t": "text", "x": 2.28, "y": 22.69, "sz": 1.6, "weight": "bold", "c": "{code}"},
+            {"t": "frame", "x": 43.12, "y": 2.64, "w": 4.53, "h": 4.06, "radius": 1.2, "thick": 0.4},
+            {"t": "text", "x": 45.41, "y": 3.04, "sz": 2.65, "weight": "bold", "align": "center", "c": "{bench_position}"},
+            {"t": "text", "x": 17.66, "y": 2.74, "sz": 3.6, "weight": "bold", "c": "QC PASS"},
+            {"t": "text", "x": 17.84, "y": 7.83, "sz": 2.6, "weight": "bold", "c": "{qc_model}"},
+            {"t": "text", "x": 2.28, "y": 22.69, "sz": 2.12, "weight": "bold", "c": "{code}"},
             {"t": "logo", "logo": "ce", "x": 18.81, "y": 16.16, "w": 6.61, "h": 4.72},
             {"t": "logo", "logo": "ukca", "x": 25.91, "y": 15.43, "w": 6.61, "h": 6.61},
             {"t": "logo", "logo": "fcc", "x": 32.69, "y": 16.06, "w": 6.61, "h": 5.55},
-            {"t": "logo", "logo": "weee", "x": 39.98, "y": 22.5, "w": 6.61, "h": 6.61},
+            {"t": "logo", "logo": "weee", "x": 41.33, "y": 8.27, "w": 6.61, "h": 6.61},
             {"t": "logo", "logo": "rohs", "x": 40.03, "y": 15.52, "w": 6.6, "h": 6.61},
             {"t": "logo", "logo": "yumi", "x": 2.12, "y": 1.8, "w": 15.82, "h": 4.09},
-            {"t": "text", "x": 2.22, "y": 24.68, "sz": 3.7, "c": "Made in china"},
-            {"t": "text", "x": 19.35, "y": 11.37, "sz": 2.38, "weight": "bold", "c": "Input :24V"},
-            {"t": "logo", "logo": "dc", "x": 34.85, "y": 11.52, "w": 3.0, "h": 2.2},
-            {"t": "text", "x": 38.35, "y": 11.37, "sz": 2.38, "weight": "bold", "c": "2A"},
+            {"t": "text", "x": 2.34, "y": 24.9, "sz": 3.7, "c": "Made in china"},
+            {"t": "text", "x": 17.96, "y": 11.48, "sz": 2.38, "weight": "bold", "c": "INPUT : 24V"},
+            {"t": "logo", "logo": "dc", "x": 33.73, "y": 11.64, "w": 2.67, "h": 2.26},
+            {"t": "text", "x": 36.49, "y": 11.36, "sz": 2.38, "weight": "bold", "c": "2A"},
         ],
         "fail": [
             {"t": "frame", "x": 0.5, "y": 0.5, "w": 49, "h": 29, "thick": 0.75},
-            {"t": "text", "x": 5.4, "y": 2.57, "sz": 3.6, "c": "QC FAIL"},
-            {"t": "text", "x": 5.41, "y": 7.85, "sz": 3.6, "c": "POS {bench_position}"},
-            {"t": "text", "x": 5.25, "y": 13.8, "sz": 1.6, "c": "{fail_reason}"},
-            {"t": "text", "x": 5.37, "y": 17.37, "sz": 1.6, "c": "{date}"},
-            {"t": "text", "x": 4.84, "y": 23, "sz": 1.6, "c": "{code}"},
-            {"t": "text", "x": 26.9, "y": 2.29, "sz": 3.7, "c": "{qc_model}"},
+            {"t": "text", "x": 3.31, "y": 2.41, "sz": 3.6, "weight": "bold", "c": "QC FAIL"},
+            {"t": "frame", "x": 37.97, "y": 7.19, "w": 6.5, "h": 5.05, "radius": 1.2, "thick": 0.4},
+            {"t": "text", "x": 41.22, "y": 8.13, "sz": 3.6, "align": "center", "c": "{bench_position}"},
+            {"t": "text", "x": 2.68, "y": 12.71, "sz": 2.92, "weight": "bold", "c": "{fail_reason}"},
+            {"t": "text", "x": 2.11, "y": 17.31, "sz": 2.66, "weight": "bold", "c": "{date}"},
+            {"t": "text", "x": 1.67, "y": 21.81, "sz": 2.66, "weight": "bold", "c": "{code}"},
+            {"t": "text", "x": 18.85, "y": 2.23, "sz": 3.7, "c": "{qc_model}"},
         ],
     },
     "machine": {
