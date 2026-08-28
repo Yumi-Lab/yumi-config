@@ -1377,7 +1377,11 @@ class Panel(ScreenPanel):
            (.sent sur ACK, sinon le timer qc-upload retentera) ;
         3. imprime l'étiquette SYSTÉMATIQUEMENT (PASS = numéro de série + QR,
            FAIL = étiquette de rejet position + raison) — une étiquette par
-           test, aucun décalage possible dans la pile de boîtiers."""
+           test, aucun décalage possible dans la pile de boîtiers ; retry 3x
+           (28/08 : un blip réseau ponctuel sur le LAN ET le relais faisait
+           sauter une étiquette en silence -- le rapport était bien fiabilisé
+           via .sent/qc-upload mais pas l'impression, seule échappatoire le
+           réimprimer manuel depuis l'écran résumé)."""
         pos = position_from_test_id(test_id)
         passed = (result == QCResult.PASS)
         ids, err = None, ""
@@ -1426,7 +1430,12 @@ class Panel(ScreenPanel):
                 open(path + ".sent", "w").close()
             except OSError:
                 pass
-        lok, lmsg = self._print_qc_label_network(report)
+        lok, lmsg = False, ""
+        for _attempt in range(3):
+            lok, lmsg = self._print_qc_label_network(report)
+            if lok:
+                break
+            time.sleep(3)
         note = "YMS-%d %s → %s: %s%s" % (
             pos, "PASS" if passed else "FAIL", yms_id,
             "envoyé ✓" if ok else ("local" if no_code else "en attente réseau"),
