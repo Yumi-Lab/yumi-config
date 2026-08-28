@@ -121,12 +121,19 @@ def sensor_sections():
             yms = first + i + 1
             out.append("""\
 # ── YMS-%(y)d : capteur motion (feeder = extruder%(e)d, %(m)s slot %(slot)d) ──
-[filament_motion_sensor YMS-%(y)d]
+# filament_yumi_smart_motion_sensor (PAS le filament_motion_sensor standard)
+# mode=hold : encodeur fixe, calcule le VRAI pitch (delta position E entre
+# deux bascules du switch) a chaque tick, en tache de fond (buttons
+# callback) -- aucun impact sur la queue de mouvement, contrairement au
+# sous-echantillonnage G1/M400 tente le 27/08 (abandonne, cf. 28/08).
+[filament_yumi_smart_motion_sensor YMS-%(y)d]
 switch_pin: %(m)s:%(p)s
 detection_length: 10
 pause_on_runout: False
 extruder: extruder
 event_delay: 0.5
+mode: hold
+pitch_view: True
 runout_gcode:
     {action_respond_info("QC: YMS-%(y)d encoder dropout E=%%.1f" %% printer.motion_report.live_position[3])}
 """ % dict(y=yms, m=name, p=s["sensor"], e=yms - 1, slot=i + 1))
@@ -324,7 +331,8 @@ def main():
         cfg = replace(
             cfg,
             old_block,
-            old_block + "runout_gcode:\n"
+            old_block + "mode: hold\npitch_view: True\n"
+            "runout_gcode:\n"
             "    {action_respond_info(\"QC: YMS-%d decrochage encodeur E=%%.1f\""
             " %% printer.motion_report.live_position[3])}\n" % yms,
             1)
@@ -524,6 +532,16 @@ def main():
 
     cfg += "\n" + parallel_stress_macros()
 
+    # Bascule TOUS les capteurs YMS (1..12, y compris les 2 herites de la
+    # base C235 + le lookup generique de qc_macros.cfg inline) sur le VRAI
+    # module Xtrack33 (Nicolas 28/08) -- filament_motion_sensor standard
+    # n'a aucune notion de pitch. "filament_motion_sensor" n'apparait dans
+    # ce fichier QUE pour ces sensors YMS (le capteur tete est un
+    # filament_switch_sensor, nom distinct) -- remplacement global sans
+    # ambiguite, y compris les 2 boucles `name.startswith(...)`
+    # (isolation avant test + QC_CLEANUP) qui doivent suivre le nouveau nom.
+    cfg = cfg.replace("filament_motion_sensor", "filament_yumi_smart_motion_sensor")
+
     with open(DST, "w") as f:
         f.write(cfg)
     print("OK ->", DST)
@@ -655,14 +673,12 @@ gcode:
     {% endfor %}
     SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=tools VALUE="{tools}"
     SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE=0
-    SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE=0
     UPDATE_DELAYED_GCODE ID=_qc_stress_all_step DURATION=0.3
 
 [gcode_macro _QC_STRESS_ALL_STEP]
 description: QC banc - Etat de la boucle stress groupee
 variable_tools: []
 variable_seg: 0
-variable_subchunk: 0
 gcode:
     # macro porte-etat, jamais appelee directement
 
@@ -735,39 +751,10 @@ gcode:
     {% else %}
         {% set spd = speeds[(seg // 2) % speeds|length] %}
         {% set dist = 70 if seg % 2 == 0 else -70 %}
-        {% set next_seg = seg + 1 %}
-        {% set next_counted = next_seg > 4 and next_seg <= (nseg - 4) %}
-        # Pitch (Nicolas 27/08) : le segment "compte" (plateau 50-80mm/s) est
-        # sous-decoupe en 4 pas au lieu d'UN seul G1 -- entre chaque pas, on
-        # relit la position E + l'etat du capteur, ce qui donne PLUSIEURS
-        # mesures de pitch (distance E entre deux detections) par segment
-        # au lieu d'un seul point final. ATTENTION (a verifier sur le banc
-        # reel avant de faire confiance aux chiffres) : le M400 entre pas
-        # force le mouvement a freiner/repartir a chaque pas -- ca degrade
-        # le "plateau vitesse constante" qu'on vient de mettre en place, ce
-        # n'est PAS une simple addition sans cout. La rampe (segments non
-        # comptes) reste un seul G1, inchangee.
-        {% set n_sub = 4 if next_counted else 1 %}
-        {% set sub = v.subchunk|int %}
-        {% set sub_dist = dist / n_sub %}
         M83
-        G1 E{sub_dist} F{spd}
+        G1 E{dist} F{spd}
         M400
-        {% if next_counted %}
-            {% for t in tools %}
-                {% if st["ok_" ~ t]|int == 1 %}
-                    {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
-                    {% set edge = sub == 0 or (sub + 1) == n_sub %}
-                    {action_respond_info("QC E%d_HEAD: pitch seg=%d/%d sub=%d/%d E=%.2f detected=%s edge=%s" % (t - 1, next_seg, nseg, sub + 1, n_sub, printer.motion_report.live_position[3], yms, edge))}
-                {% endif %}
-            {% endfor %}
-        {% endif %}
-        {% if (sub + 1) >= n_sub %}
-            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE=0
-            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE={next_seg}
-        {% else %}
-            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE={sub + 1}
-        {% endif %}
+        SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE={seg + 1}
         UPDATE_DELAYED_GCODE ID=_qc_stress_all_step DURATION=0.3
     {% endif %}
 

@@ -72,6 +72,12 @@ def extract_measures(logs, passed):
         "heat_curve": [],
         "fail_reason": None,
     }
+    # Suivi sequentiel du segment stress courant, pour rattacher chaque
+    # pitch REEL (asynchrone, emis par le capteur a chaque bascule -- aucun
+    # lien direct avec la boucle segment cote gcode) au segment/plateau
+    # pendant lequel il a ete mesure (28/08, remplace le sous-echantillonnage
+    # du 27/08 qui, lui, connaissait son segment par construction).
+    cur_seg, cur_counted = None, None
     for line in logs:
         if "state changed" in line:
             m["motion_first_detect"] = True
@@ -116,6 +122,7 @@ def extract_measures(logs, passed):
             line)
         if r:
             seg, total, speed, detected, counted = r.groups()
+            cur_seg, cur_counted = int(seg), counted == "True"
             m["stress_points"].append({
                 "seg": int(seg), "speed_mms": int(speed),
                 "detected": detected == "True", "counted": counted == "True",
@@ -128,19 +135,17 @@ def extract_measures(logs, passed):
         r = re.search(r"stress OK.*?(\d+) segments", line)
         if r:
             m["stress_segments_ok"] = int(r.group(1))
-        # Sous-echantillonnage du plateau compte (27/08) : position E +
-        # etat capteur a 4 points par segment compte (au lieu d'1 seul en
-        # fin de segment) -- "edge" = premier/dernier point du segment,
-        # marque plutot que jete (offset mecanique possible en debut/fin
-        # de segment, cf. demande du 27/08 "sortir les extremes").
-        r = re.search(
-            r"pitch seg=(\d+)/(\d+) sub=(\d+)/(\d+) E=([\d.-]+) detected=(True|False) edge=(True|False)",
-            line)
+        # Pitch REEL (28/08) : filament_yumi_smart_motion_sensor (mode=hold,
+        # pitch_view) logge "YMS-n - Pitch: X.XXX mm [NORMAL]" a CHAQUE
+        # bascule reelle du switch -- remplace le sous-echantillonnage de
+        # position du 27/08 (jamais verifie en reel, abandonne). Seuls les
+        # ticks [NORMAL] sont un pitch d'extrusion reel (FILTERED = bruit
+        # sous le seuil, RETRACTION/IGNORED = retrait, hors mesure).
+        r = re.search(r"^YMS-\d+ - Pitch: ([\d.]+) mm \[NORMAL\]", line)
         if r:
-            seg, total, sub, n_sub, e_pos, detected, edge = r.groups()
             m["stress_pitches"].append({
-                "seg": int(seg), "sub": int(sub), "e_mm": float(e_pos),
-                "detected": detected == "True", "edge": edge == "True",
+                "seg": cur_seg, "counted": cur_counted,
+                "pitch_mm": float(r.group(1)),
             })
         if "DRV_STATUS" in line:
             m["tmc_error"] = line.strip()[:200]

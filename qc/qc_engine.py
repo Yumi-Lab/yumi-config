@@ -16,6 +16,13 @@ logger = logging.getLogger("KlipperScreen.qc_engine")
 # cf. process_gcode_response.
 _QC_HEAD_TAG_RE = re.compile(r"^QC E(\d+)_HEAD:")
 
+# Pitch REEL emis par filament_yumi_smart_motion_sensor (mode=hold,
+# pitch_view=True) -- "YMS-<n> - Pitch: X.XXX mm [STATUS]" (Nicolas 28/08 :
+# le vrai capteur, pas le sous-echantillonnage de position abandonne le
+# meme jour). YMS-n -> position e(n-1)_head, meme convention que le tag
+# "QC E<n>_HEAD:".
+_YMS_PITCH_TAG_RE = re.compile(r"^YMS-(\d+) - Pitch:")
+
 # Répétabilité du Z tap plein course. Comme le homing : on retape plusieurs
 # fois et on valide dès que Z_TAP_WINDOW taps CONSECUTIFS convergent dans la
 # fenêtre Z_TAP_SPREAD_TOL (fenêtre glissante). Ça écarte le tassement/jeu des
@@ -329,15 +336,30 @@ class QCEngine:
             line = message[3:].strip()
             if line:
                 tag = _QC_HEAD_TAG_RE.match(line)
-                key = ("e%s_head" % tag.group(1)) if tag else cur["id"]
-                buf = self._test_log.setdefault(key, [])
-                # v11 (27/08) : 40 -> 80 -- le sweep stress ecrit desormais
-                # aussi des lignes "pitch" par sous-pas (4 par segment
-                # compte, 8 segments = 32 lignes) en plus des ~16 lignes
-                # "stress N/M" existantes -- ~50 lignes rien que pour le
-                # stress sur un run complet, plus proche du plafond a 40.
-                if len(buf) < 80 and line not in buf:
-                    buf.append(line)
+                pitch_tag = None if tag else _YMS_PITCH_TAG_RE.match(line)
+                # pitch_view logge un tick a CHAQUE mouvement (chargement,
+                # retrait...), pas seulement pendant le sweep stress -- hors
+                # stress_all ce volume noierait le plafond par position avant
+                # meme que le sweep commence. On IGNORE ces lignes plutot que
+                # de les rerouter vers le buffer du test courant (ou elles
+                # noieraient aussi bien load_all).
+                skip = pitch_tag and cur["id"] != "stress_all"
+                if not skip:
+                    if tag:
+                        key = "e%s_head" % tag.group(1)
+                    elif pitch_tag:
+                        key = "e%d_head" % (int(pitch_tag.group(1)) - 1)
+                    else:
+                        key = cur["id"]
+                    buf = self._test_log.setdefault(key, [])
+                    # v12 (28/08) : 80 -> 900 -- le vrai capteur (mode=hold,
+                    # pitch_view) logge un tick PAR BASCULE reelle du switch,
+                    # pas un point fixe par segment : ~2mm de pitch mecanique
+                    # sur 16 segments de 70mm (1120mm total) -> de l'ordre de
+                    # 500-600 ticks sur un run complet. Demande explicite du
+                    # 28/08 : TOUS les pitchs mesures, pas un sous-echantillon.
+                    if len(buf) < 900 and line not in buf:
+                        buf.append(line)
 
         # Capture des trigger_z (YUMI_Z_TAP "VALIDATED: trigger_z=X.XXXX")
         # pendant le test de calibration Z plein course.

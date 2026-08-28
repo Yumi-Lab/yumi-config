@@ -181,27 +181,48 @@ class TestExtractMeasures(unittest.TestCase):
         # Aucun segment compte n'a reussi -> stress_segments_ok reste a 0.
         self.assertEqual(m["stress_segments_ok"], 0)
 
-    def test_stress_pitches_parsed_with_edges_flagged(self):
+    def test_stress_pitches_parsed_from_real_sensor_ticks(self):
+        # filament_yumi_smart_motion_sensor (mode=hold, pitch_view) logge un
+        # tick REEL par bascule du switch, tague par segment via l'ordre
+        # sequentiel des lignes "stress N/M ... counted=..." (28/08,
+        # remplace le sous-echantillonnage de position du 27/08).
         logs = [
-            "QC E5_HEAD: pitch seg=5/16 sub=1/4 E=87.50 detected=True edge=True",
-            "QC E5_HEAD: pitch seg=5/16 sub=2/4 E=105.00 detected=True edge=False",
-            "QC E5_HEAD: pitch seg=5/16 sub=3/4 E=122.50 detected=True edge=False",
-            "QC E5_HEAD: pitch seg=5/16 sub=4/4 E=140.00 detected=True edge=True",
+            "QC E5_HEAD: stress 5/16 speed=50mm/s detected=True counted=True",
+            "YMS-6 - Pitch: 1.980 mm [NORMAL]",
+            "YMS-6 - Pitch: 2.010 mm [NORMAL]",
+            "YMS-6 - Pitch: 1.850 mm [NORMAL]",
         ]
         m = extract_measures(logs, passed=True)
-        self.assertEqual(len(m["stress_pitches"]), 4)
+        self.assertEqual(len(m["stress_pitches"]), 3)
         self.assertEqual(m["stress_pitches"][0],
-                         {"seg": 5, "sub": 1, "e_mm": 87.5,
-                          "detected": True, "edge": True})
-        # Seuls le 1er et le dernier point du segment sont "edge" -- les 2
-        # du milieu ne le sont pas (demande du 27/08 : sortir les extremes,
-        # possible decalage mecanique en debut/fin de segment).
-        self.assertEqual([p["edge"] for p in m["stress_pitches"]],
-                         [True, False, False, True])
+                         {"seg": 5, "counted": True, "pitch_mm": 1.98})
+        self.assertEqual([p["pitch_mm"] for p in m["stress_pitches"]],
+                          [1.98, 2.01, 1.85])
 
-    def test_stress_pitches_absent_on_ramp_segments(self):
-        # La rampe (segments non comptes) reste un seul G1 -- aucune ligne
-        # "pitch" n'est jamais emise pour elle (seulement le plateau compte).
+    def test_stress_pitches_tagged_not_counted_during_ramp(self):
+        # Un tick mesure pendant un segment de rampe (non compte) reste
+        # dans stress_pitches (aucune donnee jetee), mais tague counted=False
+        # -- le rapport peut le distinguer du plateau vitesse constante.
+        logs = [
+            "QC E5_HEAD: stress 2/16 speed=10mm/s detected=True counted=False",
+            "YMS-6 - Pitch: 1.200 mm [NORMAL]",
+        ]
+        m = extract_measures(logs, passed=True)
+        self.assertEqual(m["stress_pitches"],
+                         [{"seg": 2, "counted": False, "pitch_mm": 1.2}])
+
+    def test_stress_pitches_ignore_non_normal_statuses(self):
+        # FILTERED (bruit sous le seuil) et RETRACTION (retrait final) ne
+        # sont PAS un pitch d'extrusion reel -- exclus de stress_pitches.
+        logs = [
+            "QC E5_HEAD: stress 5/16 speed=50mm/s detected=True counted=True",
+            "YMS-6 - Pitch: 0.00800 mm [FILTERED]",
+            "YMS-6 - Pitch: 300.000 mm [RETRACTION]",
+        ]
+        m = extract_measures(logs, passed=True)
+        self.assertEqual(m["stress_pitches"], [])
+
+    def test_stress_pitches_absent_without_sensor_lines(self):
         logs = ["QC E5_HEAD: stress 2/16 speed=10mm/s detected=True counted=False"]
         m = extract_measures(logs, passed=True)
         self.assertEqual(m["stress_pitches"], [])
