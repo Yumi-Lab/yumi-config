@@ -36,6 +36,19 @@ SLOTS = [
 ]
 
 # (nom mcu, port serie, premier index extruder)
+# ATTENTION -- hyperdrive_usb : /dev/ttyACM0 est un chemin RAW qui DERIVE
+# (le kernel peut l'enumerer en ttyACM1 selon l'ordre d'attache USB au
+# boot -- vecu plusieurs fois en 08/2026, Klipper refuse alors de demarrer :
+# "Unable to open serial port... No such file or directory"). Un chemin
+# stable existe (/dev/serial/by-id/usb-Klipper_stm32f401xc_<serial>-if00),
+# mais <serial> est PROPRE A CHAQUE CARTE PHYSIQUE -> impossible a mettre
+# ici (ce generateur produit UN SEUL cfg partage par tous les bancs). Apres
+# TOUT deploiement qui ecrase printer.cfg en entier (pas seulement
+# sync_qc_cfgs.sh, qui ne touche jamais printer.cfg), patcher a la main sur
+# CHAQUE banc : `ls /dev/serial/by-id/` puis remplacer la ligne
+# `serial: /dev/ttyACM0` sous [mcu hyperdrive_usb] par le chemin trouve,
+# PUIS redemarrer klipper. Oublier cette etape = le prochain reboot qui
+# fait deriver l'enumeration recree le meme plantage.
 HYPERDRIVES = [
     ("hyperdrive_uart", "/dev/ttyS2", 2),
     ("hyperdrive_usb", "/dev/ttyACM0", 7),
