@@ -331,7 +331,12 @@ class QCEngine:
                 tag = _QC_HEAD_TAG_RE.match(line)
                 key = ("e%s_head" % tag.group(1)) if tag else cur["id"]
                 buf = self._test_log.setdefault(key, [])
-                if len(buf) < 40 and line not in buf:
+                # v11 (27/08) : 40 -> 80 -- le sweep stress ecrit desormais
+                # aussi des lignes "pitch" par sous-pas (4 par segment
+                # compte, 8 segments = 32 lignes) en plus des ~16 lignes
+                # "stress N/M" existantes -- ~50 lignes rien que pour le
+                # stress sur un run complet, plus proche du plafond a 40.
+                if len(buf) < 80 and line not in buf:
                     buf.append(line)
 
         # Capture des trigger_z (YUMI_Z_TAP "VALIDATED: trigger_z=X.XXXX")

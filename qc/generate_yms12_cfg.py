@@ -655,12 +655,14 @@ gcode:
     {% endfor %}
     SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=tools VALUE="{tools}"
     SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE=0
+    SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE=0
     UPDATE_DELAYED_GCODE ID=_qc_stress_all_step DURATION=0.3
 
 [gcode_macro _QC_STRESS_ALL_STEP]
 description: QC banc - Etat de la boucle stress groupee
 variable_tools: []
 variable_seg: 0
+variable_subchunk: 0
 gcode:
     # macro porte-etat, jamais appelee directement
 
@@ -733,10 +735,39 @@ gcode:
     {% else %}
         {% set spd = speeds[(seg // 2) % speeds|length] %}
         {% set dist = 70 if seg % 2 == 0 else -70 %}
+        {% set next_seg = seg + 1 %}
+        {% set next_counted = next_seg > 4 and next_seg <= (nseg - 4) %}
+        # Pitch (Nicolas 27/08) : le segment "compte" (plateau 50-80mm/s) est
+        # sous-decoupe en 4 pas au lieu d'UN seul G1 -- entre chaque pas, on
+        # relit la position E + l'etat du capteur, ce qui donne PLUSIEURS
+        # mesures de pitch (distance E entre deux detections) par segment
+        # au lieu d'un seul point final. ATTENTION (a verifier sur le banc
+        # reel avant de faire confiance aux chiffres) : le M400 entre pas
+        # force le mouvement a freiner/repartir a chaque pas -- ca degrade
+        # le "plateau vitesse constante" qu'on vient de mettre en place, ce
+        # n'est PAS une simple addition sans cout. La rampe (segments non
+        # comptes) reste un seul G1, inchangee.
+        {% set n_sub = 4 if next_counted else 1 %}
+        {% set sub = v.subchunk|int %}
+        {% set sub_dist = dist / n_sub %}
         M83
-        G1 E{dist} F{spd}
+        G1 E{sub_dist} F{spd}
         M400
-        SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE={seg + 1}
+        {% if next_counted %}
+            {% for t in tools %}
+                {% if st["ok_" ~ t]|int == 1 %}
+                    {% set yms = printer["filament_motion_sensor YMS-" ~ t].filament_detected %}
+                    {% set edge = sub == 0 or (sub + 1) == n_sub %}
+                    {action_respond_info("QC E%d_HEAD: pitch seg=%d/%d sub=%d/%d E=%.2f detected=%s edge=%s" % (t - 1, next_seg, nseg, sub + 1, n_sub, printer.motion_report.live_position[3], yms, edge))}
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+        {% if (sub + 1) >= n_sub %}
+            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE=0
+            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=seg VALUE={next_seg}
+        {% else %}
+            SET_GCODE_VARIABLE MACRO=_QC_STRESS_ALL_STEP VARIABLE=subchunk VALUE={sub + 1}
+        {% endif %}
         UPDATE_DELAYED_GCODE ID=_qc_stress_all_step DURATION=0.3
     {% endif %}
 

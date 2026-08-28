@@ -30,13 +30,15 @@ class TestPerPositionLogRouting(unittest.TestCase):
     def test_one_position_saturating_its_cap_does_not_starve_another(self):
         # Avant le fix : les 12 positions partageaient UN SEUL buffer plafonne
         # -> une position en tete de boucle pouvait affamer les suivantes.
-        # Desormais chaque position a son PROPRE plafond (40) : en sature une
-        # ne doit rien retirer a une autre.
-        for i in range(50):
+        # Desormais chaque position a son PROPRE plafond (80, cf. 27/08 --
+        # les lignes "pitch" du sous-echantillonnage font monter le volume
+        # par position au-dela des 40 d'origine) : en sature une ne doit
+        # rien retirer a une autre.
+        for i in range(100):
             self.engine.process_gcode_response(
                 "// QC E0_HEAD: stress %d/6 detected=True" % i)
         self.engine.process_gcode_response("// QC E9_HEAD: stress 1/6 detected=True")
-        self.assertEqual(len(self.engine._test_log["e0_head"]), 40)
+        self.assertEqual(len(self.engine._test_log["e0_head"]), 80)
         self.assertEqual(self.engine._test_log["e9_head"],
                          ["QC E9_HEAD: stress 1/6 detected=True"])
 

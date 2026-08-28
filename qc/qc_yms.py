@@ -64,6 +64,7 @@ def extract_measures(logs, passed):
         "stress_speeds_mms": [10, 30, 50, 80],
         "stress_points": [],
         "stress_segments_ignored": 8,
+        "stress_pitches": [],
         "retract_mm": None,
         "tmc_error": None,
         "heat_target_c": None,
@@ -127,6 +128,20 @@ def extract_measures(logs, passed):
         r = re.search(r"stress OK.*?(\d+) segments", line)
         if r:
             m["stress_segments_ok"] = int(r.group(1))
+        # Sous-echantillonnage du plateau compte (27/08) : position E +
+        # etat capteur a 4 points par segment compte (au lieu d'1 seul en
+        # fin de segment) -- "edge" = premier/dernier point du segment,
+        # marque plutot que jete (offset mecanique possible en debut/fin
+        # de segment, cf. demande du 27/08 "sortir les extremes").
+        r = re.search(
+            r"pitch seg=(\d+)/(\d+) sub=(\d+)/(\d+) E=([\d.-]+) detected=(True|False) edge=(True|False)",
+            line)
+        if r:
+            seg, total, sub, n_sub, e_pos, detected, edge = r.groups()
+            m["stress_pitches"].append({
+                "seg": int(seg), "sub": int(sub), "e_mm": float(e_pos),
+                "detected": detected == "True", "edge": edge == "True",
+            })
         if "DRV_STATUS" in line:
             m["tmc_error"] = line.strip()[:200]
             m["fail_reason"] = "tmc_error"

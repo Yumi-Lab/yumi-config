@@ -181,6 +181,31 @@ class TestExtractMeasures(unittest.TestCase):
         # Aucun segment compte n'a reussi -> stress_segments_ok reste a 0.
         self.assertEqual(m["stress_segments_ok"], 0)
 
+    def test_stress_pitches_parsed_with_edges_flagged(self):
+        logs = [
+            "QC E5_HEAD: pitch seg=5/16 sub=1/4 E=87.50 detected=True edge=True",
+            "QC E5_HEAD: pitch seg=5/16 sub=2/4 E=105.00 detected=True edge=False",
+            "QC E5_HEAD: pitch seg=5/16 sub=3/4 E=122.50 detected=True edge=False",
+            "QC E5_HEAD: pitch seg=5/16 sub=4/4 E=140.00 detected=True edge=True",
+        ]
+        m = extract_measures(logs, passed=True)
+        self.assertEqual(len(m["stress_pitches"]), 4)
+        self.assertEqual(m["stress_pitches"][0],
+                         {"seg": 5, "sub": 1, "e_mm": 87.5,
+                          "detected": True, "edge": True})
+        # Seuls le 1er et le dernier point du segment sont "edge" -- les 2
+        # du milieu ne le sont pas (demande du 27/08 : sortir les extremes,
+        # possible decalage mecanique en debut/fin de segment).
+        self.assertEqual([p["edge"] for p in m["stress_pitches"]],
+                         [True, False, False, True])
+
+    def test_stress_pitches_absent_on_ramp_segments(self):
+        # La rampe (segments non comptes) reste un seul G1 -- aucune ligne
+        # "pitch" n'est jamais emise pour elle (seulement le plateau compte).
+        logs = ["QC E5_HEAD: stress 2/16 speed=10mm/s detected=True counted=False"]
+        m = extract_measures(logs, passed=True)
+        self.assertEqual(m["stress_pitches"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
