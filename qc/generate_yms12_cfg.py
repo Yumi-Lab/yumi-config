@@ -135,23 +135,22 @@ def sensor_sections():
             out.append("""\
 # ── YMS-%(y)d : capteur motion (feeder = extruder%(e)d, %(m)s slot %(slot)d) ──
 # filament_yumi_smart_motion_sensor (PAS le filament_motion_sensor standard)
-# mode=hold : encodeur fixe, calcule le VRAI pitch (delta position E entre
-# deux bascules du switch) a chaque tick, en tache de fond (buttons
-# callback) -- aucun impact sur la queue de mouvement, contrairement au
-# sous-echantillonnage G1/M400 tente le 27/08 (abandonne, cf. 28/08).
-# PAS de pitch_view ici (28/08, meme jour) : respond_info() a CHAQUE tick,
-# multiplie par 12 capteurs synchronises a haute vitesse, a fait planter
-# l'hote (Timer too close sur hyperdrive_usb, ARM sature) EN COURS DE TEST
-# REEL sur banc -- cf. discussion pitch en attente d'une approche qui ne
-# sature pas l'hote (ex. blockage_detection+pitch_window pour batcher les
-# logs) avant de retenter.
+# mode=free (28/08, PAS hold) : mesure de pitch en STANDBY (cf. discussion --
+# 2 plantages reels le meme jour). mode=hold reste risque MEME SANS
+# pitch_view : sa branche RETRACTION fait un respond_info() a CHAQUE tick en
+# arriere de facon INCONDITIONNELLE (pas de garde blockage_detection/
+# pitch_view dessus) -- or le sweep stress recule sur 8 segments/16 (sens
+# alterne) + le retrait final -300mm, ce qui a refait planter l'hote
+# (Timer too close) meme apres avoir retire pitch_view. mode=free ne logge
+# RIEN (juste le suivi filament present/absent) -- repasser en mode=hold
+# seulement avec une vraie solution de batching (ticket pitch en attente).
 [filament_yumi_smart_motion_sensor YMS-%(y)d]
 switch_pin: %(m)s:%(p)s
 detection_length: 10
 pause_on_runout: False
 extruder: extruder
 event_delay: 0.5
-mode: hold
+mode: free
 runout_gcode:
     {action_respond_info("QC: YMS-%(y)d encoder dropout E=%%.1f" %% printer.motion_report.live_position[3])}
 """ % dict(y=yms, m=name, p=s["sensor"], e=yms - 1, slot=i + 1))
@@ -349,7 +348,7 @@ def main():
         cfg = replace(
             cfg,
             old_block,
-            old_block + "mode: hold\n"
+            old_block + "mode: free\n"
             "runout_gcode:\n"
             "    {action_respond_info(\"QC: YMS-%d decrochage encodeur E=%%.1f\""
             " %% printer.motion_report.live_position[3])}\n" % yms,
