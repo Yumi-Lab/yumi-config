@@ -359,7 +359,15 @@ def build_yms_tests(disabled_positions=None, model=None):
             "name": "全部并行应力测试 / Stress sweep (parallel, all boxes)",
             "type": "automated",
             "macro": "QC_STRESS_ALL TOOLS=%s" % tools_arg,
-            "timeout": 60,
+            # 60 -> 120 (28/08) : la rampe 16 segments ±70mm (26/08) prend a
+            # elle seule ~50s de mouvement pur (1120mm, 10->80->10mm/s) + la
+            # latence de replanification entre segments (0.3s x 16) -- ca
+            # depassait regulierement les 60s d'origine (calibres pour
+            # l'ancienne rampe 8 segments ±20mm), faisant tomber le test en
+            # FAIL par timeout AVANT le "QC:STRESS_ALL:PASS" de la macro,
+            # meme quand le sweep se passait bien (constate en reel : le
+            # test ressortait TOUJOURS en FAIL).
+            "timeout": 120,
         })
         if is_pro:
             tests.append({
@@ -413,7 +421,9 @@ def build_retest_sequence(position, model=None):
         "name": "YMS-%d 应力测试 / stress" % position,
         "type": "automated",
         "macro": "QC_STRESS_ALL TOOLS=%d" % position,
-        "timeout": 60,
+        # cf. build_yms_tests -- meme rampe 16 segments, meme duree quel que
+        # soit le nombre d'outils synchronises.
+        "timeout": 120,
     })
     if heat_capable:
         tests.append({
