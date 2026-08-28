@@ -139,6 +139,12 @@ def sensor_sections():
 # deux bascules du switch) a chaque tick, en tache de fond (buttons
 # callback) -- aucun impact sur la queue de mouvement, contrairement au
 # sous-echantillonnage G1/M400 tente le 27/08 (abandonne, cf. 28/08).
+# PAS de pitch_view ici (28/08, meme jour) : respond_info() a CHAQUE tick,
+# multiplie par 12 capteurs synchronises a haute vitesse, a fait planter
+# l'hote (Timer too close sur hyperdrive_usb, ARM sature) EN COURS DE TEST
+# REEL sur banc -- cf. discussion pitch en attente d'une approche qui ne
+# sature pas l'hote (ex. blockage_detection+pitch_window pour batcher les
+# logs) avant de retenter.
 [filament_yumi_smart_motion_sensor YMS-%(y)d]
 switch_pin: %(m)s:%(p)s
 detection_length: 10
@@ -146,7 +152,6 @@ pause_on_runout: False
 extruder: extruder
 event_delay: 0.5
 mode: hold
-pitch_view: True
 runout_gcode:
     {action_respond_info("QC: YMS-%(y)d encoder dropout E=%%.1f" %% printer.motion_report.live_position[3])}
 """ % dict(y=yms, m=name, p=s["sensor"], e=yms - 1, slot=i + 1))
@@ -344,7 +349,7 @@ def main():
         cfg = replace(
             cfg,
             old_block,
-            old_block + "mode: hold\npitch_view: True\n"
+            old_block + "mode: hold\n"
             "runout_gcode:\n"
             "    {action_respond_info(\"QC: YMS-%d decrochage encodeur E=%%.1f\""
             " %% printer.motion_report.live_position[3])}\n" % yms,
