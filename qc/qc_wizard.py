@@ -175,7 +175,7 @@ class Panel(ScreenPanel):
     def _build_start_screen(self):
         self._clear_content()
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         box.set_valign(Gtk.Align.CENTER)
         box.set_halign(Gtk.Align.CENTER)
         box.set_vexpand(True)
@@ -211,21 +211,21 @@ class Panel(ScreenPanel):
         mode_label = Gtk.Label()
         if qc_mode:
             mode_label.set_markup(
-                f"<span size='large' foreground='#4CAF50'>QC模式 已激活 — {active_model or '?'} / "
+                f"<span size='medium' foreground='#4CAF50'>QC模式 已激活 — {active_model or '?'} / "
                 f"QC mode active</span>")
         else:
             mode_label.set_markup(
-                "<span size='large' foreground='#FF9800'>生产配置 — 触摸机型加载QC / "
+                "<span size='medium' foreground='#FF9800'>生产配置 — 触摸机型加载QC / "
                 "Production cfg — touch a model to load QC</span>")
         mode_label.set_justify(Gtk.Justification.CENTER)
         mode_label.set_line_wrap(True)
-        box.pack_start(mode_label, False, False, 5)
+        box.pack_start(mode_label, False, False, 2)
 
         # Sélecteur de taille machine — TOUJOURS visible et ACTIF : un appui sur
         # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
         size_title = Gtk.Label()
-        size_title.set_markup("<span size='large' weight='bold'>机型 / Model</span>")
-        box.pack_start(size_title, False, False, 5)
+        size_title.set_markup("<span size='medium' weight='bold'>机型 / Model</span>")
+        box.pack_start(size_title, False, False, 2)
 
         size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         size_row.set_halign(Gtk.Align.CENTER)
@@ -235,26 +235,26 @@ class Panel(ScreenPanel):
             label = size if avail else f"{size}\n待生成/TBD"
             style = "color3" if selected else ("color1" if avail else "color2")
             sbtn = self._gtk.Button(None, label, style)
-            sbtn.set_size_request(120, 70)
+            sbtn.set_size_request(120, 58)
             sbtn.set_sensitive(avail)
             sbtn.connect("clicked", self._on_size_selected, size)
             size_row.pack_start(sbtn, False, False, 0)
-        box.pack_start(size_row, False, False, 5)
+        box.pack_start(size_row, False, False, 2)
 
         # Aide : un APPUI sur le modèle LANCE directement (entre en QC / START).
         hint = Gtk.Label()
         if qc_mode:
-            hint.set_markup(f"<span size='large' weight='bold' foreground='#4CAF50'>"
+            hint.set_markup(f"<span size='medium' weight='bold' foreground='#4CAF50'>"
                             f"▶ 触摸 {active_model or 'C235'} 开始检测 / "
                             f"touch {active_model or 'C235'} to START QC</span>")
         else:
             # Générique : les trois modèles ont leur cfg, plus de raison de
             # nommer C235 en dur.
-            hint.set_markup("<span size='large' weight='bold' foreground='#4CAF50'>"
+            hint.set_markup("<span size='medium' weight='bold' foreground='#4CAF50'>"
                             "▶ 触摸机型 进入QC模式 / touch a model to enter QC mode</span>")
         hint.set_justify(Gtk.Justification.CENTER)
         hint.set_line_wrap(True)
-        box.pack_start(hint, False, False, 5)
+        box.pack_start(hint, False, False, 2)
 
         # Bouton Calibration Z TAP — juste la séquence G28 -> Z max -> tap.
         # Z TAP + Imprimer etiquette M3 cote a cote (tenir sur 800x480)
@@ -262,27 +262,18 @@ class Panel(ScreenPanel):
         action_row.set_halign(Gtk.Align.CENTER)
         ztap_btn = self._gtk.Button("refresh", "Z TAP", "color1")
         ztap_btn.connect("clicked", self._on_ztap_calibrate)
-        ztap_btn.set_size_request(180, 60)
+        ztap_btn.set_size_request(180, 52)
         action_row.pack_start(ztap_btn, False, False, 0)
         plaque_btn = self._gtk.Button("print", "标签 / Etiquette M3", "color1")
         plaque_btn.connect("clicked", self._on_print_plaque)
-        plaque_btn.set_size_request(280, 60)
+        plaque_btn.set_size_request(280, 52)
         action_row.pack_start(plaque_btn, False, False, 0)
-        box.pack_start(action_row, False, False, 5)
-
-        # Écran 800x480 déjà plein au-dessus (titre -> Z TAP/Etiquette M3) :
-        # le reste (bascule impression + sortie QC) va dans une zone
-        # scrollable au lieu de sortir de l'écran sans recours (glissé
-        # tactile vertical, même motif que _build_running_screen /
-        # _build_summary_screen dans ce fichier).
-        lower_scroll = Gtk.ScrolledWindow()
-        lower_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        lower_scroll.set_vexpand(True)
-        lower_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.pack_start(action_row, False, False, 2)
 
         # Bascule mode impression étiquette QC machine — réseau par défaut
         # (plus d'imprimante locale sur les pads), local = secours manuel
-        # rare. Action secondaire, pas besoin d'être visible sans scroll.
+        # rare, + sortie QC. Toujours dans le flux normal (pas de scroll :
+        # glissé tactile peu fiable constaté sur banc, bouton invisible).
         is_network_mode = (self._get_print_mode() == QC_PRINT_MODE_NETWORK)
         mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         mode_row.set_halign(Gtk.Align.CENTER)
@@ -292,17 +283,16 @@ class Panel(ScreenPanel):
             else "标签打印: 本地 / Étiquette: Local (secours)",
             "color1" if is_network_mode else "color2")
         mode_btn.connect("clicked", self._on_toggle_print_mode)
-        mode_btn.set_size_request(320, 50)
+        mode_btn.set_size_request(320, 44)
         mode_row.pack_start(mode_btn, False, False, 0)
-        lower_box.pack_start(mode_row, False, False, 3)
 
         if qc_mode:
             exit_btn = self._gtk.Button("cancel", "退出QC模式 / Exit QC mode", "color2")
             exit_btn.connect("clicked", self._on_exit_qc_mode)
-            lower_box.pack_start(exit_btn, False, False, 5)
+            exit_btn.set_size_request(280, 44)
+            mode_row.pack_start(exit_btn, False, False, 0)
 
-        lower_scroll.add(lower_box)
-        box.pack_start(lower_scroll, True, True, 0)
+        box.pack_start(mode_row, False, False, 2)
 
         self.content.add(box)
         self.content.show_all()
