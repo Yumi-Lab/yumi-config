@@ -26,23 +26,31 @@ def _mr(url, path, method='GET', timeout=6):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
-def moonraker_identity(url, salves=2, polls=8, poll_interval=0.4, store_count=150):
-    """Exécute DEVICE + QUERY_MCU_UID puis POLL le gcode_store jusqu'à trouver les deux réponses.
+def moonraker_identity(url, salves=2, polls=8, poll_interval=0.4, store_count=150, send_timeout=1.5):
+    """Exécute DEVICE + QUERY_MCU_UID (si pas déjà fait par l'appelant) puis POLL le
+    gcode_store jusqu'à trouver les deux réponses.
 
-    AVANT : un `sleep(1.0)` fixe suivi d'UNE lecture des 40 derniers messages. Sous charge
-    (test QC en cours, autre trafic console au même moment), la réponse de DEVICE peut mettre
-    plus d'1s à apparaître OU se faire évincer du ring buffer de 40 par d'autres messages avant
-    la lecture -> `model`/`bedw` restaient vides -> l'étiquette imprimait '?' à la place du
-    modèle ET du courant calculé (les deux viennent de la même ligne YUMI_CONFIG), de façon
-    aléatoire selon ce qui se passait sur la machine à ce moment précis. Poll court + fenêtre
-    plus large + réémission des commandes si rien n'est trouvé après une salve : on attend
-    activement la donnée au lieu de parier sur un délai fixe.
+    29/08/2026 -- root cause réelle : quand ce script est lancé par RUN_SHELL_COMMAND (macro
+    QC_PRINT_PLAQUE), Klipper est déjà en train de traiter CETTE MÊME ligne de gcode ; un
+    gcode_script(DEVICE) envoyé PENDANT ce temps ne peut jamais être dépilé (la queue gcode
+    ne redevient libre qu'au retour du handler RUN_SHELL_COMMAND, qui attend justement CE
+    script) -> le POST timeoute TOUJOURS dans ce contexte (vérifié : 100% des invocations via
+    macro). Le fix précédent (poll élargi) ne marchait QUE par coïncidence, quand un autre
+    appelant (ex. le panel QC, _load_mcu_uid) avait DÉJÀ peuplé le gcode_store avant le clic.
+    Vrai fix : la macro QC_PRINT_PLAQUE envoie maintenant QUERY_MCU_UID + DEVICE en lignes
+    gcode ORDINAIRES avant RUN_SHELL_COMMAND (pas de deadlock, ce sont deux commandes
+    distinctes traitées l'une après l'autre) -- la donnée est donc déjà dans le gcode_store
+    dès le démarrage de ce script, et le poll ci-dessous la trouve dès le premier tour.
+    L'envoi actif ci-dessous est gardé UNIQUEMENT pour l'usage standalone (script lancé à la
+    main, hors macro, cf. docstring du module) ; send_timeout court car il est structurellement
+    voué à l'échec quand appelé depuis RUN_SHELL_COMMAND -- pas la peine d'attendre 6s x4.
     """
     ident = {}
     for attempt in range(1, salves + 1):
         for cmd in ('QUERY_MCU_UID', 'DEVICE'):
             try:
-                _mr(url, '/printer/gcode/script?script=' + urllib.parse.quote(cmd), method='POST')
+                _mr(url, '/printer/gcode/script?script=' + urllib.parse.quote(cmd), method='POST',
+                    timeout=send_timeout)
             except Exception as e:
                 print('WARN Moonraker gcode_script(%s): %s' % (cmd, e), file=sys.stderr)
         for _ in range(polls):

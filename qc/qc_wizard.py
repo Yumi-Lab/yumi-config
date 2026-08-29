@@ -268,6 +268,10 @@ class Panel(ScreenPanel):
         plaque_btn.connect("clicked", self._on_print_plaque)
         plaque_btn.set_size_request(280, 52)
         action_row.pack_start(plaque_btn, False, False, 0)
+        zup_btn = self._gtk.Button("z-farther", "Z ↑ 200mm", "color2")
+        zup_btn.connect("clicked", self._on_z_up)
+        zup_btn.set_size_request(160, 52)
+        action_row.pack_start(zup_btn, False, False, 0)
         box.pack_start(action_row, False, False, 2)
 
         # Bascule mode impression étiquette QC machine — réseau par défaut
@@ -410,6 +414,15 @@ class Panel(ScreenPanel):
         """Bouton Calibration Z TAP : envoie juste la séquence
         (G28 -> Z max -> tap), sans capture de log ni rapport."""
         self._screen._ws.klippy.gcode_script("QC_ZTAP_CALIBRATE")
+
+    def _on_z_up(self, widget):
+        """Bouton Z ↑ 200mm : monte Z de 200mm SANS homing (QC_Z_UP -> FORCE_MOVE),
+        pour degager largement la buse/le plateau a la main (acces tactile seul, pas
+        de console dispo sur ces pads). ⚠️ FORCE_MOVE ne detecte ni fin de course ni
+        collision -- accepte en connaissance de cause (29/08), pas un depart par
+        defaut prudent : si la marge reelle est plus faible que prevu en haut, ca
+        peut forcer sur la butee mecanique."""
+        self._screen._ws.klippy.gcode_script("QC_Z_UP DIST=200")
 
     def _on_enter_qc_mode(self, widget):
         """Backup printer.cfg, install the QC config of the selected size,
