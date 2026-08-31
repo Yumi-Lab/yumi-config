@@ -150,6 +150,14 @@ class Panel(ScreenPanel):
         self._poller_lock = threading.Lock()
         self._poller_stop = None
         self._dispatch_lock = threading.Lock()
+        # POS80L locale (31/08) : /dev/usb/lp0 est un device caractere brut,
+        # sans file d'attente -- deux write() concurrents (ex. un reimprimer
+        # manuel pendant qu'un dispatch auto imprime une AUTRE position)
+        # s'entrelacent sur le fil USB (constate en reel : images decalees/
+        # superposees, "comme si la trame s'arrete pour etre remplacee par
+        # un bout d'une autre etiquette"). _dispatch_lock ne protege PAS ce
+        # cas (le reimprimer manuel ne le prend jamais) -- verrou dedie.
+        self._pos80l_lock = threading.Lock()
         self._selected_size = QC_SIZES[0]
         self._yms_model = DEFAULT_MODEL  # light ou pro (sélectionné au lancement)
         self._bench_config = {}     # v1.5 : yms_version + composants montés
@@ -1525,17 +1533,28 @@ class Panel(ScreenPanel):
     def _print_qc_label(self, report):
         """Imprime l'étiquette QC (58x37, gap+peel natifs TSPL) sur une POS80L
         branchée EN LOCAL sur ce pad. Renvoie (ok, message). Ne bloque jamais
-        le QC : imprimante absente = no-op."""
+        le QC : imprimante absente = no-op.
+
+        31/08 : sous _pos80l_lock (device caractere brut sans file d'attente
+        -- deux write() concurrents s'entrelacent sur le fil USB, constate en
+        reel) + retry 1x apres 1.5s (dmesg reel : la liaison USB de cette
+        POS80L decroche/se reconnecte par intermittence en <1s -- un write()
+        qui tombe pile sur la coupure peut echouer silencieusement sans
+        OSError alors que rien n'est sorti a l'impression)."""
         if not os.path.exists(self.POS80L_DEV):
             return False, "POS80L absente"
         tspl = build_label_tspl(report)
-        try:
-            with open(self.POS80L_DEV, "wb") as f:
-                f.write(tspl)
-            return True, "étiquette imprimée"
-        except OSError as e:
-            logger.warning("QC: impression étiquette POS80L: %s", e)
-            return False, "étiquette: %s" % e
+        with self._pos80l_lock:
+            for _attempt in range(2):
+                try:
+                    with open(self.POS80L_DEV, "wb") as f:
+                        f.write(tspl)
+                    return True, "étiquette imprimée"
+                except OSError as e:
+                    logger.warning("QC: impression étiquette POS80L: %s", e)
+                    err = str(e)
+                    time.sleep(1.5)
+            return False, "étiquette: %s" % err
 
     # ─── ÉTIQUETTE QC (serveur d'impression réseau usine) ──────────────
     # Chemin par défaut pour YMS ET machine (C235/C335/C435...) depuis le
