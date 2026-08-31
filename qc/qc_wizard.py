@@ -1304,16 +1304,21 @@ class Panel(ScreenPanel):
         TOUS les boîtiers (allocation + rapport + étiquette). Les étiquettes
         s'IMPRIMENT dans l'ORDRE des positions 1..12 -- garanti, pas dans
         l'ordre où chaque dispatch réseau finit par hasard (signalé 22/08 :
-        source de confusion à l'usine) -- mais depuis le 31/08, allocation +
-        rapport + upload de CHAQUE position tournent en PARALLÈLE (un thread
-        par position, cf. _prepare_box) : une position lente sur le réseau
-        ne bloque plus la PRÉPARATION des positions suivantes, seule leur
-        IMPRESSION continue d'attendre son tour (cf. _print_box, boucle
-        d'attente ordonnée plus bas). Avant le 31/08, tout tournait dans un
-        seul thread à la suite -- une position sur un blip WiFi (jusqu'à
-        105s d'allocation + 93s d'impression au pire cas) retardait TOUTES
-        les positions derrière elle pour rien, alors que rien n'empêchait
-        leur allocation/upload d'avancer pendant ce temps.
+        source de confusion à l'usine).
+
+        v6 (31/08) : les 12 positions tournent EN VRAI PARALLÈLE de bout en
+        bout (allocation+rapport+upload+IMPRESSION, un thread par position,
+        cf. _process_box) -- plus aucune attente entre positions côté pad.
+        L'ordre d'impression reste garanti côté SERVEUR : chaque requête de
+        print porte seq=pos, et gs1-proxy (commit 7100120, dépôt
+        YUMI-POS-Printer, PAS touché depuis ce dépôt-ci -- scope partagé
+        avec la session "yumi-pos-printer-39") trie sa file par ce champ
+        au lieu d'un simple ordre d'arrivée réseau. Mesuré en réel avant ce
+        changement (v5, 31/08 toujours) : ~15-24s entre 2 étiquettes,
+        jusqu'à ~214s/position au pire cas (105s allocation + 93s
+        impression, cf. analyse latence du 31/08) -- une position lente
+        retardait TOUTES les positions derrière elle pour rien, alors que
+        rien n'empêchait leur traitement d'avancer en parallèle.
 
         v3 (23/08) : load_all, stress_all ET heat_all (YMS Pro seulement) sont
         des étapes GROUPÉES (plus de capteur tête -> plus de test individuel
@@ -1389,58 +1394,56 @@ class Panel(ScreenPanel):
                 }
                 pending.append((pos, test_id, final))
 
-            # v5 (31/08) : allocation+rapport+upload de TOUTES les positions
-            # en PARALLÈLE (un thread par position), impression seule gardée
-            # SÉQUENTIELLE dans l'ORDRE des positions (cf. boucle ci-dessous)
-            # -- avant, tout (alloc/upload/print) tournait dans UN SEUL thread
-            # à la suite : une position sur un blip WiFi (jusqu'à 105s
-            # d'allocation + 93s d'impression au pire, cf. analyse du 31/08)
-            # bloquait TOUTES les positions suivantes derrière elle, alors
-            # que rien n'empêchait leur allocation/upload de tourner pendant
-            # ce temps. Prépare pour chaque position en tâche de fond,
-            # imprime dans l'ordre dès que CETTE position est prête (peut
-            # devoir attendre une position plus lente devant elle dans la
-            # pile -- l'ordre d'IMPRESSION reste garanti -- mais les
-            # positions suivantes n'attendent plus pour rien pendant ce
-            # temps, leur préparation avance déjà en parallèle).
-            ready = {}
+            # v6 (31/08) : allocation+rapport+upload+IMPRESSION de TOUTES
+            # les positions EN VRAI PARALLÈLE, un thread PAR POSITION du
+            # début à la fin (_process_box) -- rendu sûr par gs1-proxy
+            # (commit 7100120, côté serveur "yumi-pos-printer-39", pas
+            # touché depuis ce dépôt) qui trie désormais sa file par le
+            # champ "seq" (= position banc) au lieu d'un simple ordre
+            # d'arrivée réseau : l'ordre d'IMPRESSION physique reste
+            # garanti même si les 12 requêtes HTTP arrivent au serveur
+            # dans le désordre (jitter TLS/scheduling). Remplace le modèle
+            # v5 (préparation parallèle + impression séquentielle avec
+            # attente d'événement par position, cf. historique git) --
+            # plus aucune position n'attend son tour côté pad, la queue
+            # serveur fait le travail d'ordonnancement final.
+            threads = []
             for pos, test_id, final in pending:
-                ev = threading.Event()
-                ready[pos] = ev
-                threading.Thread(
-                    target=self._prepare_box, args=(test_id, final, pos, ev),
-                    daemon=True).start()
-            for pos, test_id, final in pending:
-                ready[pos].wait()
-                report = self._box_reports.get(pos)
-                if report is None or "_upload_ok" not in report:
-                    # _prepare_box_inner a leve avant meme de construire le
-                    # rapport (cf. try/finally sur ready_event dans
-                    # _prepare_box) -- ne bloque jamais les positions
-                    # suivantes pour ca, juste cette etiquette manquante.
-                    logger.error(
-                        "QC YMS: pos %d sans rapport prepare (exception ?), "
-                        "etiquette non imprimee", pos)
-                    continue
-                self._print_box(pos, report, final)
+                t = threading.Thread(
+                    target=self._process_box, args=(test_id, final, pos),
+                    daemon=True)
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
 
-    def _prepare_box(self, test_id, result, pos, ready_event):
+    def _process_box(self, test_id, result, pos):
+        """Prépare (allocation+rapport+upload) PUIS imprime CETTE position,
+        de bout en bout dans SON PROPRE thread -- l'ordre d'impression est
+        garanti côté serveur (seq, cf. _dispatch_all_boxes_ordered), plus
+        besoin d'attendre son tour côté pad."""
+        report = self._prepare_box(test_id, result, pos)
+        if report is None:
+            logger.error(
+                "QC YMS: pos %d sans rapport préparé (exception ?), "
+                "étiquette non imprimée", pos)
+            return
+        self._print_box(pos, report, result)
+
+    def _prepare_box(self, test_id, result, pos):
         """Alloue le code AU RÉSULTAT (PASS -> numéro de série YMSL-/YMSP-,
         FAIL -> code famille QCFL-, retry 5x/6s) + construit/sauve le
         rapport (store-and-forward) + l'envoie (.sent sur ACK, sinon le
-        timer qc-upload retentera). Tourne dans SON PROPRE thread, un par
-        position, EN PARALLÈLE des autres (cf. _dispatch_all_boxes_ordered)
-        -- pose le résultat dans self._box_reports[pos] puis signale
-        ready_event ; l'impression (séquentielle, ordonnée) est un thread
-        séparé (_print_box). ready_event.set() est GARANTI (try/finally) --
-        une exception imprévue ici ne doit jamais laisser _print_box bloqué
-        pour toujours sur ready[pos].wait() (position suivante y compris,
-        elle attend son propre event mais le lock/la pile resterait grippée
-        si le thread d'impression ne progresse jamais)."""
+        timer qc-upload retentera). Renvoie le rapport (avec les clés
+        internes _upload_ok/_upload_msg/_no_code, consommées par
+        _print_box) ou None si une exception imprévue a empêché même sa
+        construction -- ne doit JAMAIS laisser _process_box planter (une
+        position en échec ne doit jamais empêcher les 11 autres)."""
         try:
-            self._prepare_box_inner(test_id, result, pos)
-        finally:
-            ready_event.set()
+            return self._prepare_box_inner(test_id, result, pos)
+        except Exception:
+            logger.exception("QC YMS: _prepare_box_inner pos %d", pos)
+            return None
 
     def _prepare_box_inner(self, test_id, result, pos):
         passed = (result == QCResult.PASS)
@@ -1500,16 +1503,17 @@ class Panel(ScreenPanel):
         report["_upload_ok"] = ok
         report["_upload_msg"] = msg
         report["_no_code"] = no_code
+        return report
 
     def _print_box(self, pos, report, result):
         """Imprime l'étiquette SYSTÉMATIQUEMENT (PASS = numéro de série + QR,
         FAIL = étiquette de rejet position + raison) — une étiquette par
         test, aucun décalage possible dans la pile de boîtiers ; retry 3x
         (28/08 : un blip réseau ponctuel sur le LAN ET le relais faisait
-        sauter une étiquette en silence). Appelé DANS L'ORDRE des positions
-        par _dispatch_all_boxes_ordered (thread unique) -- garantit l'ordre
-        d'impression même si _prepare_box a fini dans le désordre entre
-        positions (31/08)."""
+        sauter une étiquette en silence). Appelé par _process_box, un
+        thread PAR POSITION -- l'ordre d'impression est garanti côté
+        SERVEUR (seq=pos transmis au relais, cf. _print_qc_label_network),
+        plus par une attente côté pad (31/08)."""
         passed = (result == QCResult.PASS)
         ok = report.pop("_upload_ok")
         msg = report.pop("_upload_msg")
@@ -1517,7 +1521,7 @@ class Panel(ScreenPanel):
         yms_id = report["printer_id"]
         lok, lmsg = False, ""
         for _attempt in range(3):
-            lok, lmsg = self._print_qc_label_network(report)
+            lok, lmsg = self._print_qc_label_network(report, seq=pos)
             if lok:
                 break
             time.sleep(3)
@@ -1639,7 +1643,7 @@ class Panel(ScreenPanel):
     NETWORK_PRINTER_HOST = "smartpi-printer-factory.local:631"
     NETWORK_PRINTER_QUEUE = "POS80L"
 
-    def _print_qc_label_network(self, report):
+    def _print_qc_label_network(self, report, seq=None):
         """Imprime l'étiquette QC — 3 chemins, essayés DANS L'ORDRE, chacun
         un secours du précédent, jamais un remplacement :
         1. POS80L branchée EN DIRECT sur CE pad (_print_qc_label, USB local
@@ -1653,6 +1657,13 @@ class Panel(ScreenPanel):
         3. Relais cloud (qc.yumi-lab.com -> gs1-proxy -> file que le boîtier
            va chercher lui-même) -- si le pad n'est pas sur le LAN/VPN de
            smartpi-printer-factory.
+        seq (31/08, optionnel) : position banc (1..12), transmis au relais
+        SEUL (gs1-proxy trie sa file par seq quand fourni, cf. commit
+        7100120 sur ce dépôt) -- permet d'appeler ceci pour les 12 positions
+        d'un lot EN VRAI PARALLÈLE (cf. _process_box) sans perdre l'ordre
+        d'impression, même si l'ordre d'ARRIVÉE réseau des 12 requêtes est
+        mélangé. Sans objet pour les chemins USB local/LAN (synchrones,
+        un seul appelant à la fois de toute façon, cf. _pos80l_lock).
         Renvoie (ok, message). Ne bloque jamais le QC : réseau/imprimante
         indisponibles partout = échec rapide."""
         ok, local_msg = self._print_qc_label(report)
@@ -1684,22 +1695,23 @@ class Panel(ScreenPanel):
                 lan_msg = "étiquette réseau: %s" % e
         else:
             lan_msg = "client CUPS (lp) absent"
-        ok, relay_msg = self._print_qc_label_relay(report)
+        ok, relay_msg = self._print_qc_label_relay(report, seq=seq)
         if ok:
             return True, "étiquette imprimée (relais)"
         return False, "USB local: %s -- %s -- relais: %s" % (local_msg, lan_msg, relay_msg)
 
-    def _print_qc_label_relay(self, report):
+    def _print_qc_label_relay(self, report, seq=None):
         """Relais réseau (26/08) : pousse l'étiquette (PNG data URL) sur
         qc.yumi-lab.com/api/qc/print/factory, authentifié avec le MÊME token
         que l'upload de rapport -- aucun nouveau secret sur le pad. Le
         serveur relaie ensuite vers gs1-proxy avec SA propre clé GS1 (jamais
-        distribuée aux pads). Renvoie (ok, message)."""
+        distribuée aux pads). seq (31/08, optionnel) : cf. docstring
+        _print_qc_label_network. Renvoie (ok, message)."""
         token = self._qc_token()
         if not token:
             return False, "token QC manquant"
         try:
-            job = build_label_png_job(report)
+            job = build_label_png_job(report, seq=seq)
         except Exception as e:
             logger.warning("QC: rendu PNG etiquette (relais): %s", e)
             return False, "rendu PNG: %s" % e

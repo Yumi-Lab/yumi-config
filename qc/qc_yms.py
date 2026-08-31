@@ -694,19 +694,33 @@ def build_label_tspl(report):
 LABEL_MEDIA_MM = {"yms": (50, 30), "machine": (39, 39)}
 
 
-def build_label_png_job(report, qty=1):
+def build_label_png_job(report, qty=1, seq=None):
     """Génère le job JSON attendu par la file d'impression réseau (gs1-proxy
     /api/gs1/print/factory -> pos80l-cloud -> pos80l-bridge, cf. skill
     factory-printer-proxy) : {"image": "data:image/png;base64,...", "qty",
-    "gap_mm", "width_mm", "height_mm", "peel"}. Relais réseau (26/08) utilisé
-    quand l'impression LAN directe (build_label_tspl + lp -h smartpi-printer-
-    factory.local:631) échoue -- le pad peut être hors du LAN usine tout en
-    gardant un accès HTTPS normal (même chemin que l'upload de rapport QC)."""
+    "gap_mm", "width_mm", "height_mm", "peel"[, "seq"]}. Relais réseau
+    (26/08) utilisé quand l'impression LAN directe (build_label_tspl + lp -h
+    smartpi-printer-factory.local:631) échoue -- le pad peut être hors du
+    LAN usine tout en gardant un accès HTTPS normal (même chemin que
+    l'upload de rapport QC).
+
+    seq (31/08) : entier optionnel = position banc (1..12) -- gs1-proxy
+    (commit 7100120) insère le job trié par seq au lieu d'un simple append,
+    ce qui permet d'envoyer les 12 jobs d'un lot EN PARALLÈLE (pas
+    d'attente de la réponse complète de l'un avant d'envoyer le suivant)
+    sans perdre l'ordre d'impression, même si l'ordre d'ARRIVÉE réseau est
+    mélangé par le jitter TLS/scheduling. Omis (None) -> comportement
+    exactement identique à avant (simple append, ordre d'arrivée) --
+    nécessaire pour le seul autre appelant de gs1-proxy (bouton "POS80L
+    Factory" de l'app Label Expert), qui n'envoie jamais ce champ."""
     render_qc_tspl = _import_render_qc_tspl()
     kind, section, data = _label_kind_section_data(report)
     w_mm, h_mm = LABEL_MEDIA_MM[kind]
     image = render_qc_tspl.render_qc_label_png_data_url(kind, section, data)
-    return {
+    job = {
         "image": image, "qty": qty, "gap_mm": 2,
         "width_mm": w_mm, "height_mm": h_mm, "peel": True,
     }
+    if seq is not None:
+        job["seq"] = seq
+    return job
