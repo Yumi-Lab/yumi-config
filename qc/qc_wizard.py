@@ -1661,10 +1661,18 @@ class Panel(ScreenPanel):
         if shutil.which("lp"):
             tspl = build_label_tspl(report)
             try:
+                # 10 -> 3 (31/08) : sur un pad qui n'est structurellement PAS
+                # sur le LAN/VPN de smartpi-printer-factory (mDNS ne resout
+                # meme pas .local, cf. diagnostic reel du 31/08), cette
+                # tentative echoue a CHAQUE fois -- 10s perdues pour rien sur
+                # CHAQUE etiquette avant de retomber sur le relais (mesure
+                # en reel : ~15-24s entre 2 etiquettes, l'essentiel venant
+                # de ce timeout). 3s reste large pour un LAN qui marche
+                # vraiment (resolution+connexion+job raw tient en <1-2s).
                 proc = subprocess.run(
                     ["lp", "-h", self.NETWORK_PRINTER_HOST,
                      "-d", self.NETWORK_PRINTER_QUEUE, "-o", "raw"],
-                    input=tspl, capture_output=True, timeout=10)
+                    input=tspl, capture_output=True, timeout=3)
                 if proc.returncode == 0:
                     return True, "étiquette imprimée"
                 err = proc.stderr.decode("utf-8", "replace").strip()
