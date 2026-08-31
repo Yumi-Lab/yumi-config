@@ -1396,12 +1396,19 @@ class Panel(ScreenPanel):
         pos = position_from_test_id(test_id)
         passed = (result == QCResult.PASS)
         ids, err = None, ""
-        for _attempt in range(3):
+        # 3x/5s -> 5x/6s (31/08) : le WiFi de ce pad (cle USB sur le meme hub
+        # que la POS80L) met par intermittence jusqu'a ~28s a se retablir
+        # completement (rechargement firmware + reassociation, vu en reel
+        # dans dmesg) -- un echec rapide type "connexion refusee"/"reset"
+        # (quasi instantane, PAS le timeout 15s) pouvait epuiser les 3
+        # tentatives en ~15-18s, avant que le WiFi soit vraiment revenu ->
+        # NOCODE evitable. Nouvelle fenetre : jusqu'a ~30s de sommeil seul.
+        for _attempt in range(5):
             ids, err = self._allocate_yms_codes(
                 1, self._yms_model, "pass" if passed else "fail")
             if ids:
                 break
-            time.sleep(5)
+            time.sleep(6)
         if ids:
             yms_id = ids[0]
         else:
