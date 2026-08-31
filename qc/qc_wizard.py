@@ -1301,11 +1301,19 @@ class Panel(ScreenPanel):
 
     def _dispatch_all_boxes_ordered(self):
         """Séquence ENTIÈRE terminée (stress_all inclus, v3 22/08) : dispatch
-        TOUS les boîtiers (allocation + rapport + étiquette), DANS L'ORDRE
-        des positions 1..12, un par un et SÉQUENTIEL (pas de thread par
-        boîtier ici) -- garantit que les étiquettes sortent dans l'ordre des
-        postes, pas dans l'ordre où chaque dispatch réseau finit par hasard
-        (signalé 22/08 : source de confusion à l'usine).
+        TOUS les boîtiers (allocation + rapport + étiquette). Les étiquettes
+        s'IMPRIMENT dans l'ORDRE des positions 1..12 -- garanti, pas dans
+        l'ordre où chaque dispatch réseau finit par hasard (signalé 22/08 :
+        source de confusion à l'usine) -- mais depuis le 31/08, allocation +
+        rapport + upload de CHAQUE position tournent en PARALLÈLE (un thread
+        par position, cf. _prepare_box) : une position lente sur le réseau
+        ne bloque plus la PRÉPARATION des positions suivantes, seule leur
+        IMPRESSION continue d'attendre son tour (cf. _print_box, boucle
+        d'attente ordonnée plus bas). Avant le 31/08, tout tournait dans un
+        seul thread à la suite -- une position sur un blip WiFi (jusqu'à
+        105s d'allocation + 93s d'impression au pire cas) retardait TOUTES
+        les positions derrière elle pour rien, alors que rien n'empêchait
+        leur allocation/upload d'avancer pendant ce temps.
 
         v3 (23/08) : load_all, stress_all ET heat_all (YMS Pro seulement) sont
         des étapes GROUPÉES (plus de capteur tête -> plus de test individuel
@@ -1333,6 +1341,7 @@ class Panel(ScreenPanel):
         ATTENDRE ici plutôt que d'entrelacer ses impressions avec celles du
         1er lot (constaté en réel : YMS-1..12 de deux lots mélangés)."""
         with self._dispatch_lock:
+            pending = []
             for pos in range(1, YMS_BENCH_TOTAL + 1):
                 test_id = test_id_for_position(pos)
                 logs = self.engine._test_log.get(test_id, [])
@@ -1378,22 +1387,62 @@ class Panel(ScreenPanel):
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "details": details,
                 }
-                self._dispatch_box(test_id, final)
+                pending.append((pos, test_id, final))
 
-    def _dispatch_box(self, test_id, result):
-        """Thread de fin de test d'un boîtier (v1.4) :
-        1. alloue le code AU RÉSULTAT (PASS -> numéro de série YMSL-/YMSP-,
-           FAIL -> code famille QCFL-, retry 3x) ;
-        2. construit + sauve le rapport (store-and-forward) et l'envoie
-           (.sent sur ACK, sinon le timer qc-upload retentera) ;
-        3. imprime l'étiquette SYSTÉMATIQUEMENT (PASS = numéro de série + QR,
-           FAIL = étiquette de rejet position + raison) — une étiquette par
-           test, aucun décalage possible dans la pile de boîtiers ; retry 3x
-           (28/08 : un blip réseau ponctuel sur le LAN ET le relais faisait
-           sauter une étiquette en silence -- le rapport était bien fiabilisé
-           via .sent/qc-upload mais pas l'impression, seule échappatoire le
-           réimprimer manuel depuis l'écran résumé)."""
-        pos = position_from_test_id(test_id)
+            # v5 (31/08) : allocation+rapport+upload de TOUTES les positions
+            # en PARALLÈLE (un thread par position), impression seule gardée
+            # SÉQUENTIELLE dans l'ORDRE des positions (cf. boucle ci-dessous)
+            # -- avant, tout (alloc/upload/print) tournait dans UN SEUL thread
+            # à la suite : une position sur un blip WiFi (jusqu'à 105s
+            # d'allocation + 93s d'impression au pire, cf. analyse du 31/08)
+            # bloquait TOUTES les positions suivantes derrière elle, alors
+            # que rien n'empêchait leur allocation/upload de tourner pendant
+            # ce temps. Prépare pour chaque position en tâche de fond,
+            # imprime dans l'ordre dès que CETTE position est prête (peut
+            # devoir attendre une position plus lente devant elle dans la
+            # pile -- l'ordre d'IMPRESSION reste garanti -- mais les
+            # positions suivantes n'attendent plus pour rien pendant ce
+            # temps, leur préparation avance déjà en parallèle).
+            ready = {}
+            for pos, test_id, final in pending:
+                ev = threading.Event()
+                ready[pos] = ev
+                threading.Thread(
+                    target=self._prepare_box, args=(test_id, final, pos, ev),
+                    daemon=True).start()
+            for pos, test_id, final in pending:
+                ready[pos].wait()
+                report = self._box_reports.get(pos)
+                if report is None or "_upload_ok" not in report:
+                    # _prepare_box_inner a leve avant meme de construire le
+                    # rapport (cf. try/finally sur ready_event dans
+                    # _prepare_box) -- ne bloque jamais les positions
+                    # suivantes pour ca, juste cette etiquette manquante.
+                    logger.error(
+                        "QC YMS: pos %d sans rapport prepare (exception ?), "
+                        "etiquette non imprimee", pos)
+                    continue
+                self._print_box(pos, report, final)
+
+    def _prepare_box(self, test_id, result, pos, ready_event):
+        """Alloue le code AU RÉSULTAT (PASS -> numéro de série YMSL-/YMSP-,
+        FAIL -> code famille QCFL-, retry 5x/6s) + construit/sauve le
+        rapport (store-and-forward) + l'envoie (.sent sur ACK, sinon le
+        timer qc-upload retentera). Tourne dans SON PROPRE thread, un par
+        position, EN PARALLÈLE des autres (cf. _dispatch_all_boxes_ordered)
+        -- pose le résultat dans self._box_reports[pos] puis signale
+        ready_event ; l'impression (séquentielle, ordonnée) est un thread
+        séparé (_print_box). ready_event.set() est GARANTI (try/finally) --
+        une exception imprévue ici ne doit jamais laisser _print_box bloqué
+        pour toujours sur ready[pos].wait() (position suivante y compris,
+        elle attend son propre event mais le lock/la pile resterait grippée
+        si le thread d'impression ne progresse jamais)."""
+        try:
+            self._prepare_box_inner(test_id, result, pos)
+        finally:
+            ready_event.set()
+
+    def _prepare_box_inner(self, test_id, result, pos):
         passed = (result == QCResult.PASS)
         ids, err = None, ""
         # 3x/5s -> 5x/6s (31/08) : le WiFi de ce pad (cle USB sur le meme hub
@@ -1448,6 +1497,24 @@ class Panel(ScreenPanel):
                 open(path + ".sent", "w").close()
             except OSError:
                 pass
+        report["_upload_ok"] = ok
+        report["_upload_msg"] = msg
+        report["_no_code"] = no_code
+
+    def _print_box(self, pos, report, result):
+        """Imprime l'étiquette SYSTÉMATIQUEMENT (PASS = numéro de série + QR,
+        FAIL = étiquette de rejet position + raison) — une étiquette par
+        test, aucun décalage possible dans la pile de boîtiers ; retry 3x
+        (28/08 : un blip réseau ponctuel sur le LAN ET le relais faisait
+        sauter une étiquette en silence). Appelé DANS L'ORDRE des positions
+        par _dispatch_all_boxes_ordered (thread unique) -- garantit l'ordre
+        d'impression même si _prepare_box a fini dans le désordre entre
+        positions (31/08)."""
+        passed = (result == QCResult.PASS)
+        ok = report.pop("_upload_ok")
+        msg = report.pop("_upload_msg")
+        no_code = report.pop("_no_code")
+        yms_id = report["printer_id"]
         lok, lmsg = False, ""
         for _attempt in range(3):
             lok, lmsg = self._print_qc_label_network(report)
