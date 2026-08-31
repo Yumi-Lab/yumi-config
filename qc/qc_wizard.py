@@ -1512,13 +1512,13 @@ class Panel(ScreenPanel):
             "YMS-%d: 标签已重印 / étiquette réimprimée ✓" % pos if ok
             else "YMS-%d: %s" % (pos, msg), level=1 if ok else 3)
 
-    # ─── ÉTIQUETTE QC — SECOURS LOCAL (POS80L branchée en direct sur CE pad) ──
-    # ⚠️ 22/08/2026 : la POS80L du banc YMS12 est passée en réseau (comme le
-    # reste de l'usine) — ce device local n'est PLUS utilisé par le banc YMS.
-    # Seul appelant restant : la bascule manuelle "local" du panel QC machine
-    # (secours si jamais une POS80L est un jour rebranchée en direct sur un
-    # pad machine). Ne pas confondre avec _print_qc_label_network ci-dessous,
-    # qui est maintenant le chemin utilisé par YMS ET machine.
+    # ─── ÉTIQUETTE QC — POS80L branchée EN DIRECT sur CE pad ───────────
+    # Priorité 1 de _print_qc_label_network (31/08, remis en tête -- avait
+    # été relégué à la bascule manuelle "local" du panel le 22/08 quand le
+    # banc YMS12 était passé au tout-réseau, mais rien n'empêche une POS80L
+    # d'être branchée directement sur le pad qui fait le QC : autant s'en
+    # servir en premier, aucune dépendance réseau du tout). Reste aussi
+    # appelable seul via la bascule manuelle "local" du panel QC machine.
 
     POS80L_DEV = "/dev/usb/lp0"
 
@@ -1547,15 +1547,24 @@ class Panel(ScreenPanel):
     NETWORK_PRINTER_QUEUE = "POS80L"
 
     def _print_qc_label_network(self, report):
-        """Imprime l'étiquette QC machine via le serveur d'impression réseau
-        usine (TSPL brut, queue CUPS raw). Renvoie (ok, message). Ne bloque
-        jamais le QC : réseau/imprimante indisponibles = échec rapide.
-
-        v2 (26/08) : si le pad n'est pas sur le LAN/VPN de smartpi-printer-
-        factory (lp échoue), bascule sur le relais réseau (qc.yumi-lab.com ->
-        gs1-proxy -> file que le boîtier va chercher lui-même) -- cf.
-        _print_qc_label_relay. Toujours tenté en second, jamais à la place :
-        le LAN direct reste plus rapide/fiable quand il marche."""
+        """Imprime l'étiquette QC — 3 chemins, essayés DANS L'ORDRE, chacun
+        un secours du précédent, jamais un remplacement :
+        1. POS80L branchée EN DIRECT sur CE pad (_print_qc_label, USB local
+           /dev/usb/lp0) -- le plus rapide/fiable quand elle est présente,
+           aucune dépendance réseau du tout (31/08 : remis en priorité
+           automatique, n'était plus accessible que via la bascule manuelle
+           du panel depuis le 22/08 -- Nicolas : imprimer en USB direct si
+           une POS80L est branchée sur le pad qui fait le QC, sinon bascule).
+        2. Serveur d'impression réseau usine (smartpi-printer-factory, LAN/
+           VPN, queue CUPS raw) -- v2 26/08.
+        3. Relais cloud (qc.yumi-lab.com -> gs1-proxy -> file que le boîtier
+           va chercher lui-même) -- si le pad n'est pas sur le LAN/VPN de
+           smartpi-printer-factory.
+        Renvoie (ok, message). Ne bloque jamais le QC : réseau/imprimante
+        indisponibles partout = échec rapide."""
+        ok, local_msg = self._print_qc_label(report)
+        if ok:
+            return True, "étiquette imprimée (USB local)"
         if shutil.which("lp"):
             tspl = build_label_tspl(report)
             try:
@@ -1577,7 +1586,7 @@ class Panel(ScreenPanel):
         ok, relay_msg = self._print_qc_label_relay(report)
         if ok:
             return True, "étiquette imprimée (relais)"
-        return False, "%s -- relais: %s" % (lan_msg, relay_msg)
+        return False, "USB local: %s -- %s -- relais: %s" % (local_msg, lan_msg, relay_msg)
 
     def _print_qc_label_relay(self, report):
         """Relais réseau (26/08) : pousse l'étiquette (PNG data URL) sur
