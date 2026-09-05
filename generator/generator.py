@@ -726,8 +726,17 @@ def render_save_config():
 
 # ─── Assembler ──────────────────────────────────────────────────────
 
-def generate(product_id):
+def generate(product_id, overrides=None):
+    """Render the printer.cfg of a catalog product.
+
+    overrides: optional dict deep-merged over the resolved product, used by
+    compose.py to inject the serial ports actually detected on the pad
+    (e.g. {"mcu": {"serial": "/dev/serial/by-id/..."}}) without touching
+    the catalog defaults.
+    """
     p = resolve_product(product_id)
+    if overrides:
+        p = deep_merge(p, overrides)
     yms = p.get('yms_count', 0)
 
     sections = [
