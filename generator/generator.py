@@ -1,27 +1,69 @@
 #!/usr/bin/env python3
 """
 Printer CFG Generator — YUMI C-Series
-Generates a complete printer.cfg from YUMI-LAB_product-catalog.json.
+Renders a complete printer.cfg from YUMI-LAB_product-catalog.json.
+
+The catalog is layered: board (common trunk: pins, currents, probes, homing, macros — valid
+for every machine size) -> machine (geometry only) -> print head -> hotend type -> nozzle
+-> YMS. The layers of a product are deep-merged, then every Klipper section is rendered
+from the merged data with the comments the catalog carries:
+
+    "_comment"  on a dict  -> written after the [section] header
+    "_comments" {key: txt} -> written inline after "key: value"
+    "_notes"    [txt, ...] -> written as commented lines at the end of the section
+                              (alternative values kept for reference)
+
+Nothing machine-specific lives in this file: a value that is the same for every machine
+belongs to the board layer of the catalog, a value that differs belongs to the machine.
+Macros carry no machine value either — they read printer.configfile.settings and the single
+_YUMI_MACHINE macro (machine class derived from the X axis length).
 
 Usage:
     python3 generator.py C235_DD_LW_04
     python3 generator.py C235_CX12_HF_04_7YMS -o /tmp/printer.cfg
     python3 generator.py --list
 """
-import json
-import copy
-import sys
 import argparse
+import copy
+import json
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 CATALOG_FILE = BASE_DIR / "YUMI-LAB_product-catalog.json"
 
+# Keys of a catalog dict that are documentation, not Klipper options.
+META_KEYS = {"_comment", "_comments", "_notes", "_status", "_TODO", "_doc"}
+# Nested dicts rendered as their own Klipper section, never as an option of the parent.
+SUBSECTION_KEYS = {"tmc2209", "autotune"}
+# Keys carried by a merged component that describe the product, not a Klipper section.
+PRODUCT_KEYS = {"layer", "children", "terminates", "incompatible_with", "parent", "requires",
+                "requires_any", "terminates_if", "yms_constraints", "max_instances"}
+
+# Preferred option order per section: pins first, then geometry, then tuning.
+STEPPER_ORDER = ("step_pin", "dir_pin", "enable_pin", "microsteps", "rotation_distance", "gear_ratio",
+                 "full_steps_per_rotation", "endstop_pin", "position_endstop", "position_min",
+                 "position_max", "homing_speed", "second_homing_speed", "homing_retract_dist")
+TMC_ORDER = ("uart_pin", "run_current", "hold_current", "stealthchop_threshold", "driver_sgthrs", "diag_pin")
+AUTOTUNE_ORDER = ("motor", "tuning_goal")
+EXTRUDER_ORDER = ("step_pin", "dir_pin", "enable_pin", "rotation_distance", "gear_ratio", "microsteps",
+                  "full_steps_per_rotation", "nozzle_diameter", "filament_diameter", "heater_pin",
+                  "sensor_type", "sensor_pin", "min_temp", "max_temp")
+EXTRUDER_STEPPER_ORDER = ("extruder", "step_pin", "dir_pin", "enable_pin", "microsteps", "rotation_distance",
+                          "gear_ratio", "full_steps_per_rotation", "pressure_advance")
+HEATER_BED_ORDER = ("heater_pin", "sensor_type", "sensor_pin", "control", "pid_Kp", "pid_Ki", "pid_Kd",
+                    "max_power", "min_temp", "max_temp")
+PROBE_ORDER = ("pin", "x_offset", "y_offset", "z_offset", "speed", "samples", "samples_result",
+               "sample_retract_dist", "samples_tolerance", "samples_tolerance_retries")
+BED_MESH_ORDER = ("speed", "horizontal_move_z", "mesh_min", "mesh_max", "probe_count", "algorithm",
+                  "bicubic_tension", "mesh_pps", "zero_reference_position", "adaptive_margin")
+SCREWS_ORDER = tuple(f"screw{i}{s}" for i in range(1, 9) for s in ("", "_name"))
+
 
 # ─── Catalog loader ─────────────────────────────────────────────────
 
 def load_catalog():
-    with open(CATALOG_FILE) as f:
+    with open(CATALOG_FILE, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -35,8 +77,21 @@ def deep_merge(base, override):
     return result
 
 
-def resolve_product(product_id):
-    catalog = load_catalog()
+def machines_of(catalog, board=None):
+    """The machine components (optionally of one board), sorted by X axis length."""
+    rows = []
+    for mid, comp in catalog["components"].items():
+        if not isinstance(comp, dict) or comp.get("layer") != "machine":
+            continue
+        if board and comp.get("parent") != board:
+            continue
+        rows.append((mid, comp))
+    rows.sort(key=lambda r: float(r[1]["stepper_x"]["position_max"]))
+    return rows
+
+
+def resolve_product(product_id, catalog=None):
+    catalog = catalog or load_catalog()
     products = catalog.get("products", {})
     components = catalog.get("components", {})
 
@@ -53,7 +108,6 @@ def resolve_product(product_id):
             print(f"ERROR: Component '{comp_id}' not found.")
             sys.exit(1)
 
-    # Check incompatibilities
     chain_set = set(chain)
     for comp_id in chain:
         comp = components[comp_id]
@@ -62,14 +116,10 @@ def resolve_product(product_id):
                 print(f"ERROR: '{comp_id}' is incompatible with '{forbidden}'.")
                 sys.exit(1)
 
-    # Deep merge all components
-    skip_keys = {"layer", "children", "terminates", "incompatible_with", "parent",
-                 "requires", "requires_any", "terminates_if", "yms_constraints",
-                 "max_instances", "_TODO"}
     merged = {}
     for comp_id in chain:
         comp = components[comp_id]
-        data = {k: v for k, v in comp.items() if k not in skip_keys}
+        data = {k: v for k, v in comp.items() if k not in PRODUCT_KEYS and k not in META_KEYS}
         if "config" in data:
             cfg = data.pop("config")
             data.update(cfg)
@@ -77,6 +127,7 @@ def resolve_product(product_id):
 
     merged["name"] = product_def["name"]
     merged["_chain"] = chain
+    merged["_board"] = chain[0]
     return merged
 
 
@@ -97,14 +148,48 @@ def check_condition(condition, product):
     return True
 
 
-# ─── Hardware section renderers (from data, not hardcoded gcode) ────
+# ─── Section emitter ────────────────────────────────────────────────
+
+def fmt(value):
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    return str(value)
+
+
+def emit(header, data, order=(), skip=()):
+    """One Klipper section from a catalog dict, comments included (see module doc)."""
+    if not data:
+        return ""
+    comments = data.get("_comments") or {}
+    lines = [f"[{header}]" + (f"  # {data['_comment']}" if data.get("_comment") else "")]
+    keys = [k for k in order if k in data] + [k for k in data if k not in order]
+    for k in keys:
+        if k in META_KEYS or k in SUBSECTION_KEYS or k in skip:
+            continue
+        v = data[k]
+        if isinstance(v, (dict, list)):
+            continue
+        line = f"{k}: {fmt(v)}"
+        if comments.get(k):
+            line += f"  # {comments[k]}"
+        lines.append(line)
+    for note in data.get("_notes") or []:
+        lines.append(f"#{note}")
+    return "\n".join(lines)
+
+
+def join(*blocks):
+    return "\n\n".join(b for b in blocks if b)
+
+
+# ─── Hardware section renderers ─────────────────────────────────────
 
 def render_header(p):
     yms = p.get('yms_count', 0)
     bed = p.get('bed_size', 0)
     return f"""########################################################################
 # {p['name']}
-# Bed: {bed}x{bed}mm — Z: {p.get('z_height', 0)}mm — {p.get('kinematics', 'cartesian')}
+# Bed: {bed}x{bed}mm — Z: {p.get('z_height', 0)}mm — {p.get('printer', {}).get('kinematics', 'cartesian')}
 # YMS: {yms}
 # Generated by Printer CFG Generator
 ########################################################################"""
@@ -125,251 +210,160 @@ def render_includes(p):
 def render_probe_pressure(p):
     if not p.get('features', {}).get('probe_pressure'):
         return ""
-    pp = p.get('probe_pressure', {})
-    # yumi_z_tap taps at [bed_mesh] zero_reference_position by default (mesh-zero
-    # mode). In that mode the extra does not read pressure_switch_x/y, and Klipper
-    # refuses unread options ("Option 'pressure_switch_x' is not valid"): only a
-    # machine with a dedicated switch off the bed (tap_at_bed_mesh_zero_position:
-    # false in the catalog) gets the switch coordinates.
-    switch_mode = pp.get('tap_at_bed_mesh_zero_position') is False \
+    tap = dict(p.get('z_tap', {}))
+    # yumi_z_tap taps at [bed_mesh] zero_reference_position by default (mesh-zero mode). In
+    # that mode the extra does not read pressure_switch_x/y and Klipper refuses unread options
+    # ("Option 'pressure_switch_x' is not valid"): the switch coordinates are only written for
+    # a machine with a dedicated switch off the bed (tap_at_bed_mesh_zero_position: false).
+    switch_mode = tap.get('tap_at_bed_mesh_zero_position') is False \
         or not p.get('bed_mesh', {}).get('zero_reference_position')
-    tap_lines = []
-    if switch_mode:
-        if pp.get('tap_at_bed_mesh_zero_position') is False:
-            tap_lines.append("tap_at_bed_mesh_zero_position: False")
-        tap_lines.append(f"pressure_switch_x: {pp.get('z_calc_switch_x', 49.5)}")
-        tap_lines.append(f"pressure_switch_y: {pp.get('z_calc_switch_y', 175.5)}")
-    tap_lines += [
-        f"compression_offset: {pp.get('compression_offset', 0.3)}",
-        f"max_probe_times: {pp.get('max_probe_times', 50)}",
-        f"probe_delay: {pp.get('probe_delay', 2)}",
-        f"z_hop: {pp.get('z_hop', 3)}",
-        f"samples: {pp.get('samples', 5)}",
-        f"samples_tolerance: {pp.get('samples_tolerance', 0.01)}",
-    ]
-    return f"""[probe_pressure]
-pin: {pp.get('pin', '!PB7')}
-speed: {pp.get('speed', 6.0)}
-lift_speed: {pp.get('lift_speed', 6)}
+    if not switch_mode:
+        tap.pop('pressure_switch_x', None)
+        tap.pop('pressure_switch_y', None)
+    return join(emit("probe_pressure", p.get('probe_pressure', {})),
+                emit("yumi_z_tap", tap))
 
-[yumi_z_tap]
-""" + "\n".join(tap_lines)
+
+def render_sensorless_homing(p):
+    return emit("yumi_sensorless_homing", p.get('sensorless_homing', {}))
 
 
 def render_motor_constants(p):
-    lines = []
-    for name, mc in p.get('motor_constants', {}).items():
-        lines.append(f"[motor_constants {name}]")
-        for k, v in mc.items():
-            lines.append(f"{k}: {v}")
-        lines.append("")
-    return "\n".join(lines).rstrip()
+    return join(*(emit(f"motor_constants {name}", mc) for name, mc in p.get('motor_constants', {}).items()))
 
 
 def render_tmc_autotune(p):
     if not p.get('features', {}).get('tmc_autotune'):
         return ""
-    at = p.get('tmc_autotune', {})
-    ep = at.get('extruder', {})
-    lines = []
-
-    for axis in ['x', 'y', 'z']:
-        sa = p.get(f'stepper_{axis}', {})
-        motor = sa.get('motor', '')
-        if not motor:
-            continue
-        # Per-axis params with fallback to shared 'stepper' key
-        sp = at.get(f'stepper_{axis}', at.get('stepper', {}))
-        lines.append(f"[autotune_tmc stepper_{axis}]")
-        lines.append(f"motor: {motor}")
-        lines.append("tuning_goal: auto")
-        for k, v in sp.items():
-            lines.append(f"{k}: {v}")
-        lines.append("")
-
-    yms = p.get('yms_count', 0)
-    ext = p.get('extruder', {})
-    motor = ext.get('motor', '')
-    if motor:
-        if yms == 0:
-            lines.append("[autotune_tmc extruder]")
-        else:
-            for i in range(yms):
-                if i > 0:
-                    lines.append("")
-                lines.append(f"[autotune_tmc extruder_stepper extruder{i}]")
-        lines.append(f"motor: {motor}")
-        lines.append("tuning_goal: auto")
-        for k, v in ep.items():
-            lines.append(f"{k}: {v}")
-        lines.append("")
-
-    return "\n".join(lines).rstrip()
+    blocks = []
+    for axis in ('x', 'y', 'z'):
+        at = p.get(f'stepper_{axis}', {}).get('autotune')
+        if at and at.get('motor'):
+            blocks.append(emit(f"autotune_tmc stepper_{axis}", at, AUTOTUNE_ORDER))
+    at = p.get('extruder_stepper', {}).get('autotune')
+    if at and at.get('motor'):
+        if extruder_motor_slot(p) is not None:
+            blocks.append(emit("autotune_tmc extruder", at, AUTOTUNE_ORDER))
+        for i, _slot in enumerate(extruder_steppers(p)):
+            blocks.append(emit(f"autotune_tmc extruder_stepper extruder{i}", at, AUTOTUNE_ORDER))
+    return join(*blocks)
 
 
 def render_mcu(p):
-    mcu = p.get('mcu', {})
-    return f"""[mcu]
-serial: {mcu.get('serial', '/dev/ttyS1')}
-restart_method: {mcu.get('restart_method', 'command')}"""
+    return emit("mcu", p.get('mcu', {}))
 
 
 def render_smartbox_mcu(p):
     if not p.get('has_smartbox', False):
         return ""
     sb = p.get('smartbox', {})
-    name = sb.get('mcu_name', 'smartbox')
-    return f"""[mcu {name}]
-serial: {sb.get('serial', '/dev/ttyS2')}
-restart_method: {sb.get('restart_method', 'command')}"""
+    return emit(f"mcu {sb.get('mcu_name', 'smartbox')}",
+                {"serial": sb.get('serial'), "restart_method": sb.get('restart_method', 'command')})
 
 
 def render_printer(p):
-    return f"""[printer]
-kinematics: {p.get('kinematics', 'cartesian')}
-max_velocity: {p.get('max_velocity', 700)}
-max_accel: {p.get('max_accel', 20000)}
-max_z_velocity: {p.get('max_z_velocity', 25)}
-max_z_accel: {p.get('max_z_accel', 1000)}"""
+    return emit("printer", p.get('printer', {}))
 
 
 def render_adxl(p):
     if not p.get('features', {}).get('adxl'):
         return ""
-    bed = p.get('bed_size', 235)
-    return f"""[mcu rpi]
-serial: /tmp/klipper_host_mcu
+    host = p.get('host_mcu', {})
+    name = host.get('name', 'rpi')
+    adxl = p.get('adxl', {})
+    bed = p.get('bed_size', 0)
+    return join(
+        emit(f"mcu {name}", {"serial": host.get('serial')}),
+        emit("adxl345", {"cs_pin": f"{name}:{adxl.get('cs_pin')}", "spi_bus": adxl.get('spi_bus')}),
+        f"[resonance_tester]\naccel_chip: adxl345\nprobe_points:\n    {bed / 2}, {bed / 2}, 20",
+        "[input_shaper]")
 
-[adxl345]
-cs_pin: rpi:gpio13
-spi_bus: spidev1.0
 
-[resonance_tester]
-accel_chip: adxl345
-probe_points:
-    {bed / 2}, {bed / 2}, 20
-
-[input_shaper]"""
+def render_axis(p, axis):
+    s = p.get(f'stepper_{axis}', {})
+    return join(emit(f"stepper_{axis}", s, STEPPER_ORDER),
+                emit(f"tmc2209 stepper_{axis}", s.get('tmc2209'), TMC_ORDER))
 
 
 def render_steppers(p):
-    lines = []
-    for axis in ['x', 'y']:
-        s = p.get(f'stepper_{axis}', {})
-        lines.append(f"[stepper_{axis}]")
-        for pin in ['step_pin', 'dir_pin', 'enable_pin']:
-            if pin in s:
-                lines.append(f"{pin}: {s[pin]}")
-        lines.append("microsteps: 16")
-        lines.append("rotation_distance: 40")
-        lines.append(f"endstop_pin: tmc2209_stepper_{axis}: virtual_endstop")
-        for k in ['position_endstop', 'position_min', 'position_max', 'homing_speed']:
-            if k in s:
-                lines.append(f"{k}: {s[k]}")
-        lines.append("homing_retract_dist: 0")
-        lines.append("")
-        lines.append(f"[tmc2209 stepper_{axis}]")
-        if 'uart_pin' in s:
-            lines.append(f"uart_pin: {s['uart_pin']}")
-        for k in ['run_current', 'hold_current']:
-            if k in s:
-                lines.append(f"{k}: {s[k]}")
-        lines.append("stealthchop_threshold: 0")
-        if 'driver_sgthrs' in s:
-            lines.append(f"driver_sgthrs: {s['driver_sgthrs']}")
-        if 'diag_pin' in s:
-            lines.append(f"diag_pin: {s['diag_pin']}")
-        lines.append("")
-
-    # Z
-    sz = p.get('stepper_z', {})
-    lines.append("[stepper_z]")
-    for pin in ['step_pin', 'dir_pin', 'enable_pin']:
-        if pin in sz:
-            lines.append(f"{pin}: {sz[pin]}")
-    lines.append("microsteps: 16")
-    lines.append("rotation_distance: 8")
-    lines.append("endstop_pin: probe:z_virtual_endstop")
-    for k in ['position_max', 'position_min', 'homing_speed', 'second_homing_speed']:
-        if k in sz:
-            lines.append(f"{k}: {sz[k]}")
-    lines.append("homing_retract_dist: 5")
-    lines.append("")
-    lines.append("[tmc2209 stepper_z]")
-    if 'uart_pin' in sz:
-        lines.append(f"uart_pin: {sz['uart_pin']}")
-    for k in ['run_current', 'hold_current']:
-        if k in sz:
-            lines.append(f"{k}: {sz[k]}")
-    lines.append("stealthchop_threshold: 0")
-
-    return "\n".join(lines)
+    return join(*(render_axis(p, axis) for axis in ('x', 'y', 'z')))
 
 
-def render_thermistor(p):
-    t = p.get('thermistor', {})
-    return f"""[thermistor {t.get('name', '100K4190YUMI')}]
-temperature1: {t.get('temperature1', 25)}
-resistance1: {t.get('resistance1', 100000)}
-beta: {t.get('beta', 4300)}"""
+def render_thermistors(p):
+    return join(*(emit(f"thermistor {t['name']}", t, skip=("name",)) for t in p.get('thermistors', [])))
+
+
+def all_slots(p):
+    """Every E slot of the machine in extruder0..N order: main board first, then the smartbox."""
+    slots = [dict(s) for s in p.get('extruder_slots', [])]
+    if p.get('has_smartbox'):
+        sb = p.get('smartbox', {})
+        for slot in sb.get('extruder_slots', []):
+            s = dict(slot)
+            s['mcu'] = sb.get('mcu_name', 'smartbox')
+            slots.append(s)
+    return slots
+
+
+def extruder_motor_slot(p):
+    """The slot the [extruder] motor is wired to (direct drive head), or None when the head has
+    no motor (CHROMAX: bowden, the YMS feeders push — [extruder] is then declared on free pins)."""
+    slot = p.get('extruder', {}).get('motor_slot')
+    return None if slot is None else all_slots(p)[int(slot)]
 
 
 def render_extruder(p):
-    e = p.get('extruder', {})
-    lines = []
-    lines.append("[extruder]")
-    lines.append("max_extrude_only_velocity: 500")
-    for pin in ['step_pin', 'dir_pin', 'enable_pin']:
-        if pin in e:
-            lines.append(f"{pin}: {e[pin]}")
-    for k in ['rotation_distance', 'gear_ratio']:
-        if k in e:
-            lines.append(f"{k}: {e[k]}")
-    lines.append("microsteps: 16")
-    lines.append("full_steps_per_rotation: 200")
-    nd = e.get('nozzle_diameter', p.get('nozzle_diameter', 0.4))
-    lines.append(f"nozzle_diameter: {nd}")
-    lines.append("filament_diameter: 1.750")
-    for pin in ['heater_pin', 'sensor_pin']:
-        if pin in e:
-            lines.append(f"{pin.replace('_pin', '_pin' if pin.endswith('_pin') else '')}: {e[pin]}")
-    if 'sensor_type' in e:
-        lines.append(f"sensor_type: {e['sensor_type']}")
-    if 'heater_pin' in e:
-        lines.append(f"heater_pin: {e['heater_pin']}")
-    if 'sensor_pin' in e:
-        lines.append(f"sensor_pin: {e['sensor_pin']}")
-    lines.append(f"min_temp: -200")
-    lines.append(f"max_temp: {e.get('max_temp', 300)}")
-    lines.append("max_extrude_only_distance: 8000.0")
-    lines.append("max_extrude_cross_section: 40")
-    lines.append(f"min_extrude_temp: {e.get('min_extrude_temp', 0)}")
-    lines.append("pressure_advance: 0")
-    lines.append("control: pid")
-    lines.append(f"pid_Kp: {e.get('pid_Kp', p.get('pid_Kp', 26.213))}")
-    lines.append(f"pid_Ki: {e.get('pid_Ki', p.get('pid_Ki', 1.304))}")
-    lines.append(f"pid_Kd: {e.get('pid_Kd', p.get('pid_Kd', 131.721))}")
-
-    # TMC for single extruder
-    if p.get('yms_count', 0) == 0:
-        lines.append("")
-        lines.append("[tmc2209 extruder]")
-        if 'uart_pin' in e:
-            lines.append(f"uart_pin: {e['uart_pin']}")
-        lines.append(f"run_current: {e.get('run_current', 1.2)}")
-        lines.append(f"hold_current: {e.get('hold_current', 0.3)}")
-        lines.append("stealthchop_threshold: 0")
-
-    return "\n".join(lines)
+    e = dict(p.get('extruder', {}))
+    if 'nozzle_diameter' in p:
+        e['nozzle_diameter'] = p['nozzle_diameter']
+    slot = extruder_motor_slot(p)
+    if slot is None:
+        return emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot",))
+    # Direct drive: real motor on the slot's driver. TMC (and autotune) as any E slot motor.
+    e.update({"step_pin": _slot_pin(slot, 'step_pin'), "dir_pin": _slot_pin(slot, 'dir_pin'),
+              "enable_pin": _slot_pin(slot, 'enable_pin')})
+    tmc = deep_merge(p.get('extruder_stepper', {}).get('tmc2209', {}), {"uart_pin": _slot_pin(slot, 'uart_pin')})
+    return join(emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot",)),
+                emit("tmc2209 extruder", tmc, TMC_ORDER))
 
 
-def render_filament_sensor_single(p):
-    if p.get('yms_count', 0) > 0:
-        return ""
-    slots = p.get('extruder_slots', [])
-    pin = slots[0]['filament_sensor_pin'] if slots else "!PC14"
+def extruder_steppers(p):
+    """The YMS feeders, in extruder0..N order (none for a direct drive: its motor IS the
+    extruder). A head may override a slot (extruder_slot_overrides: direction, ratio) — the
+    boards cannot tell which head is mounted, the wizard does."""
+    slots = all_slots(p)
+    count = p.get('yms_count', 0)
+    overrides = p.get('extruder_slot_overrides', {})
+    result = []
+    for i in range(min(count, len(slots))):
+        slot = deep_merge(slots[i], overrides.get(str(i), {}))
+        if 'dir_invert' in slot:
+            slot['dir_pin'] = ('!' if slot['dir_invert'] else '') + slot['dir_pin'].lstrip('!')
+        result.append(slot)
+    return result
+
+
+def _slot_pin(slot, pin):
+    mcu = slot.get('mcu')
+    prefix = f"{mcu}:" if mcu and mcu != 'main' else ""
+    return f"{prefix}{slot[pin]}"
+
+
+def render_extruder_stepper(p, i, slot):
+    common = p.get('extruder_stepper', {})
+    data = deep_merge(common, {k: slot[k] for k in slot if k in ('rotation_distance', 'gear_ratio', '_comments')})
+    data.update({"extruder": "",
+                 "step_pin": _slot_pin(slot, 'step_pin'), "dir_pin": _slot_pin(slot, 'dir_pin'),
+                 "enable_pin": _slot_pin(slot, 'enable_pin')})
+    tmc = deep_merge(common.get('tmc2209', {}), {"uart_pin": _slot_pin(slot, 'uart_pin')})
+    return join(emit(f"extruder_stepper extruder{i}", data, EXTRUDER_STEPPER_ORDER),
+                emit(f"tmc2209 extruder_stepper extruder{i}", tmc, TMC_ORDER))
+
+
+def render_filament_sensor_single(p, slot):
+    """Direct drive: one runout sensor on the head slot, pauses the print."""
     return f"""[filament_motion_sensor filament_sensor]
-switch_pin: {pin}
+switch_pin: {_slot_pin(slot, 'filament_sensor_pin')}
 detection_length: 50
 extruder: extruder
 pause_on_runout: True
@@ -388,50 +382,23 @@ insert_gcode:
     RESPOND MSG="Filament inserted\""""
 
 
-def render_yms_extruders(p):
-    if p.get('yms_count', 0) == 0:
-        return ""
-    yms_count = p['yms_count']
-    e = p.get('extruder', {})
+def render_extruder_steppers(p):
+    steppers = extruder_steppers(p)
+    if not steppers:
+        # Direct drive: no feeder, one runout sensor on the head's slot.
+        slot = extruder_motor_slot(p) or all_slots(p)[0]
+        return render_filament_sensor_single(p, slot)
+
     lines = []
-
-    all_slots = list(p.get('extruder_slots', []))
-    if p.get('has_smartbox'):
-        sb = p.get('smartbox', {})
-        for slot in sb.get('extruder_slots', []):
-            s = dict(slot)
-            s['mcu'] = sb.get('mcu_name', 'smartbox')
-            all_slots.append(s)
-
-    for i in range(min(yms_count, len(all_slots))):
-        slot = all_slots[i]
-        mcu = f"{slot['mcu']}:" if slot.get('mcu') and slot['mcu'] != 'main' else ""
-        rot_dist = 22.6789511 if i != 1 else e.get('rotation_distance', 25)
-
-        lines.append(f"[extruder_stepper extruder{i}]")
-        lines.append("extruder:")
-        lines.append(f"step_pin: {mcu}{slot['step_pin']}")
-        lines.append(f"dir_pin: {mcu}{slot['dir_pin']}")
-        lines.append(f"enable_pin: {mcu}{slot['enable_pin']}")
-        lines.append("microsteps: 16")
-        lines.append(f"rotation_distance: {rot_dist}")
-        lines.append(f"gear_ratio: {e.get('gear_ratio', '50:17')}")
-        lines.append("full_steps_per_rotation: 200")
-        lines.append("pressure_advance: 0.0")
-        lines.append("")
-        lines.append(f"[tmc2209 extruder_stepper extruder{i}]")
-        lines.append(f"uart_pin: {mcu}{slot['uart_pin']}")
-        lines.append(f"run_current: {e.get('run_current', 1.2)}")
-        lines.append(f"hold_current: {e.get('hold_current', 0.3)}")
-        lines.append("stealthchop_threshold: 0")
+    for i, slot in enumerate(steppers):
+        lines.append(render_extruder_stepper(p, i, slot))
         lines.append("")
 
-        # Filament sensor
+        # Filament sensor — YMS-2 carries the smart motion sensor (jam detection)
         yms_num = i + 1
         sensor_type = "filament_yumi_smart_motion_sensor" if i == 1 else "filament_motion_sensor"
-        sensor_pin = slot.get('filament_sensor_pin', '')
         lines.append(f"[{sensor_type} YMS-{yms_num}]")
-        lines.append(f"switch_pin: {mcu}{sensor_pin}")
+        lines.append(f"switch_pin: {_slot_pin(slot, 'filament_sensor_pin')}")
         lines.append("detection_length: 50")
         lines.append("pause_on_runout: False")
         lines.append("extruder: extruder")
@@ -496,124 +463,99 @@ check_gain_time: 3000
 hysteresis: 10
 heating_gain: 2
 """)
-
     return "\n".join(lines).rstrip()
 
 
 def render_heater_bed(p):
-    hb = p.get('heater_bed', {})
-    return f"""[heater_bed]
-heater_pin: {hb.get('heater_pin', 'PC9')}
-sensor_type: {hb.get('sensor_type', 'EPCOS 100K B57560G104F')}
-sensor_pin: {hb.get('sensor_pin', 'PC0')}
-control: pid
-pid_Kp: {hb.get('pid_Kp', 27.486)}
-pid_Ki: {hb.get('pid_Ki', 0.306)}
-pid_Kd: {hb.get('pid_Kd', 617.406)}
-min_temp: 0
-max_temp: {hb.get('max_temp', 130)}"""
+    return emit("heater_bed", p.get('heater_bed', {}), HEATER_BED_ORDER)
 
 
-def render_verify_heaters():
-    return """[verify_heater extruder]
-max_error: 500
-check_gain_time: 20
-hysteresis: 20
-heating_gain: 2
-
-[verify_heater heater_bed]
-max_error: 500
-hysteresis: 10"""
+def render_verify_heaters(p):
+    vh = p.get('verify_heater', {})
+    return join(emit("verify_heater extruder", vh.get('extruder')),
+                emit("verify_heater heater_bed", vh.get('heater_bed')))
 
 
 def render_fans(p):
     f = p.get('fans', {})
-    lines = []
-    lines.append(f"[fan]\npin: {f.get('part_cooling', 'PC7')}")
-    lines.append(f"""
-[heater_fan hotend_fan]
-pin: {f.get('hotend', 'PC6')}
-max_power: 1
-kick_start_time: 0.5
-heater: extruder
-heater_temp: 50.0
-fan_speed: 1
-shutdown_speed: 1.0""")
-    lines.append(f"""
-[controller_fan Motherboard_Fan]
-pin: {f.get('motherboard', 'PB8')}
-fan_speed: {f.get('motherboard_speed', 0.7)}
-idle_timeout: {f.get('motherboard_idle_timeout', 10)}
-idle_speed: 0
-kick_start_time: 0.01
-off_below: 0.1""")
-
+    blocks = [emit("fan", f.get('part_cooling')),
+              emit("heater_fan hotend_fan", f.get('hotend')),
+              emit("controller_fan Motherboard_Fan", f.get('motherboard'))]
     if p.get('has_smartbox'):
         sb = p.get('smartbox', {})
-        sb_fan = sb.get('fans', {}).get('box_fan', 'PB8')
-        mcu = sb.get('mcu_name', 'smartbox')
-        lines.append(f"""
-[controller_fan smartbox_Fan]
-pin: {mcu}:{sb_fan}
-fan_speed: 1
-idle_timeout: 10
-idle_speed: 0
-kick_start_time: 0.01
-off_below: 0.1""")
-
-    lines.append(f"\n[fan_generic Aux_Fan]\npin: {f.get('aux', 'PA2')}")
-    return "\n".join(lines)
+        box = dict(sb.get('fans', {}).get('box', {}))
+        if box:
+            box['pin'] = f"{sb.get('mcu_name', 'smartbox')}:{box['pin']}"
+            blocks.append(emit("controller_fan smartbox_Fan", box))
+    blocks.append(emit("fan_generic Aux_Fan", f.get('aux')))
+    return join(*blocks)
 
 
-def render_temp_sensors():
-    return """[temperature_sensor NanoPi]
-sensor_type: temperature_host
-min_temp: 0
-max_temp: 100"""
+def render_temp_sensors(p):
+    return emit("temperature_sensor NanoPi", p.get('host_temperature_sensor'))
 
 
 def render_probe(p):
-    pr = p.get('probe', {})
-    return f"""[probe]
-pin: {pr.get('pin', 'PA14')}
-x_offset: {pr.get('x_offset', -17)}
-y_offset: {pr.get('y_offset', 30)}
-z_offset: 0
-speed: 5
-samples: {pr.get('samples', 6)}
-samples_result: {pr.get('samples_result', 'average')}
-sample_retract_dist: 2
-samples_tolerance: {pr.get('samples_tolerance', 0.08)}
-samples_tolerance_retries: {pr.get('samples_tolerance_retries', 10)}"""
+    return emit("probe", p.get('probe', {}), PROBE_ORDER)
 
 
 def render_bed_mesh(p):
-    bm = p.get('bed_mesh', {})
-    return f"""[bed_mesh]
-speed: {bm.get('speed', 120)}
-horizontal_move_z: {bm.get('horizontal_move_z', 10)}
-mesh_min: {bm.get('mesh_min', '10, 10')}
-mesh_max: {bm.get('mesh_max', '223, 225')}
-probe_count: {bm.get('probe_count', '10, 10')}
-algorithm: bicubic
-zero_reference_position: {bm.get('zero_reference_position', '100.5, 147.5')}
-adaptive_margin: {bm.get('adaptive_margin', 5)}"""
+    return emit("bed_mesh", p.get('bed_mesh', {}), BED_MESH_ORDER)
 
 
 def render_screws_tilt(p):
-    st = p.get('screws_tilt', {})
-    return f"""[screws_tilt_adjust]
-screw1: {st.get('screw1', '49.5, 175.5')}
-screw1_name: {st.get('screw1_name', 'front left screw')}
-screw2: {st.get('screw2', '224, 175.5')}
-screw2_name: {st.get('screw2_name', 'front right screw')}
-screw3: {st.get('screw3', '224, 2')}
-screw3_name: {st.get('screw3_name', 'rear right screw')}
-screw4: {st.get('screw4', '49.5, 2')}
-screw4_name: {st.get('screw4_name', 'rear left screw')}
-horizontal_move_z: {st.get('horizontal_move_z', 10)}
-speed: {st.get('speed', 200)}
-screw_thread: {st.get('screw_thread', 'CCW-M3')}"""
+    return emit("screws_tilt_adjust", p.get('screws_tilt', {}), SCREWS_ORDER)
+
+
+# ─── Macros ─────────────────────────────────────────────────────────
+
+def machine_windows(catalog, board):
+    """(model, x_min, x_max, bed_size, z_height) recognition windows of the board's machines,
+    from stepper_x.position_max ± detection.machine_x_tolerance. Windows must not overlap."""
+    tol = float(catalog["detection"]["machine_x_tolerance"])
+    rows = []
+    for mid, comp in machines_of(catalog, board):
+        x = float(comp["stepper_x"]["position_max"])
+        rows.append((mid, x - tol, x + tol, comp.get("bed_size", 0), comp.get("z_height", 0)))
+    for a, b in zip(rows, rows[1:]):
+        if a[2] >= b[1]:
+            raise ValueError(f"machine X windows overlap: {a[0]} and {b[0]} (tolerance {tol})")
+    return rows
+
+
+def render_machine_macro(catalog, board):
+    """The single macro every other macro asks for the machine class. Byte-identical for all
+    the machines of a board: the class is derived at run time from the X axis length."""
+    lines = ['[gcode_macro _YUMI_MACHINE]',
+             'description: Single source of the machine class, derived from the X axis length (stepper_x position_max)',
+             'variable_model: "UNKNOWN"',
+             'variable_bed_size: 0',
+             'variable_z_height: 0',
+             'gcode:',
+             '    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}']
+    for i, (mid, lo, hi, bed, z) in enumerate(machine_windows(catalog, board)):
+        kw = "if" if i == 0 else "elif"
+        lines.append(f'    {{% {kw} x_max >= {lo:g} and x_max <= {hi:g} %}}')
+        lines.append(f'        {{% set model, bed_size, z_height = "{mid}", {bed}, {z} %}}')
+    lines += ['    {% else %}',
+              '        {% set model, bed_size, z_height = "UNKNOWN", 0, 0 %}',
+              '    {% endif %}',
+              '    SET_GCODE_VARIABLE MACRO=_YUMI_MACHINE VARIABLE=model VALUE="\'{model}\'"',
+              '    SET_GCODE_VARIABLE MACRO=_YUMI_MACHINE VARIABLE=bed_size VALUE={bed_size}',
+              '    SET_GCODE_VARIABLE MACRO=_YUMI_MACHINE VARIABLE=z_height VALUE={z_height}',
+              '    {% if model == "UNKNOWN" %}',
+              '        RESPOND TYPE=error MSG="_YUMI_MACHINE: X axis {x_max}mm matches no known machine"',
+              '    {% endif %}']
+    return "\n".join(lines)
+
+
+def render_gcode_macros(p):
+    """Render gcode macros from the catalog JSON."""
+    blocks = []
+    for macro in p.get('gcode_macros', []):
+        if check_condition(macro.get('condition', 'always'), p):
+            blocks.append(macro['gcode'])
+    return "\n\n".join(blocks)
 
 
 def render_yms_tool_macros(p):
@@ -683,7 +625,6 @@ def render_yms_tool_macros(p):
             lines.append(f"      SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE={q}")
         lines.append(f"  RESPOND MSG=\"ACTIVATION YMS-{yms_num}\"")
         lines.append("  {% else %}")
-        # Insert mode: activate previous tool
         prev = t - 1
         for i in range(yms_count):
             lines.append(f"      SET_FILAMENT_SENSOR SENSOR=YMS-{i+1} ENABLE={'1' if i == prev else '0'}")
@@ -719,19 +660,6 @@ def render_yms_tool_macros(p):
     return "\n".join(lines)
 
 
-def render_gcode_macros(p):
-    """Render gcode macros from the catalog JSON."""
-    macros = p.get('gcode_macros', [])
-    lines = []
-    for macro in macros:
-        condition = macro.get('condition', 'always')
-        if not check_condition(condition, p):
-            continue
-        gcode = macro['gcode']
-        lines.append(gcode)
-    return "\n\n".join(lines)
-
-
 def render_save_config():
     return """#*# <---------------------- SAVE_CONFIG ---------------------->
 #*# DO NOT EDIT THIS BLOCK OR BELOW. The contents are auto-generated.
@@ -740,115 +668,74 @@ def render_save_config():
 
 # ─── Assembler ──────────────────────────────────────────────────────
 
-def generate(product_id, overrides=None):
+def generate(product_id, overrides=None, catalog=None):
     """Render the printer.cfg of a catalog product.
 
-    overrides: optional dict deep-merged over the resolved product, used by
-    compose.py to inject the serial ports actually detected on the pad
-    (e.g. {"mcu": {"serial": "/dev/serial/by-id/..."}}) without touching
-    the catalog defaults.
+    overrides: optional dict deep-merged over the resolved product, used by compose.py to
+    inject the serial ports actually detected on the pad without touching the catalog.
     """
-    p = resolve_product(product_id)
+    catalog = catalog or load_catalog()
+    p = resolve_product(product_id, catalog)
     if overrides:
         p = deep_merge(p, overrides)
-    yms = p.get('yms_count', 0)
 
     sections = [
         render_header(p),
-        "",
         render_includes(p),
-        "",
         render_probe_pressure(p),
-        "",
+        render_sensorless_homing(p),
         render_motor_constants(p),
-        "",
         render_tmc_autotune(p),
-        "",
         render_mcu(p),
-        "",
         render_smartbox_mcu(p),
-        "",
         render_printer(p),
-        "",
         render_adxl(p),
-        "",
         render_steppers(p),
-        "",
-        render_thermistor(p),
-        "",
+        render_thermistors(p),
         render_extruder(p),
-        "",
-    ]
-
-    if yms == 0:
-        sections.append(render_filament_sensor_single(p))
-    else:
-        sections.append(render_yms_extruders(p))
-
-    sections.extend([
-        "",
+        render_extruder_steppers(p),
         render_heater_bed(p),
-        "",
-        render_verify_heaters(),
-        "",
+        render_verify_heaters(p),
         render_fans(p),
-        "",
-        render_temp_sensors(),
-        "",
+        render_temp_sensors(p),
         render_probe(p),
-        "",
         render_bed_mesh(p),
-        "",
         render_screws_tilt(p),
-        "",
+        render_machine_macro(catalog, p["_board"]),
         render_gcode_macros(p),
-        "",
-    ])
-
-    if yms > 0:
-        sections.append(render_yms_tool_macros(p))
-        sections.append("")
-
-    sections.append(render_save_config())
-    sections.append("")
-
-    output = "\n".join(sections)
+        render_yms_tool_macros(p),
+        render_save_config(),
+    ]
+    output = join(*sections)
     while "\n\n\n" in output:
         output = output.replace("\n\n\n", "\n\n")
     return output.rstrip() + "\n"
 
 
-# ─── CLI ────────────────────────────────────────────────────────────
+def list_products():
+    catalog = load_catalog()
+    for pid, prod in catalog.get("products", {}).items():
+        if isinstance(prod, dict) and "chain" in prod:
+            print(f"  {pid:28s} {prod['name']}")
+
 
 def main():
-    parser = argparse.ArgumentParser(description="YUMI Printer CFG Generator")
-    parser.add_argument("product", nargs="?", help="Product ID (e.g. C235_DD_LW_04)")
-    parser.add_argument("-o", "--output", help="Output file (default: stdout)")
-    parser.add_argument("--list", action="store_true", help="List available products")
-    args = parser.parse_args()
-
-    if args.list:
-        catalog = load_catalog()
-        products = catalog.get("products", {})
-        for pid, p in products.items():
-            if not isinstance(p, dict) or "chain" not in p:
-                continue
-            chain_str = " → ".join(p["chain"])
-            print(f"  {pid:30s} {p['name']:50s} [{chain_str}]")
-        return
-
-    if not args.product:
-        parser.error("Product ID required. Use --list to see available products.")
-
+    ap = argparse.ArgumentParser(description="Render a printer.cfg from the YUMI product catalog")
+    ap.add_argument("product", nargs="?", help="product id (see --list)")
+    ap.add_argument("-o", "--output", help="write to this file instead of stdout")
+    ap.add_argument("--list", action="store_true", help="list the products of the catalog")
+    args = ap.parse_args()
+    if args.list or not args.product:
+        list_products()
+        return 0
     cfg = generate(args.product)
-
     if args.output:
-        with open(args.output, 'w') as f:
-            f.write(cfg)
-        print(f"Generated: {args.output}")
+        Path(args.output).write_text(cfg, encoding="utf-8")
+        print(f"written: {args.output} ({len(cfg.splitlines())} lines)")
     else:
-        print(cfg)
+        sys.stdout.write(cfg)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -188,6 +189,61 @@ class Build(unittest.TestCase):
         self.assertEqual(code, compose.EXIT_APPLIED)
         self.assertEqual((self.dir / "printer.cfg").read_text(), "old")
         self.assertFalse((self.dir / CATALOG["detection"]["state_file"]).exists())
+
+    def test_new_recipe_regenerates_and_keeps_calibrations(self):
+        """A catalog/generator update (yumi-config) reaches the machine at its next boot."""
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        cfg = (self.dir / "printer.cfg").read_text()
+        (self.dir / "printer.cfg").write_text(cfg.rstrip("\n") + "\n#*# [probe]\n#*# z_offset = 1.234\n")
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        # a new catalog/generator that renders the same cfg has nothing to write...
+        with mock.patch.object(compose, "recipe_hash", return_value="same-output"):
+            code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        # ...one that changes the common trunk rewrites the cfg, calibrations kept
+        real_generate = compose.generator.generate
+        with mock.patch.object(compose, "recipe_hash", return_value="new-recipe"), \
+                mock.patch.object(compose.generator, "generate",
+                                  side_effect=lambda *a, **k: "# trunk v2\n" + real_generate(*a, **k)):
+            code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertEqual(summary["mode"], "preserve")
+        new = (self.dir / "printer.cfg").read_text()
+        self.assertTrue(new.startswith("# trunk v2"))
+        self.assertIn("z_offset = 1.234", new)
+        self.assertTrue(any("regenerated" in r for r in summary["reasons"]))
+        state = json.loads((self.dir / CATALOG["detection"]["state_file"]).read_text())
+        self.assertEqual(state["recipe"], "new-recipe")
+
+
+class WizardMachine(unittest.TestCase):
+    """The boards name no machine: the wizard does (prefs "machine")."""
+
+    def test_unknown_device_takes_the_chosen_machine(self):
+        comp = {"boards": [board("/dev/ttyS1", "C999", "dddddd")]}
+        sel = compose.select(comp, CATALOG, {"machine": "C335"})
+        self.assertEqual(sel["situation"], "unknown")
+        self.assertFalse(sel["minimal"])
+        self.assertEqual(sel["product"], "C335_DD_LW_04")
+        self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+
+    def test_foreign_board_takes_the_chosen_machine_through_its_parent_board(self):
+        b = dict(board("/dev/ttyACM0", None, "eeeeee"), board="MKS_ROBIN_NANO")
+        sel = compose.select({"boards": [b]}, CATALOG, {"machine": "C235"})
+        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertEqual(sel["chain"][0], "SMART_MAKER_1X")
+
+    def test_detected_machine_wins_over_the_preference(self):
+        sel = compose.select(C235, CATALOG, {"machine": "C435"})
+        self.assertEqual(sel["situation"], "yumi")
+        self.assertEqual(sel["product"], "C235_DD_LW_04")
+
+    def test_unknown_machine_not_in_catalog_stays_minimal(self):
+        comp = {"boards": [board("/dev/ttyS1", "C999", "dddddd")]}
+        sel = compose.select(comp, CATALOG, {"machine": "D12_300"})
+        self.assertTrue(sel["minimal"])
 
 
 if __name__ == "__main__":

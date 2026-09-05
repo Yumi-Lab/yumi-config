@@ -1,0 +1,242 @@
+"""generator.py — the common trunk stays common, the hardware matches the QC lineage.
+
+Reference: qc/qc_printer_<MACHINE>.cfg (factory QC configs, validated on the machines).
+"""
+import re
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import generator  # noqa: E402
+
+CATALOG = generator.load_catalog()
+QC_DIR = HERE.parent.parent / "qc"
+MACHINES = [mid for mid, _ in generator.machines_of(CATALOG, "SMART_MAKER_1X")]
+
+MACRO_PREFIXES = ("gcode_macro ", "delayed_gcode ", "gcode_shell_command ")
+
+
+def parse(text):
+    """{section: {option: value}} with comments stripped; multi-line values joined with |."""
+    secs, cur, cont = {}, None, None
+    for raw in text.splitlines():
+        s = raw.split("#", 1)[0].rstrip()
+        if not s.strip():
+            continue
+        m = re.match(r"^\[([^\]]+)\]", s)
+        if m:
+            cur = m.group(1).strip()
+            secs.setdefault(cur, {})
+            cont = None
+            continue
+        if cur is None:
+            continue
+        if s[0] in " \t":
+            if cont:
+                secs[cur][cont] += "|" + s.strip()
+            continue
+        k, v = re.split(r"[:=]", s, maxsplit=1)
+        secs[cur][k.strip().lower()] = v.strip()
+        cont = k.strip().lower()
+    return secs
+
+
+def norm(value):
+    """Numbers compare as numbers, coordinate pairs as tuples, the rest as text."""
+    if value is None:
+        return None
+    parts = [p.strip() for p in value.split(",")]
+    try:
+        nums = tuple(float(p) for p in parts)
+        return nums[0] if len(nums) == 1 else nums
+    except ValueError:
+        return value.strip()
+
+
+def hardware(secs):
+    return {k: v for k, v in secs.items() if not k.startswith(MACRO_PREFIXES) and k != "include"}
+
+
+def macros(text):
+    """{macro section: body text} — comments kept, they are part of the macro."""
+    out, cur = {}, None
+    for line in text.splitlines():
+        m = re.match(r"^\[([^\]]+)\]", line)
+        if m:
+            cur = m.group(1) if m.group(1).startswith(MACRO_PREFIXES) else None
+            if cur:
+                out[cur] = []
+            continue
+        if cur:
+            out[cur].append(line.rstrip())
+    return {k: "\n".join(v).strip() for k, v in out.items()}
+
+
+def differences(a, b):
+    """{(section, option): (a, b)} over the union of two parsed configs."""
+    out = {}
+    for sec in set(a) | set(b):
+        sa, sb = a.get(sec, {}), b.get(sec, {})
+        for opt in set(sa) | set(sb):
+            va, vb = norm(sa.get(opt)), norm(sb.get(opt))
+            if va != vb:
+                out[(sec, opt)] = (sa.get(opt), sb.get(opt))
+    return out
+
+
+class CommonTrunk(unittest.TestCase):
+    """Between two machine sizes only the geometry may differ; every macro is identical."""
+
+    GEOMETRY = {
+        ("stepper_x", "position_endstop"), ("stepper_x", "position_max"),
+        ("stepper_y", "position_endstop"), ("stepper_y", "position_min"), ("stepper_y", "position_max"),
+        ("stepper_z", "position_max"),
+        ("bed_mesh", "mesh_min"), ("bed_mesh", "mesh_max"), ("bed_mesh", "zero_reference_position"),
+        ("resonance_tester", "probe_points"),
+        # the C435 Y axis has its own motor (MOTOR Y C435)
+        ("autotune_tmc stepper_x", "motor"), ("autotune_tmc stepper_y", "motor"),
+    }
+
+    def _check_pair(self, product_a, product_b):
+        a = generator.generate(product_a, catalog=CATALOG)
+        b = generator.generate(product_b, catalog=CATALOG)
+        diffs = differences(hardware(parse(a)), hardware(parse(b)))
+        unexpected = {k for k in diffs if k not in self.GEOMETRY and not k[0] == "screws_tilt_adjust"}
+        self.assertEqual(unexpected, set(), "%s vs %s: non-geometry differences %s" % (product_a, product_b, sorted(unexpected)))
+        self.assertEqual(macros(a), macros(b), "%s vs %s: macros differ" % (product_a, product_b))
+
+    def test_direct_drive_sizes_differ_only_in_geometry(self):
+        for m in MACHINES[1:]:
+            self._check_pair("%s_DD_LW_04" % MACHINES[0], "%s_DD_LW_04" % m)
+
+    def test_chromax_sizes_differ_only_in_geometry(self):
+        for m in MACHINES[1:]:
+            self._check_pair("%s_CX12_LW_04_7YMS" % MACHINES[0], "%s_CX12_LW_04_7YMS" % m)
+
+    def test_every_machine_size_is_in_the_catalog(self):
+        self.assertEqual(MACHINES, ["C235", "C335", "C435"])
+
+
+class QCReference(unittest.TestCase):
+    """The generated hardware equals the factory QC config of the same machine, option by
+    option, except the differences listed here with their reason."""
+
+    SECTIONS = ("printer", "stepper_x", "stepper_y", "stepper_z", "tmc2209 stepper_x", "tmc2209 stepper_y",
+                "tmc2209 stepper_z", "autotune_tmc stepper_x", "autotune_tmc stepper_y", "autotune_tmc stepper_z",
+                "probe", "bed_mesh", "screws_tilt_adjust", "probe_pressure", "yumi_z_tap", "yumi_sensorless_homing",
+                "extruder", "heater_bed", "verify_heater extruder", "verify_heater heater_bed",
+                "thermistor 100K4190YUMI", "thermistor 100K3950YUMI", "motor_constants BJ42D29-28V31",
+                "motor_constants BJ42D29-28V03", "motor_constants BJ42D07-06V02", "motor_constants BJ42D07-03V05")
+    # (section, option): why the generated value legitimately differs from the QC file
+    KNOWN = {
+        ("extruder", "step_pin"): "QC declares [extruder] on the fictive pins (CHROMAX-style cfg on a DD head); "
+                                  "the direct drive product wires the real motor on E0",
+        ("extruder", "dir_pin"): "same",
+        ("extruder", "enable_pin"): "same",
+        ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
+        ("autotune_tmc stepper_y", "motor"): "same",
+    }
+
+    def _compare(self, machine):
+        qc_file = QC_DIR / ("qc_printer_%s.cfg" % machine)
+        qc = parse(qc_file.read_text(encoding="utf-8"))
+        gen = parse(generator.generate("%s_DD_LW_04" % machine, catalog=CATALOG))
+        wanted = {}
+        for sec in self.SECTIONS:
+            self.assertIn(sec, qc, "%s missing in %s" % (sec, qc_file.name))
+            self.assertIn(sec, gen, "%s not generated for %s" % (sec, machine))
+            for opt, val in qc[sec].items():
+                wanted[(sec, opt)] = val
+        wrong = {}
+        for (sec, opt), val in wanted.items():
+            if (sec, opt) in self.KNOWN:
+                continue
+            got = gen[sec].get(opt)
+            if norm(got) != norm(val):
+                wrong[(sec, opt)] = (val, got)
+        self.assertEqual(wrong, {}, "%s: generated != QC (qc, generated)" % machine)
+
+    def test_c235(self):
+        self._compare("C235")
+
+    def test_c335(self):
+        self._compare("C335")
+
+    def test_c435(self):
+        self._compare("C435")
+
+    def test_known_differences_still_differ(self):
+        """A KNOWN entry that no longer differs is stale: remove it."""
+        qc = parse((QC_DIR / "qc_printer_C235.cfg").read_text(encoding="utf-8"))
+        gen = parse(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        for sec, opt in self.KNOWN:
+            self.assertNotEqual(norm(qc[sec].get(opt)), norm(gen[sec].get(opt)), (sec, opt))
+
+
+class MachineMacro(unittest.TestCase):
+    """One macro derives the machine class from the X axis length; nobody else does."""
+
+    def test_single_classification_ladder(self):
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        ladders = [name for name, body in macros(cfg).items() if "x_max >=" in body]
+        self.assertEqual(ladders, ["gcode_macro _YUMI_MACHINE"])
+
+    def test_size_dependent_macros_read_the_single_macro(self):
+        cfg = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        for name in ("gcode_macro BED_DETECTION", "gcode_macro SCREWS_TILT_CALCULATE",
+                     "gcode_macro CANCEL_PRINT", "gcode_macro WIPE_NOZZLE", "gcode_macro _YUMI_WELCOME"):
+            self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', cfg[name], name)
+        self.assertIn("_YUMI_MACHINE", cfg["delayed_gcode welcome"])
+
+    def test_windows_recognise_each_machine_and_only_it(self):
+        windows = generator.machine_windows(CATALOG, "SMART_MAKER_1X")
+        for mid, comp in generator.machines_of(CATALOG, "SMART_MAKER_1X"):
+            x = float(comp["stepper_x"]["position_max"])
+            hits = [w[0] for w in windows if w[1] <= x <= w[2]]
+            self.assertEqual(hits, [mid])
+
+    def test_macro_has_no_literal_machine_value_but_the_windows(self):
+        body = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro _YUMI_MACHINE"]
+        for mid, lo, hi, bed, z in generator.machine_windows(CATALOG, "SMART_MAKER_1X"):
+            self.assertIn('"%s", %s, %s' % (mid, bed, z), body)
+
+
+class Comments(unittest.TestCase):
+    def test_catalog_comments_reach_the_cfg(self):
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        self.assertIn("max_probe_times: 200  # 最大探测次数", cfg)
+        self.assertIn("[motor_constants BJ42D29-28V31]  # MOTOR X/Y C SERIES", cfg)
+        self.assertIn("#interpolate: True", cfg)
+        self.assertIn("beta: 4300  # 4190 #4460 pour descendre de 20°", cfg)
+
+
+class Heads(unittest.TestCase):
+    def test_direct_drive_motor_is_on_e0(self):
+        gen = parse(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        slot0 = CATALOG["components"]["SMART_MAKER_1X"]["extruder_slots"][0]
+        self.assertEqual(gen["extruder"]["step_pin"], slot0["step_pin"])
+        self.assertEqual(gen["extruder"]["dir_pin"], slot0["dir_pin"])
+        self.assertEqual(gen["tmc2209 extruder"]["uart_pin"], slot0["uart_pin"])
+        self.assertIn("autotune_tmc extruder", gen)
+        self.assertFalse([s for s in gen if s.startswith("extruder_stepper")])
+        self.assertEqual(gen["filament_motion_sensor filament_sensor"]["switch_pin"], slot0["filament_sensor_pin"])
+
+    def test_chromax_extruder_is_fictive_and_feeders_are_the_slots(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        gen = parse(cfg)
+        fake = CATALOG["components"]["CHROMAX_X12"]["config"]["extruder"]
+        self.assertEqual(gen["extruder"]["step_pin"], fake["step_pin"])
+        self.assertNotIn("tmc2209 extruder", gen)
+        self.assertIn("moteur FICTIF", cfg)
+        self.assertEqual(gen["extruder_stepper extruder0"]["dir_pin"], "!PB10")
+        self.assertEqual(gen["extruder_stepper extruder0"]["gear_ratio"], "57:11")
+        self.assertEqual(gen["extruder_stepper extruder1"]["dir_pin"], "PA4")
+        self.assertEqual(gen["extruder_stepper extruder1"]["gear_ratio"], "50:17")
+        self.assertEqual(gen["extruder_stepper extruder2"]["step_pin"], "smartbox:PB12")
+        self.assertEqual(len([s for s in gen if s.startswith("extruder_stepper")]), 7)
+
+
+if __name__ == "__main__":
+    unittest.main()

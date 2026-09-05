@@ -502,6 +502,28 @@ else
 fi
 
 # === Hardware detection -> printer.cfg at boot (generator/autoconfig.py, before Klipper) ===
+# Printer configuration wizard (KlipperScreen panel): the print head cannot be read from the
+# boards, the operator picks it there, then printer.cfg is regenerated from the detected boards.
+if [ -d "$USER_HOME/KlipperScreen/panels" ]; then
+    rm -f "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    ln -sf "$PROJECT_DIR/generator/cfg_wizard.py" "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    echo "Symlink created: panels/cfg_wizard.py"
+    KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
+    if [ -f "$KS_EXCLUDE" ] && ! grep -qF "panels/cfg_wizard.py" "$KS_EXCLUDE"; then
+        echo "panels/cfg_wizard.py" >> "$KS_EXCLUDE"
+    fi
+fi
+if [ -f "$CONFIG_FILE" ] && ! grep -q "panel: cfg_wizard" "$CONFIG_FILE"; then
+    cat >> "$CONFIG_FILE" <<'WIZMENU'
+
+[menu __main more CfgWizard]
+name: Printer Config
+icon: settings
+panel: cfg_wizard
+WIZMENU
+    echo "Added Printer Config menu entry to KlipperScreen.conf"
+fi
+
 echo "Installing yumi-autoconfig.service..."
 if run_privileged cp "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
     run_privileged systemctl daemon-reload
