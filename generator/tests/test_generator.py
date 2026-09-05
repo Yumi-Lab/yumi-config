@@ -203,6 +203,24 @@ class MachineMacro(unittest.TestCase):
             self.assertIn('"%s", %s, %s' % (mid, bed, z), body)
 
 
+class BedMesh(unittest.TestCase):
+    """A missing mesh profile is built, never a print aborted; persisted without a restart."""
+
+    def test_profile_load_guard_and_no_restart_save(self):
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        m = macros(cfg)
+        self.assertIn("gcode_macro BED_MESH_PROFILE", m)
+        self.assertIn("rename_existing: BASE_BED_MESH_PROFILE", m["gcode_macro BED_MESH_PROFILE"])
+        self.assertIn("BED_MESH_CALIBRATE PROFILE={load}", m["gcode_macro BED_MESH_PROFILE"])
+        self.assertIn("Z_TAP", m["gcode_macro BED_MESH_PROFILE"])
+        self.assertIn("gcode_shell_command save_mesh", m)
+        self.assertIn("RUN_SHELL_COMMAND CMD=save_mesh", m["gcode_macro BED_MESH_CALIBRATE"])
+        commands = [l.strip() for l in m["gcode_macro BED_MESH_CALIBRATE"].splitlines() if not l.strip().startswith("#")]
+        self.assertFalse([l for l in commands if "SAVE_CONFIG" in l], "SAVE_CONFIG would restart Klipper mid-print")
+        # startup stays passive: the welcome only loads a mesh that exists
+        self.assertIn('"default" in printer.bed_mesh.profiles', m["gcode_macro _YUMI_WELCOME"])
+
+
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)

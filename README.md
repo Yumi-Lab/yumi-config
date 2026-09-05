@@ -60,6 +60,13 @@ startup; size-dependent macros (`BED_DETECTION`, `SCREWS_TILT_CALCULATE`, `CANCE
 `YUMI_SENSORLESS_HOME` (multi-tap validated X/Y) then `YUMI_Z_TAP` at the bed-mesh zero
 reference; the `[homing_override]` carries no number.
 
+A machine that was never meshed does not abort its first print: `BED_MESH_PROFILE LOAD=<name>`
+of a missing profile (the sliced file's start g-code) builds it — `BED_MESH_CALIBRATE` at the
+print's bed temperature, persisted in `printer.cfg` by `scripts/save_mesh.py` **without
+restarting Klipper**, then `Z_TAP` puts the nozzle zero back — and the print goes on with the
+fresh mesh. Standalone, `BED_MESH_CALIBRATE` heats to 65 °C, soaks, saves and switches the bed
+off; no `SAVE_CONFIG` restart any more. The startup report only loads a mesh that exists.
+
 ### Wizard — KlipperScreen "Printer Config" (`cfg_wizard.py`, logic in `prefs.py`)
 
 From the last scan: a **Yumi machine** is recognised → choose the print head, hotend type and
