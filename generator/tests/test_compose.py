@@ -109,6 +109,35 @@ class Build(unittest.TestCase):
         self.assertNotIn("z_offset = 1.234", cfg)
         self.assertTrue(cfg.rstrip().endswith("#*#"))
 
+    def test_same_boards_leave_printer_cfg_alone(self):
+        # first boot: cfg generated and state recorded
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        # the operator edits the cfg by hand
+        (self.dir / "printer.cfg").write_text("# hand edited\n" + (self.dir / "printer.cfg").read_text())
+        # next boots: same boards -> untouched, nothing generated
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        self.assertEqual(summary["mode"], "unchanged")
+        self.assertTrue((self.dir / "printer.cfg").read_text().startswith("# hand edited"))
+        # a board appears -> regenerated (hyperdrive => 7 YMS)
+        code, summary = compose.apply(C235_HD, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertEqual(summary["product"], "C235_CX12_LW_04_7YMS")
+        # --factory bypasses the fingerprint (and reports "unchanged" only because
+        # the freshly generated cfg is byte-identical to the one just written)
+        code, summary = compose.apply(C235_HD, CATALOG, self.dir, factory=True)
+        self.assertEqual(summary["mode"], "factory")
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        (self.dir / "printer.cfg").write_text("# hand edited again\n")
+        code, summary = compose.apply(C235_HD, CATALOG, self.dir, factory=True)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+
+    def test_fingerprint_ignores_cameras(self):
+        a = dict(C235, cameras=[])
+        b = dict(C235, cameras=[{"name": "cam"}])
+        self.assertEqual(compose.hardware_fingerprint(a), compose.hardware_fingerprint(b))
+
     def test_identical_cfg_is_unchanged(self):
         code, summary, cfg = compose.build(C235, CATALOG, self.dir)
         (self.dir / "printer.cfg").write_text(cfg)

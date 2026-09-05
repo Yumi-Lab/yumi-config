@@ -18,6 +18,11 @@ The scanner is dumb and factual. Every decision lives here, driven by the
         no main board           ALERT     never destructive
         unknown product         MINIMAL   [mcu] sections + kinematics none, Klipper connects
 
+Runs at every boot (yumi-autoconfig.service, before Klipper): the boards are compared with
+the ones recorded in .detected_hardware.json and, when the hardware has not changed, nothing
+is generated and printer.cfg is not touched — a cfg edited by hand stays as it is until a
+board is added, removed or replaced. --factory forces a fresh cfg whatever the state.
+
 Exit codes: 0 applied, 2 alert (no usable main board), 3 minimal cfg written, 4 nothing to do.
 
 Usage:
@@ -87,6 +92,13 @@ def classify_boards(composition, catalog):
         else:
             others.append(b)
     return main, main_unknown, smartbox, others
+
+
+def hardware_fingerprint(composition):
+    """What identifies the machine: which board (uid, device) answers on which port.
+    Cameras are left out on purpose: plugging a webcam must not rewrite printer.cfg."""
+    return sorted((b.get("port") or "", b.get("uid") or "", b.get("device") or "")
+                  for b in composition.get("boards", []))
 
 
 def find_product(catalog, chain):
@@ -210,6 +222,15 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     summary = {"main": sel["main"], "smartbox": sel["smartbox"], "others": sel["others"],
                "product": sel["product"], "chain": sel["chain"], "reasons": sel["reasons"],
                "mode": None, "alert": sel["alert"], "minimal": False}
+
+    # Same boards on the same ports as last time -> the machine has not changed: leave
+    # printer.cfg alone (it may carry manual edits and calibrations), unless forced.
+    recorded = state.get("composition")
+    if (not factory and not minimal and recorded is not None and current is not None
+            and hardware_fingerprint(recorded) == hardware_fingerprint(composition)):
+        summary["mode"] = "unchanged"
+        summary["reasons"].append("same boards as recorded on %s: printer.cfg left untouched" % state.get("ts"))
+        return EXIT_UNCHANGED, summary, None
 
     if sel["alert"]:
         summary["mode"] = "alert"

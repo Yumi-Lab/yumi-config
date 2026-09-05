@@ -2,12 +2,16 @@
 """
 autoconfig — one shot on the pad: stop Klipper, scan the boards, compose printer.cfg, start Klipper.
 
-    autoconfig.py [--dry-run] [--factory] [--minimal] [PORT ...]
+    autoconfig.py [--boot] [--dry-run] [--factory] [--minimal] [PORT ...]
 
-Service control goes through Moonraker's API (the pi user has no passwordless sudo on the
-pads), with a systemctl fallback when Moonraker is down. The ports probed are the UART ports
-the catalog knows (every `serial` of its components: RJ11 main board, smartbox) plus whatever
-yumi-scan finds on USB. Prints compose's JSON summary; exit code = compose's.
+At boot, yumi-autoconfig.service (Before=klipper.service) runs this with --boot: Klipper is
+not started yet, the ports are free, no service is touched — the scan happens once, and
+compose.py leaves printer.cfg alone when the boards have not changed. Run by hand while
+Klipper is up, it stops Klipper through Moonraker's API (the pi user has no passwordless sudo
+on the pads; systemctl as a fallback) and starts it again afterwards. The ports probed are
+the UART ports the catalog knows (every `serial` of its components: RJ11 main board,
+smartbox) plus whatever yumi-scan finds on USB. Prints compose's JSON summary; exit code =
+compose's.
 """
 import argparse
 import json
@@ -54,9 +58,15 @@ def service(action):
         return "systemctl"
 
 
+def klipper_active():
+    return subprocess.run(["systemctl", "is-active", "--quiet", KLIPPER_SERVICE]).returncode == 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Detect the boards and install the matching printer.cfg")
     ap.add_argument("ports", nargs="*", help="extra serial ports to probe")
+    ap.add_argument("--boot", action="store_true",
+                    help="boot mode (yumi-autoconfig.service): Klipper is not running, touch no service")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--factory", action="store_true")
     ap.add_argument("--minimal", action="store_true")
@@ -65,8 +75,10 @@ def main():
     catalog = generator.load_catalog()
     ports = catalog_uart_ports(catalog) + [p for p in a.ports if p not in catalog_uart_ports(catalog)]
 
-    how = service("stop")
-    time.sleep(2)  # let klippy release the ports
+    manage = not a.boot and klipper_active()
+    how = service("stop") if manage else "none (klipper not running)"
+    if manage:
+        time.sleep(2)  # let klippy release the ports
     try:
         detect = subprocess.run([sys.executable, str(HERE / "yumi-detect.py"), *ports],
                                 capture_output=True, text=True, timeout=240)
@@ -80,7 +92,8 @@ def main():
         print(comp.stdout.strip())
         code = comp.returncode
     finally:
-        service("start")
+        if manage:
+            service("start")
     sys.stderr.write("klipper stopped/started via %s\n" % how)
     return code
 

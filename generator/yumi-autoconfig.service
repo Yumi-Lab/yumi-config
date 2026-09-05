@@ -1,0 +1,20 @@
+[Unit]
+Description=YumiOS - detect the boards and install the matching printer.cfg
+# Runs once per boot, before Klipper opens the serial ports. compose.py leaves printer.cfg
+# untouched when the boards have not changed since the last boot (.detected_hardware.json).
+Before=klipper.service
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+ConditionPathExists=/home/pi/yumi-config/generator/autoconfig.py
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+ExecStart=/usr/bin/python3 /home/pi/yumi-config/generator/autoconfig.py --boot
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
