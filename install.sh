@@ -500,6 +500,16 @@ if run_privileged cp "$PROJECT_DIR/yumi-usb-update.service" /etc/systemd/system/
 else
     echo "WARNING: no sudo access, skipping systemd service install"
 fi
+
+# === Hardware detection -> printer.cfg at boot (generator/autoconfig.py, before Klipper) ===
+echo "Installing yumi-autoconfig.service..."
+if run_privileged cp "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
+    run_privileged systemctl daemon-reload
+    run_privileged systemctl enable yumi-autoconfig.service
+    echo "yumi-autoconfig.service enabled at boot (boards scan, printer.cfg only rewritten when they change)"
+else
+    echo "WARNING: could not install yumi-autoconfig.service (no privileges?)"
+fi
 echo "USB offline update service ...[Done]"
 
 # === Fix WiFi USB dongle autosuspend ===

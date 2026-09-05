@@ -10,6 +10,17 @@
     { "id": "yms",         "label": "YMS System",      "priority": 5 },
     { "id": "accessory",   "label": "Accessories",     "priority": 6 }
   ],
+  "detection": {
+    "_doc": "Rules used by compose.py to turn the hardware composition (yumi-detect.py: boards read from the YUMI_CONFIG descriptor burned in each MCU firmware) into a product of this catalog. Descriptor fields: board= cpu= conn= device= x/y/z/e0/e1= mx/my/mz= piezo= lot= uid=. Machines are the components of layer 'machine' (device= is their id).",
+    "main_boards": { "SMART_MAKER_1_X": "SMART_MAKER_1X" },
+    "smartbox_devices": ["HYPERDRIVE_3P2L"],
+    "with_smartbox": { "hotend": "CHROMAX_X12", "yms": "YMS_7_PRO" },
+    "chromax_without_smartbox_yms": "YMS_2_LITE",
+    "defaults": { "hotend": "DIRECT_DRIVE", "hotend_type": "LOW_WASTE", "nozzle": "NOZZLE_04" },
+    "prefs_file": ".yumi_product_prefs.json",
+    "state_file": ".detected_hardware.json",
+    "backup_pattern": "printer-{ts}-autoconfig.cfg"
+  },
 
   "components": {
 

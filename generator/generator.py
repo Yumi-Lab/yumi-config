@@ -126,20 +126,34 @@ def render_probe_pressure(p):
     if not p.get('features', {}).get('probe_pressure'):
         return ""
     pp = p.get('probe_pressure', {})
+    # yumi_z_tap taps at [bed_mesh] zero_reference_position by default (mesh-zero
+    # mode). In that mode the extra does not read pressure_switch_x/y, and Klipper
+    # refuses unread options ("Option 'pressure_switch_x' is not valid"): only a
+    # machine with a dedicated switch off the bed (tap_at_bed_mesh_zero_position:
+    # false in the catalog) gets the switch coordinates.
+    switch_mode = pp.get('tap_at_bed_mesh_zero_position') is False \
+        or not p.get('bed_mesh', {}).get('zero_reference_position')
+    tap_lines = []
+    if switch_mode:
+        if pp.get('tap_at_bed_mesh_zero_position') is False:
+            tap_lines.append("tap_at_bed_mesh_zero_position: False")
+        tap_lines.append(f"pressure_switch_x: {pp.get('z_calc_switch_x', 49.5)}")
+        tap_lines.append(f"pressure_switch_y: {pp.get('z_calc_switch_y', 175.5)}")
+    tap_lines += [
+        f"compression_offset: {pp.get('compression_offset', 0.3)}",
+        f"max_probe_times: {pp.get('max_probe_times', 50)}",
+        f"probe_delay: {pp.get('probe_delay', 2)}",
+        f"z_hop: {pp.get('z_hop', 3)}",
+        f"samples: {pp.get('samples', 5)}",
+        f"samples_tolerance: {pp.get('samples_tolerance', 0.01)}",
+    ]
     return f"""[probe_pressure]
 pin: {pp.get('pin', '!PB7')}
 speed: {pp.get('speed', 6.0)}
 lift_speed: {pp.get('lift_speed', 6)}
 
 [yumi_z_tap]
-pressure_switch_x: {pp.get('z_calc_switch_x', 49.5)}
-pressure_switch_y: {pp.get('z_calc_switch_y', 175.5)}
-compression_offset: {pp.get('compression_offset', 0.3)}
-max_probe_times: {pp.get('max_probe_times', 50)}
-probe_delay: {pp.get('probe_delay', 2)}
-z_hop: {pp.get('z_hop', 3)}
-samples: {pp.get('samples', 5)}
-samples_tolerance: {pp.get('samples_tolerance', 0.01)}"""
+""" + "\n".join(tap_lines)
 
 
 def render_motor_constants(p):
@@ -726,8 +740,17 @@ def render_save_config():
 
 # ─── Assembler ──────────────────────────────────────────────────────
 
-def generate(product_id):
+def generate(product_id, overrides=None):
+    """Render the printer.cfg of a catalog product.
+
+    overrides: optional dict deep-merged over the resolved product, used by
+    compose.py to inject the serial ports actually detected on the pad
+    (e.g. {"mcu": {"serial": "/dev/serial/by-id/..."}}) without touching
+    the catalog defaults.
+    """
     p = resolve_product(product_id)
+    if overrides:
+        p = deep_merge(p, overrides)
     yms = p.get('yms_count', 0)
 
     sections = [
