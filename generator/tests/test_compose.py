@@ -133,6 +133,15 @@ class Build(unittest.TestCase):
         code, summary = compose.apply(C235_HD, CATALOG, self.dir, factory=True)
         self.assertEqual(code, compose.EXIT_APPLIED)
 
+    def test_deleted_printer_cfg_is_regenerated_even_with_same_boards(self):
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        (self.dir / "printer.cfg").unlink()
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertTrue(summary["written"])
+        self.assertIn("[mcu]\nserial: /dev/ttyS1", (self.dir / "printer.cfg").read_text())
+
     def test_fingerprint_ignores_cameras(self):
         a = dict(C235, cameras=[])
         b = dict(C235, cameras=[{"name": "cam"}])
