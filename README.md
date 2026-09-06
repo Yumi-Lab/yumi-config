@@ -86,6 +86,17 @@ catalog); **no board** → check the cables, scan. Every option is a component o
 layer, Apply runs `autoconfig.py`. Installed by `install.sh` (symlink in `KlipperScreen/panels`,
 menu entry in `KlipperScreen.conf`).
 
+### Per-machine tuning (`overrides` in the preferences file)
+
+The catalog stays common; a value that belongs to one machine — a calibrated `backlash_coef`,
+or an option the trunk cannot carry yet because the fleet's firmware does not know it — goes
+in `printer_data/config/.yumi_product_prefs.json` under `"overrides"` and is deep-merged over
+the product at every regeneration:
+
+```json
+{"hotend": "CHROMAX_X12", "overrides": {"extruder_stepper": {"bowden_length": 400, "backlash_coef": 1.08}}}
+```
+
 ### Tests
 
 `python3 -m unittest discover -s generator/tests` — `test_generator.py` compares each generated

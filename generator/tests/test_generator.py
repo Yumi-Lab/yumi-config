@@ -335,6 +335,17 @@ class LeadTime(unittest.TestCase):
             self.assertEqual(norm(ext["lead_time"]), 0.03)
 
 
+class PressureAdvanceMacro(unittest.TestCase):
+    """The YMS SET_PRESSURE_ADVANCE override forwards every parameter to every extruder."""
+
+    def test_parameters_are_forwarded_verbatim(self):
+        m = macros(generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG))["gcode_macro SET_PRESSURE_ADVANCE"]
+        self.assertIn("params.items() if k != 'EXTRUDER'", m)
+        self.assertIn("SET_PA_ORIG EXTRUDER=extruder6 {argstr}", m)
+        self.assertIn("SET_PA_ORIG EXTRUDER={params.EXTRUDER} {argstr}", m)
+        self.assertNotIn("ADVANCE={pa}", m)
+
+
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)

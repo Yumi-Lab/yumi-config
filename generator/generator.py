@@ -678,18 +678,24 @@ def render_yms_tool_macros(p):
         lines.append(f"      SET_TMC_CURRENT STEPPER={name} CURRENT=0.5 HOLDCURRENT=0.5")
     lines.append("")
 
-    # SET_PRESSURE_ADVANCE override
+    # SET_PRESSURE_ADVANCE override: the same setting goes to the extruder and every feeder.
+    # Every parameter is forwarded as given (ADVANCE, SMOOTH_TIME, LEAD_TIME, BACKLASH_*...):
+    # a macro that only re-emitted the names it knew silently dropped the new ones.
     lines.append("[gcode_macro SET_PRESSURE_ADVANCE]")
     lines.append("rename_existing: SET_PA_ORIG")
+    lines.append("description: Applies the given parameters to the extruder and to every YMS feeder (EXTRUDER=name targets one)")
     lines.append("gcode:")
-    lines.append("    {% set pa = params.ADVANCE|default(none) %}")
-    lines.append("    {% set st = params.SMOOTH_TIME|default(0.040) %}")
-    lines.append("    {% if pa is not none %}")
-    lines.append("      SET_PA_ORIG EXTRUDER=extruder ADVANCE={pa} SMOOTH_TIME={st}")
+    lines.append("    {% set args = [] %}")
+    lines.append("    {% for k, v in params.items() if k != 'EXTRUDER' %}{% set _ = args.append(k ~ '=' ~ v) %}{% endfor %}")
+    lines.append("    {% set argstr = args|join(' ') %}")
+    lines.append("    {% if params.EXTRUDER is defined %}")
+    lines.append("      SET_PA_ORIG EXTRUDER={params.EXTRUDER} {argstr}")
+    lines.append("    {% elif argstr %}")
+    lines.append("      SET_PA_ORIG EXTRUDER=extruder {argstr}")
     for name in all_ext:
-        lines.append(f"      SET_PA_ORIG EXTRUDER={name} ADVANCE={{pa}} SMOOTH_TIME={{st}}")
+        lines.append(f"      SET_PA_ORIG EXTRUDER={name} {{argstr}}")
     lines.append("    {% else %}")
-    lines.append("      SET_PA_ORIG {printer.gcode.move_parameters}")
+    lines.append("      SET_PA_ORIG EXTRUDER=extruder")
     lines.append("    {% endif %}")
 
     return "\n".join(lines)

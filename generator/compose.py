@@ -28,7 +28,8 @@ forces a fresh cfg whatever the state.
 The print head cannot be read from the boards (a direct drive and a CHROMAX X12 answer the
 same): it comes from the preferences file the wizard writes (detection.prefs_file: hotend,
 hotend_type, nozzle). When the main board's device is not a machine of the catalog, the
-wizard may also name the machine (prefs "machine").
+wizard may also name the machine (prefs "machine"). A per-machine tuning goes in prefs
+"overrides" (deep-merged over the product: e.g. a calibrated backlash_coef on the feeders).
 
 Exit codes: 0 applied, 2 alert (no usable main board), 3 minimal cfg written, 4 nothing to do.
 
@@ -194,6 +195,13 @@ def select(composition, catalog, prefs=None):
     overrides = {"mcu": {"serial": main["port"]}}
     if smartbox is not None:
         overrides["smartbox"] = {"serial": smartbox["port"]}
+    # Local tuning of THIS machine (prefs "overrides", deep-merged over the catalog product):
+    # a calibrated value, or an option the trunk cannot carry yet because the fleet's
+    # firmware does not know it. Regenerated cfgs keep it; the catalog stays common.
+    local = prefs.get("overrides")
+    if isinstance(local, dict) and local:
+        overrides = generator.deep_merge(overrides, local)
+        sel["reasons"].append("local overrides from the preferences: %s" % ", ".join(sorted(local)))
     sel["product"] = product
     sel["overrides"] = overrides
     return sel

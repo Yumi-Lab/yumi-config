@@ -247,6 +247,23 @@ class WizardHead(unittest.TestCase):
             self.assertIn('variable_head: "Direct Drive"', new)
 
 
+class LocalOverrides(unittest.TestCase):
+    """prefs "overrides" tune one machine without touching the catalog."""
+
+    def test_overrides_reach_the_generated_cfg(self):
+        prefs = {"overrides": {"extruder_stepper": {"bowden_length": 400, "backlash_coef": 1.08}}}
+        sel = compose.select(C235, CATALOG, prefs)
+        self.assertEqual(sel["overrides"]["extruder_stepper"]["backlash_coef"], 1.08)
+        self.assertEqual(sel["overrides"]["mcu"], {"mcu": {"serial": "/dev/ttyS1"}}["mcu"])
+        cfg = generator.generate(sel["product"], sel["overrides"])
+        self.assertIn("bowden_length: 400", cfg)
+        self.assertIn("backlash_coef: 1.08", cfg)
+        self.assertTrue(any("local overrides" in r for r in sel["reasons"]))
+
+    def test_no_overrides_changes_nothing(self):
+        self.assertEqual(compose.select(C235, CATALOG, {})["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+
+
 class WizardMachine(unittest.TestCase):
     """The boards name no machine: the wizard does (prefs "machine")."""
 
