@@ -312,10 +312,10 @@ class ModuleDocs(unittest.TestCase):
         for section, fname in generator.DOCUMENTED_MODULES.items():
             src = (generator.EXTRAS_DIR / fname).read_text(encoding="utf-8")
             header = generator.module_doc(section)
-            options = set(re.findall(r"config\.get(?:float|int|boolean)?\(\s*'([a-z_]+)'", src))
-            commands = set(re.findall(r"register_(?:mux_)?command\(\s*'([A-Z_]+)'", src))
+            options = set(re.findall(r"""config\.get(?:float|int|boolean)?\(\s*['"]([a-z_0-9]+)['"]""", src))
+            commands = set(re.findall(r"""register_(?:mux_)?command\(\s*['"]([A-Z_]+)['"]""", src))
             commands |= set(re.findall(r'\("([A-Z_]+)", self\.cmd_', src))
-            params = set(re.findall(r"gcmd\.get(?:_float|_int)?\(\s*'([A-Z_]+)'", src))
+            params = set(re.findall(r"""gcmd\.get(?:_float|_int)?\(\s*['"]([A-Z_]+)['"]""", src))
             self.assertTrue(options, fname)
             for name in options | commands | params | set(self.INHERITED.get(section, ())):
                 self.assertIn(name, header, "%s: %s is not documented in the module header" % (fname, name))

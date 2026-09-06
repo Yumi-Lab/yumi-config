@@ -43,6 +43,7 @@ DOCUMENTED_MODULES = {
     "yumi_filament_head": "yumi_filament_head.py",
     "yumi_bed_scan": "yumi_bed_scan.py",
     "filament_yumi_smart_motion_sensor": "filament_yumi_smart_motion_sensor.py",
+    "yumi_sensorless_homing": "yumi_sensorless_homing.py",
 }
 
 
@@ -257,7 +258,7 @@ def render_head_sensor(p):
 
 
 def render_sensorless_homing(p):
-    return emit("yumi_sensorless_homing", p.get('sensorless_homing', {}))
+    return with_module_doc("yumi_sensorless_homing", emit("yumi_sensorless_homing", p.get('sensorless_homing', {})))
 
 
 def render_motor_constants(p):
