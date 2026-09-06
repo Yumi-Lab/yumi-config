@@ -222,6 +222,22 @@ class Build(unittest.TestCase):
         state = json.loads((self.dir / CATALOG["detection"]["state_file"]).read_text())
         self.assertEqual(state["recipe"], "new-recipe")
 
+    def test_local_override_regenerates(self):
+        """A per-machine tuning written in the preferences (bowden length, a sensor pin) is a
+        change of printer.cfg: same boards, same recipe, same product, but a new cfg. Bench
+        06/09: an overridden head-sensor pin was silently left out for two restarts."""
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        prefs = {"overrides": {"filament_head": {"pin": "^!PA8"}}}
+        code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertTrue(any("overrides changed" in r for r in summary["reasons"]))
+        self.assertIn("pin: ^!PA8", (self.dir / "printer.cfg").read_text())
+        code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
+        self.assertEqual(code, compose.EXIT_UNCHANGED, "the same override again is not a change")
+
 
 class WizardHead(unittest.TestCase):
     """Choosing another head in the wizard regenerates the cfg even though no board changed."""

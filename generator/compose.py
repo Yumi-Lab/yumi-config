@@ -60,6 +60,12 @@ EXIT_APPLIED, EXIT_ALERT, EXIT_MINIMAL, EXIT_UNCHANGED = 0, 2, 3, 4
 RECIPE_FILES = ("YUMI-LAB_product-catalog.json", "generator.py", "compose.py")
 
 
+def overrides_hash(overrides):
+    """Fingerprint of the effective overrides (ports + local preferences): a per-machine tuning
+    written in the preferences must regenerate printer.cfg like a new recipe does."""
+    return hashlib.sha256(json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def recipe_hash():
     h = hashlib.sha256()
     for name in RECIPE_FILES:
@@ -269,7 +275,8 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     sel = select(composition, catalog, prefs)
     summary = {"main": sel["main"], "smartbox": sel["smartbox"], "others": sel["others"],
                "product": sel["product"], "chain": sel["chain"], "reasons": sel["reasons"],
-               "situation": sel["situation"], "mode": None, "alert": sel["alert"], "minimal": False}
+               "situation": sel["situation"], "mode": None, "alert": sel["alert"], "minimal": False,
+               "overrides": sel["overrides"]}
 
     # Same boards on the same ports as last time, same catalog and generator -> nothing to
     # do: leave printer.cfg alone (it may carry calibrations), unless forced. A new recipe
@@ -279,7 +286,10 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     same_recipe = state.get("recipe") == recipe_hash()
     # the wizard changes the head / hotend / nozzle without touching a board: a new product is a change
     same_product = state.get("chain") == sel["chain"]
-    if not factory and not minimal and current is not None and same_boards and same_recipe and same_product:
+    # so is a local override (preferences "overrides": bowden length, a sensor pin...)
+    same_overrides = state.get("overrides") == overrides_hash(sel["overrides"])
+    if (not factory and not minimal and current is not None and same_boards and same_recipe
+            and same_product and same_overrides):
         summary["mode"] = "unchanged"
         summary["reasons"].append("same boards as recorded on %s: printer.cfg left untouched" % state.get("ts"))
         return EXIT_UNCHANGED, summary, None
@@ -288,6 +298,8 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     if same_boards and not same_product and state.get("chain"):
         summary["reasons"].append("head/hotend/nozzle choice changed (%s -> %s): printer.cfg regenerated"
                                   % (state.get("product"), sel["product"]))
+    if same_boards and same_product and not same_overrides and state.get("overrides"):
+        summary["reasons"].append("local overrides changed in the preferences: printer.cfg regenerated")
 
     if sel["alert"]:
         summary["mode"] = "alert"
@@ -341,6 +353,7 @@ def apply(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
         state = {"ts": ts, "main": summary["main"], "smartbox": summary["smartbox"],
                  "product": summary["product"], "chain": summary["chain"], "mode": summary["mode"],
                  "situation": summary["situation"], "recipe": recipe_hash(),
+                 "overrides": overrides_hash(summary.get("overrides")),
                  "cfg_sha256": hashlib.sha256(cfg.encode()).hexdigest() if cfg else None,
                  "composition": composition}
         atomic_write(config_dir / rules["state_file"], json.dumps(state, ensure_ascii=False, indent=2) + "\n")
