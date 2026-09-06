@@ -231,6 +231,7 @@ YUMI_EXTRAS=(
   "yumi_sensorless_homing.py"
   "probe_pressure.py"
   "yumi_bed_scan.py"
+  "yumi_filament_head.py"
   "gcode_shell_command.py"
   "mcu_uid.py"
 )
@@ -523,6 +524,14 @@ icon: settings
 panel: cfg_wizard
 WIZMENU
     echo "Added Printer Config menu entry to KlipperScreen.conf"
+fi
+
+# Klipper regenerates its printer.cfg before every start (boot, update, YUMI_SETUP, panel)
+echo "Installing the klipper.service autoconfig drop-in..."
+if run_privileged mkdir -p /etc/systemd/system/klipper.service.d \
+   && run_privileged cp "$PROJECT_DIR/generator/klipper-autoconfig.conf" /etc/systemd/system/klipper.service.d/yumi-autoconfig.conf; then
+    run_privileged systemctl daemon-reload
+    echo "klipper.service drop-in installed (autoconfig --boot as ExecStartPre)"
 fi
 
 echo "Installing yumi-autoconfig.service..."

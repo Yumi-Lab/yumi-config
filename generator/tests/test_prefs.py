@@ -64,6 +64,47 @@ class Prefs(unittest.TestCase):
             self.assertEqual(prefs.prefs_path(CATALOG, d), Path(d) / CATALOG["detection"]["prefs_file"])
 
 
+class HeadSensor(unittest.TestCase):
+    def test_state_and_bypass_go_through_moonraker(self):
+        import io, json as _json
+        from unittest import mock
+        payload = _json.dumps({"result": {"status": {"yumi_filament_head": {"bypass": True, "present": False}}}}).encode()
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(payload)
+            self.assertEqual(prefs.head_sensor_state(), {"bypass": True, "present": False})
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(b'{"result": "ok"}')
+            self.assertTrue(prefs.set_head_sensor_bypass(False))
+            self.assertIn("SET_HEAD_SENSOR_BYPASS%20ENABLE%3D0", uo.call_args[0][0].full_url)
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("down")):
+            self.assertIsNone(prefs.head_sensor_state())
+
+
+class Setup(unittest.TestCase):
+    """YUMI_SETUP / prefs.py --set: one line, ids or slicer labels, same prefs file as the panel."""
+
+    def test_resolve_by_id_name_or_slicer_label(self):
+        self.assertEqual(prefs.resolve_option(CATALOG, "hotend", "CHROMAX_X12"), "CHROMAX_X12")
+        self.assertEqual(prefs.resolve_option(CATALOG, "hotend", "ChromaX12"), "CHROMAX_X12")
+        self.assertEqual(prefs.resolve_option(CATALOG, "hotend", "direct drive"), "DIRECT_DRIVE")
+        self.assertEqual(prefs.resolve_option(CATALOG, "hotend_type", "Low waste"), "LOW_WASTE")
+        self.assertEqual(prefs.resolve_option(CATALOG, "machine", "c335"), "C335")
+        self.assertIsNone(prefs.resolve_option(CATALOG, "hotend", "Hyper"))
+
+    def test_apply_settings_writes_the_prefs(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(prefs, "set_head_sensor_bypass") as bypass:
+                changed = prefs.apply_settings(CATALOG, d, {"HEAD": "ChromaX12", "nozzle": "NOZZLE_06", "HEAD_SENSOR": "0"})
+            self.assertEqual(changed, {"hotend": "CHROMAX_X12", "nozzle": "NOZZLE_06", "head_sensor": "bypassed"})
+            bypass.assert_called_once_with(True)
+            self.assertEqual(prefs.load_prefs(CATALOG, d), {"hotend": "CHROMAX_X12", "nozzle": "NOZZLE_06"})
+            with self.assertRaises(ValueError):
+                prefs.apply_settings(CATALOG, d, {"HEAD": "Titan"})
+            with self.assertRaises(ValueError):
+                prefs.apply_settings(CATALOG, d, {"COLOR": "red"})
+
+
 class Results(unittest.TestCase):
     def test_written(self):
         lines = prefs.result_lines(compose.EXIT_APPLIED, {"product": "C235_DD_LW_04", "mode": "preserve",

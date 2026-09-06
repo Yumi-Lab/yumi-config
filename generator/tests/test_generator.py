@@ -312,16 +312,30 @@ class ParkPositions(unittest.TestCase):
 class CancelSequence(unittest.TestCase):
     """Cancel leaves the part at once: lift and travel before the slow shaping retract, moves guarded when unhomed."""
 
-    def test_lift_and_park_come_before_the_slow_retract(self):
+    def test_lift_and_park_come_before_the_tip_unload(self):
         body = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
-        lift, park, slow, long = body.index("G1 Z+{dz}"), body.index("G1 X{bed_size + 20}"), body.index("G1 E-20 F300"), body.index("G1 E-110")
+        first, lift, park, unload = body.index("G1 E-{tip.first_len}"), body.index("G1 Z+{dz}"), body.index("G1 X{bed_size + 20}"), body.index("YUMI_UNLOAD_TIP SKIP_FIRST=1")
+        self.assertLess(first, lift)
         self.assertLess(lift, park)
-        self.assertLess(park, slow)
-        self.assertLess(slow, long)
+        self.assertLess(park, unload)
         self.assertIn('"xyz" in printer.toolhead.homed_axes', body)
         self.assertLess(body.index("homed_axes"), lift)
-        # heaters and motors are switched off in every case, after the park
-        self.assertLess(long, body.index("TURN_OFF_HEATERS"))
+        self.assertLess(unload, body.index("TURN_OFF_HEATERS"))
+        self.assertIn("M83", body)
+
+    def test_tip_sequence_is_one_source(self):
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        tip = m["gcode_macro _YUMI_TIP"]
+        self.assertIn("variable_cut_speed: 65", tip)
+        self.assertIn("variable_cut_len: 10", tip)
+        unload = m["gcode_macro YUMI_UNLOAD_TIP"]
+        for step in ("first_len", "cut_len", "slow_len", "pull_len"):
+            self.assertIn("G1 E-{%s}" % step, unload)
+        self.assertLess(unload.index("M83"), unload.index("G1 E-{cut_len}"))
+        test = m["gcode_macro YUMI_TIP_TEST"]
+        for key in ("params.CYCLES", "params.TEMP", "params.WAIT", "YUMI_UNLOAD_TIP", "G4 P{(wait * 1000)|int}", "M109 S{temp}"):
+            self.assertIn(key, test)
+        self.assertNotIn("G1 E-10 F2100", m["gcode_macro CANCEL_PRINT"])
 
 
 class LeadTime(unittest.TestCase):
@@ -344,6 +358,36 @@ class PressureAdvanceMacro(unittest.TestCase):
         self.assertIn("SET_PA_ORIG EXTRUDER=extruder6 {argstr}", m)
         self.assertIn("SET_PA_ORIG EXTRUDER={params.EXTRUDER} {argstr}", m)
         self.assertNotIn("ADVANCE={pa}", m)
+
+
+class FilamentAtHead(unittest.TestCase):
+    """A tool selection ends with the filament at the head sensor; an unload is checked by it."""
+
+    def test_head_sensor_module_is_generated(self):
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS"):
+            gen = parse(generator.generate(product, catalog=CATALOG))
+            self.assertEqual(gen["yumi_filament_head"]["pin"], "!PA8")
+            self.assertIn("head_to_nozzle", gen["yumi_filament_head"])
+            # the pin is the module's endstop: no second user of PA8
+            self.assertNotIn("filament_switch_sensor head_sensor", gen)
+
+    def test_yumi_setup_macro_forwards_one_line(self):
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        self.assertIn("gcode_shell_command yumi_setup", m)
+        self.assertIn("prefs.py --apply --set", m["gcode_shell_command yumi_setup"])
+        self.assertIn('RUN_SHELL_COMMAND CMD=yumi_setup PARAMS="{args|join(\' \')}"', m["gcode_macro YUMI_SETUP"])
+
+    def test_tool_macros_load_to_the_head(self):
+        dd = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        self.assertIn("YUMI_LOAD_TO_HEAD", dd["gcode_macro T0"])
+        yms = macros(generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG))
+        for t in ("T0", "T1", "T6"):
+            body = yms["gcode_macro %s" % t]
+            self.assertIn("YUMI_LOAD_TO_HEAD", body, t)
+            # only in the printing branch, never in the filament-insertion (init) mode
+            self.assertLess(body.index("YUMI_LOAD_TO_HEAD"), body.index("{% else %}"), t)
+        self.assertIn("YUMI_UNLOAD_CHECK", yms["gcode_macro YUMI_UNLOAD_TIP"])
+        self.assertIn("YUMI_LOAD_TO_HEAD", yms["gcode_macro YUMI_TIP_TEST"])
 
 
 class Comments(unittest.TestCase):

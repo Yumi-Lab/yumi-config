@@ -226,6 +226,11 @@ def render_probe_pressure(p):
                 emit("yumi_z_tap", tap))
 
 
+def render_head_sensor(p):
+    """[yumi_filament_head]: the head sensor pin (as an endstop) and the load/unload settings."""
+    return emit("yumi_filament_head", p.get('filament_head'))
+
+
 def render_sensorless_homing(p):
     return emit("yumi_sensorless_homing", p.get('sensorless_homing', {}))
 
@@ -628,6 +633,7 @@ def render_yms_tool_macros(p):
         lines.append(f"    SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE=\"\"")
     lines.append("    RESPOND MSG=\"ACTIVATION YMS-1\"")
     lines.append("    SAVE_VARIABLE VARIABLE=active_tool VALUE=1")
+    lines.append("    YUMI_LOAD_TO_HEAD")
     lines.append("  {% else %}")
     lines.append("    RESPOND MSG=\"YMS INITIALISATION STARTING\"")
     lines.append("    G92 E0")
@@ -659,6 +665,7 @@ def render_yms_tool_macros(p):
             q = "extruder" if i == t else '""'
             lines.append(f"      SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE={q}")
         lines.append(f"  RESPOND MSG=\"ACTIVATION YMS-{yms_num}\"")
+        lines.append("      YUMI_LOAD_TO_HEAD")
         lines.append("  {% else %}")
         prev = t - 1
         for i in range(yms_count):
@@ -724,6 +731,7 @@ def generate(product_id, overrides=None, catalog=None):
         render_header(p),
         render_includes(p),
         render_probe_pressure(p),
+        render_head_sensor(p),
         render_sensorless_homing(p),
         render_motor_constants(p),
         render_tmc_autotune(p),

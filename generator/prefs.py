@@ -17,8 +17,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import compose    # noqa: E402
-import generator  # noqa: E402
+import urllib.parse
+import urllib.request
+
+import autoconfig  # noqa: E402  (MOONRAKER url)
+import compose     # noqa: E402
+import generator   # noqa: E402
 
 # Layers the wizard offers, in screen order. "machine" is added when the boards name none.
 HEAD_LAYERS = ("hotend", "hotend_type", "nozzle")
@@ -124,6 +128,84 @@ def describe(catalog, state):
     return lines
 
 
+HEAD_SENSOR_OBJECT = "yumi_filament_head"
+# YUMI_SETUP / CLI keys -> selection layers
+SETUP_KEYS = {"HEAD": "hotend", "HOTEND": "hotend_type", "NOZZLE": "nozzle", "MACHINE": MACHINE_LAYER}
+HEAD_SENSOR_BYPASS_CMD = "SET_HEAD_SENSOR_BYPASS ENABLE=%d"
+
+
+def head_sensor_state():
+    """{'bypass': bool, 'present': bool|None} from Klipper through Moonraker, None if unavailable
+    (Klipper down, or the module not in this cfg)."""
+    try:
+        url = "%s/printer/objects/query?%s" % (autoconfig.MOONRAKER, HEAD_SENSOR_OBJECT)
+        with urllib.request.urlopen(url, timeout=5) as r:
+            st = json.load(r)["result"]["status"].get(HEAD_SENSOR_OBJECT)
+    except Exception:
+        return None
+    if not st:
+        return None
+    return {"bypass": bool(st.get("bypass")), "present": st.get("present")}
+
+
+def set_head_sensor_bypass(enable):
+    """Broken head sensor: loading still runs, blind; detection is skipped. Persisted by Klipper."""
+    script = urllib.parse.quote(HEAD_SENSOR_BYPASS_CMD % (1 if enable else 0))
+    req = urllib.request.Request("%s/printer/gcode/script?script=%s" % (autoconfig.MOONRAKER, script), method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r).get("result") == "ok"
+
+
+def resolve_option(catalog, layer, text):
+    """The component of a layer named by its id, its name or its slicer label, case-insensitive
+    ("CHROMAX_X12", "ChromaX12", "chromax x12" all work). None if nothing matches."""
+    wanted = str(text).strip().lower().replace(" ", "").replace("-", "_")
+    for cid, comp in catalog["components"].items():
+        if not isinstance(comp, dict) or comp.get("layer") != layer:
+            continue
+        names = [cid, comp.get("name", ""), comp.get("slicer_label", "")]
+        if wanted in [n.lower().replace(" ", "").replace("-", "_") for n in names if n]:
+            return cid
+    return None
+
+
+def apply_settings(catalog, config_dir, settings):
+    """One line of KEY=VALUE (YUMI_SETUP HEAD=... HOTEND=... NOZZLE=... MACHINE=... HEAD_SENSOR=0|1):
+    writes the preferences (and the head sensor bypass through Klipper). Returns what changed."""
+    prefs = load_prefs(catalog, config_dir)
+    changed, errors = {}, []
+    for key, value in settings.items():
+        key = key.upper()
+        if key == "HEAD_SENSOR":
+            enabled = str(value).strip().lower() in ("1", "true", "on", "enabled", "yes")
+            set_head_sensor_bypass(not enabled)
+            changed["head_sensor"] = "enabled" if enabled else "bypassed"
+        elif key in SETUP_KEYS:
+            layer = SETUP_KEYS[key]
+            cid = resolve_option(catalog, layer, value)
+            if cid is None:
+                errors.append("%s=%s: no %s named like that (%s)" % (
+                    key, value, layer, ", ".join(o[0] for o in layer_options(catalog, layer))))
+            else:
+                prefs[layer] = cid
+                changed[layer] = cid
+        else:
+            errors.append("%s: unknown setting (HEAD, HOTEND, NOZZLE, MACHINE, HEAD_SENSOR)" % key)
+    if errors:
+        raise ValueError("; ".join(errors))
+    if any(k != "head_sensor" for k in changed):
+        save_prefs(catalog, config_dir, prefs)
+    return changed
+
+
+def restart_klipper():
+    """Ask Moonraker to restart the Klipper service: its ExecStartPre (autoconfig --boot)
+    regenerates printer.cfg from the boards and the preferences before Klipper starts."""
+    req = urllib.request.Request("%s/machine/services/restart?service=klipper" % autoconfig.MOONRAKER, method="POST")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r).get("result") == "ok"
+
+
 def run_autoconfig(extra_args=(), timeout=420):
     """Scan the boards and install the matching printer.cfg (autoconfig.py: Klipper stopped
     and started through Moonraker). Returns (exit code, compose summary or None, log)."""
@@ -156,3 +238,29 @@ def result_lines(code, summary, log):
         lines.append("Previous cfg kept as %s" % Path(summary["backup"]).name)
     lines += summary.get("reasons", [])
     return lines
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Declare the machine's configuration (what the Printer Config panel does)")
+    ap.add_argument("--set", nargs="+", metavar="KEY=VALUE", default=[],
+                    help="HEAD= HOTEND= NOZZLE= MACHINE= HEAD_SENSOR=0|1 (ids, names or slicer labels)")
+    ap.add_argument("--apply", action="store_true", help="restart Klipper through Moonraker: printer.cfg is regenerated")
+    ap.add_argument("--config-dir", default=str(compose.DEFAULT_CONFIG_DIR))
+    a = ap.parse_args()
+    catalog = generator.load_catalog()
+    settings = dict(kv.split("=", 1) for kv in a.set if "=" in kv)
+    try:
+        changed = apply_settings(catalog, a.config_dir, settings) if settings else {}
+    except ValueError as e:
+        print(json.dumps({"error": str(e)}))
+        return 2
+    out = {"changed": changed, "prefs": load_prefs(catalog, a.config_dir)}
+    if a.apply:
+        out["klipper_restart"] = restart_klipper()
+    print(json.dumps(out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
