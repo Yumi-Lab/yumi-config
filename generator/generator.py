@@ -556,6 +556,27 @@ def render_machine_macro(catalog, board):
     return "\n".join(lines)
 
 
+def render_product_macro(catalog, p):
+    """What this printer.cfg was generated for — the head and hotend chosen in the wizard (or
+    imposed by a detected smartbox) and the nozzle. Labels are the slicer's (slicer_label of the
+    catalog components), PRINT_START compares the sliced file against them. No machine size
+    here: that is _YUMI_MACHINE, so this macro is identical on every size of a product line."""
+    labels = {}
+    for cid in p.get("_chain", []):
+        comp = catalog["components"].get(cid, {})
+        if comp.get("layer") in ("hotend", "hotend_type") and comp.get("slicer_label"):
+            labels[comp["layer"]] = comp["slicer_label"]
+    return "\n".join([
+        "[gcode_macro _YUMI_PRODUCT]",
+        "description: What this printer.cfg was generated for (wizard choice / detected smartbox); PRINT_START checks the sliced file against it",
+        'variable_head: "%s"' % labels.get("hotend", ""),
+        'variable_hotend: "%s"' % labels.get("hotend_type", ""),
+        "variable_nozzle: %s" % p.get("nozzle_diameter", 0),
+        "gcode:",
+        '    RESPOND MSG="Head: {printer[\'gcode_macro _YUMI_PRODUCT\'].head} | Hotend: {printer[\'gcode_macro _YUMI_PRODUCT\'].hotend} | Nozzle: {printer[\'gcode_macro _YUMI_PRODUCT\'].nozzle}"',
+    ])
+
+
 def render_gcode_macros(p):
     """Render gcode macros from the catalog JSON."""
     blocks = []
@@ -710,6 +731,7 @@ def generate(product_id, overrides=None, catalog=None):
         render_bed_mesh(p),
         render_screws_tilt(p),
         render_machine_macro(catalog, p["_board"]),
+        render_product_macro(catalog, p),
         render_gcode_macros(p),
         render_yms_tool_macros(p),
         render_save_config(),

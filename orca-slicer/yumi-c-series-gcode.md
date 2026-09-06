@@ -8,8 +8,8 @@ Chaque section correspond à un champ dans OrcaSlicer → Printer Settings → C
 ## 1. Machine start G-Code
 
 Source de vérité : le fork OrcaSlicer, `resources/profiles/YUMi/machine/fdm_yumi_common.json`,
-clé `machine_start_gcode` (branche `feature/yumi-c-series`, commit `4a1560f37e` « hand the bed size
-to PRINT_START »). Ce qui suit en est la copie vérifiée ; en cas de doute, c'est le profil qui fait foi.
+clé `machine_start_gcode` (branche `feature/yumi-c-series`, commits `4a1560f37e` « hand the bed size
+to PRINT_START » puis `d790bb76ff` tête/hotend/buse ; bloc d'identité en tête de fichier `f1ff3dfdb9`). Ce qui suit en est la copie vérifiée ; en cas de doute, c'est le profil qui fait foi.
 
 Le bloc est identique pour C235 / C335 / C435 : toutes les positions dérivent de la taille de plateau
 déclarée dans le profil (`print_bed_max`). Cette même taille est passée en **première ligne** à
@@ -28,7 +28,7 @@ profile. »). Un fichier sans `BED_X` (ancien start G-code) passe avec un simple
 ; The same bed size goes to PRINT_START first: the firmware compares it with
 ; its own axis length and refuses a file sliced for another model while the
 ; machine is still cold and nothing has moved.
-PRINT_START BED_X={print_bed_max[0]} BED_Y={print_bed_max[1]} MODEL="{printer_model}"
+PRINT_START BED_X={print_bed_max[0]} BED_Y={print_bed_max[1]} MODEL="{printer_model}" HEAD="{curr_print_head}" HOTEND="{curr_hotend}" NOZZLE={nozzle_diameter[0]}
 M220 S100                                      ; feedrate 100%
 M221 S100                                      ; flow 100%
 G31                                            ; arm power-loss recovery
@@ -87,6 +87,17 @@ Notes :
 
 - `printer_model` vaut exactement `YUMi C235`, `YUMi C335` ou `YUMi C435` (il est seulement repris
   dans le message de refus ; la comparaison porte sur `BED_X`/`BED_Y`, tolérance 1 mm).
+- `HEAD` (`curr_print_head` : `Direct Drive` / `ChromaX12`) et `HOTEND` (`curr_hotend` : `Low waste` /
+  `High Flow`) sont comparés à ce pour quoi le `printer.cfg` a été **généré** (choix du wizard ou
+  smartbox détectée, macro `_YUMI_PRODUCT`, libellés `slicer_label` du catalogue yumi-config) ;
+  `NOZZLE` (`nozzle_diameter[0]`) à `[extruder] nozzle_diameter` (tolérance 0,01). Comparaison
+  insensible à la casse et aux espaces. `HOTEND=""` (machine mono-hotend) = non applicable.
+  Messages, un seul à la fois, puis annulation propre de l'impression :
+  `File sliced for YUMi C335. Please re-slice with the C235 profile.` ·
+  `File sliced for Direct Drive head. This machine has ChromaX12. Please re-slice.` ·
+  `File sliced for High Flow hotend. This machine has Low waste. Please re-slice.` ·
+  `File sliced for 0.6 nozzle. This machine has 0.4. Please re-slice.`
+  Un fichier sans ces paramètres (ancien start G-code) passe avec un simple avertissement.
 - `BED_MESH_PROFILE LOAD="default"` reste : si le profil n'existe pas encore (machine jamais meshée),
   le firmware construit le mesh lui-même (scan de la plaque métal de référence → `BED_DETECTION` →
   mesh à la température plateau de l'impression → sauvegarde sans redémarrage → `Z_TAP`) puis

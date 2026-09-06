@@ -245,7 +245,8 @@ class SlicerProfileGuard(unittest.TestCase):
     def test_print_start_checks_the_bed_size_from_the_slicer(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
         self.assertIn("params.BED_X", m)
-        self.assertIn('MSG="File sliced for {what}. Please re-slice with the {machine.model} profile."', m)
+        self.assertIn('Please re-slice with the " ~ machine.model ~ " profile."', m)
+        self.assertIn('RESPOND TYPE=error MSG="{ns.reason}"', m)
         self.assertNotIn("matches", m)          # silent when the profile is right
         self.assertNotIn("M106 S140 P3", m)     # the motherboard fan is automatic (controller_fan)
         self.assertIn("CANCEL_PRINT_DEFAULT", m)
@@ -254,6 +255,27 @@ class SlicerProfileGuard(unittest.TestCase):
         self.assertLess(m.index("CANCEL_PRINT_DEFAULT"), m.index("G92 E0"))
         cancel = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
         self.assertIn("rename_existing: CANCEL_PRINT_DEFAULT", cancel)
+
+
+class ProductGuard(unittest.TestCase):
+    """The cfg declares the head / hotend / nozzle it was generated for; PRINT_START checks them."""
+
+    def test_product_macro_carries_the_slicer_labels(self):
+        dd = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro _YUMI_PRODUCT"]
+        self.assertIn('variable_head: "Direct Drive"', dd)
+        self.assertIn('variable_hotend: "Low waste"', dd)
+        self.assertIn("variable_nozzle: 0.4", dd)
+        cx = macros(generator.generate("C235_CX12_HF_04_7YMS", catalog=CATALOG))["gcode_macro _YUMI_PRODUCT"]
+        self.assertIn('variable_head: "ChromaX12"', cx)
+        self.assertIn('variable_hotend: "High Flow"', cx)
+
+    def test_print_start_checks_head_hotend_nozzle(self):
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
+        for key in ("params.HEAD", "params.HOTEND", "params.NOZZLE", 'printer["gcode_macro _YUMI_PRODUCT"]',
+                    "extruder.nozzle_diameter", "head. This machine has", "hotend. This machine has", "nozzle. This machine has"):
+            self.assertIn(key, m, key)
+        commands = [l.strip() for l in m.splitlines() if not l.strip().startswith("#")]
+        self.assertEqual(sum(1 for l in commands if l == "CANCEL_PRINT_DEFAULT"), 1)
 
 
 class MacrosMatchHardware(unittest.TestCase):
