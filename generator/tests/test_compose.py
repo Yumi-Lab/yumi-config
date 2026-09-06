@@ -39,8 +39,9 @@ SAVE_BLOCK = ("#*# <---------------------- SAVE_CONFIG ---------------------->\n
 
 class Select(unittest.TestCase):
     def test_main_only_uses_defaults(self):
+        # no smartbox, no wizard choice: ChromaX12 + 2 YMS Lite, the same default as the slicer profiles
         sel = compose.select(C235, CATALOG)
-        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
         self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
         self.assertFalse(sel["minimal"])
         self.assertIsNone(sel["alert"])
@@ -54,10 +55,14 @@ class Select(unittest.TestCase):
         sel = compose.select(C235, CATALOG, {"hotend": "CHROMAX_X12", "hotend_type": "HIGH_FLOW"})
         self.assertEqual(sel["product"], "C235_CX12_HF_04_2YMS")
 
+    def test_prefs_direct_drive_is_an_explicit_choice(self):
+        sel = compose.select(C235, CATALOG, {"hotend": "DIRECT_DRIVE"})
+        self.assertEqual(sel["product"], "C235_DD_LW_04")
+
     def test_usb_main_board_port_is_injected(self):
         comp = {"boards": [board("/dev/serial/by-id/usb-Klipper_stm32f401xc_1234-if00", "C435", "cccccc")]}
         sel = compose.select(comp, CATALOG)
-        self.assertEqual(sel["product"], "C435_DD_LW_04")
+        self.assertEqual(sel["product"], "C435_CX12_LW_04_2YMS")
         cfg = generator.generate(sel["product"], sel["overrides"])
         self.assertIn("serial: /dev/serial/by-id/usb-Klipper_stm32f401xc_1234-if00", cfg)
 
@@ -226,19 +231,19 @@ class WizardMachine(unittest.TestCase):
         sel = compose.select(comp, CATALOG, {"machine": "C335"})
         self.assertEqual(sel["situation"], "unknown")
         self.assertFalse(sel["minimal"])
-        self.assertEqual(sel["product"], "C335_DD_LW_04")
+        self.assertEqual(sel["product"], "C335_CX12_LW_04_2YMS")
         self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
 
     def test_foreign_board_takes_the_chosen_machine_through_its_parent_board(self):
         b = dict(board("/dev/ttyACM0", None, "eeeeee"), board="MKS_ROBIN_NANO")
         sel = compose.select({"boards": [b]}, CATALOG, {"machine": "C235"})
-        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
         self.assertEqual(sel["chain"][0], "SMART_MAKER_1X")
 
     def test_detected_machine_wins_over_the_preference(self):
         sel = compose.select(C235, CATALOG, {"machine": "C435"})
         self.assertEqual(sel["situation"], "yumi")
-        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
 
     def test_unknown_machine_not_in_catalog_stays_minimal(self):
         comp = {"boards": [board("/dev/ttyS1", "C999", "dddddd")]}

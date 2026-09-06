@@ -16,8 +16,9 @@ generator/autoconfig.py [--dry-run] [--factory] [--minimal]
    machine (C235/C335/C435), a HyperDrive board present means CHROMAX X12 + 7 YMS Pro. What the
    boards cannot tell — the print head (a direct drive and a CHROMAX X12 answer the same), hotend
    type, nozzle, and the machine itself when the descriptor names none — comes from the
-   preferences file written by the wizard (`detection.prefs_file`, defaults in the catalog's
-   `detection` section). The ports that answered are injected into `[mcu]` / `[mcu smartbox]`,
+   preferences file written by the wizard (`detection.prefs_file`; defaults in the catalog's
+   `detection` section: head ChromaX12 + 2 YMS Lite — the same default as the OrcaSlicer profiles,
+   Direct Drive being an explicit choice on both sides). The ports that answered are injected into `[mcu]` / `[mcu smartbox]`,
    then `printer.cfg` is written (previous one kept as `printer-<ts>-autoconfig.cfg`) and the
    state saved in `.detected_hardware.json`.
 3. Policy: same main board (uid) → the `SAVE_CONFIG` block is preserved; different board →

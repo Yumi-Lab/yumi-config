@@ -38,7 +38,7 @@
     }
   ],
   "detection": {
-    "_doc": "Rules used by compose.py to turn the hardware composition (yumi-detect.py: boards read from the YUMI_CONFIG descriptor burned in each MCU firmware) into a product of this catalog. Descriptor fields: board= cpu= conn= device= x/y/z/e0/e1= mx/my/mz= piezo= lot= uid=. Machines are the components of layer 'machine' (device= is their id). machine_x_tolerance: demi-fenetre (mm) autour de stepper_x.position_max de chaque machine, utilisee par la macro _YUMI_MACHINE pour reconnaitre la machine a l'execution.",
+    "_doc": "Rules used by compose.py to turn the hardware composition (yumi-detect.py: boards read from the YUMI_CONFIG descriptor burned in each MCU firmware) into a product of this catalog. Descriptor fields: board= cpu= conn= device= x/y/z/e0/e1= mx/my/mz= piezo= lot= uid=. Machines are the components of layer 'machine' (device= is their id). machine_x_tolerance: demi-fenetre (mm) autour de stepper_x.position_max de chaque machine, utilisee par la macro _YUMI_MACHINE pour reconnaitre la machine a l'execution. defaults.hotend = CHROMAX_X12 : meme defaut que default_print_head des profils OrcaSlicer (une machine sans smartbox et sans choix au wizard = ChromaX12 + 2 YMS Lite) ; le direct drive est un choix explicite des deux cotes.",
     "main_boards": {
       "SMART_MAKER_1_X": "SMART_MAKER_1X"
     },
@@ -51,7 +51,7 @@
     },
     "chromax_without_smartbox_yms": "YMS_2_LITE",
     "defaults": {
-      "hotend": "DIRECT_DRIVE",
+      "hotend": "CHROMAX_X12",
       "hotend_type": "LOW_WASTE",
       "nozzle": "NOZZLE_04"
     },
@@ -1388,6 +1388,28 @@
         "NOZZLE_04"
       ]
     },
+    "C335_CX12_LW_04_2YMS": {
+      "name": "YUMI C335 CHROMAX X12 Low Waste 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C335_CX12_HF_04_2YMS": {
+      "name": "YUMI C335 CHROMAX X12 High Flow 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
     "C335_CX12_HF_04_7YMS": {
       "name": "YUMI C335 CHROMAX X12 HF 0.4mm 7YMS Pro",
       "chain": [
@@ -1429,6 +1451,28 @@
         "DIRECT_DRIVE",
         "LOW_WASTE",
         "NOZZLE_04"
+      ]
+    },
+    "C435_CX12_LW_04_2YMS": {
+      "name": "YUMI C435 CHROMAX X12 Low Waste 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C435_CX12_HF_04_2YMS": {
+      "name": "YUMI C435 CHROMAX X12 High Flow 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_2_LITE"
       ]
     },
     "C435_CX12_HF_04_7YMS": {
