@@ -655,3 +655,24 @@ class Heads(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MacroTemplatesCompile(unittest.TestCase):
+    """Every gcode_macro / delayed_gcode body of the generated cfgs must compile as a Jinja2
+    template (Klipper's macro language): a stray {% endif %} took Klipper down at boot on the
+    bench (2026-09-07). Skipped when jinja2 is not installed locally."""
+
+    def test_every_macro_body_compiles(self):
+        try:
+            import jinja2
+        except ImportError:
+            self.skipTest("jinja2 not installed")
+        env = jinja2.Environment()
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS"):
+            cfg = generator.generate(product, catalog=CATALOG)
+            for name, body in macros(cfg).items():
+                gcode = body.split("gcode:", 1)[1] if "gcode:" in body else ""
+                try:
+                    env.parse(gcode)
+                except jinja2.TemplateSyntaxError as e:
+                    self.fail("%s / %s: %s (line %s)" % (product, name, e.message, e.lineno))
