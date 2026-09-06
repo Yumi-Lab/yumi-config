@@ -637,7 +637,6 @@ def render_yms_tool_macros(p):
     lines.append("  {% else %}")
     lines.append("    RESPOND MSG=\"YMS INITIALISATION STARTING\"")
     lines.append("    G92 E0")
-    lines.append("    SET_KINEMATIC_POSITION E=0")
     lines.append("    SYNC_EXTRUDER_MOTION EXTRUDER=extruder MOTION_QUEUE=extruder")
     for name in all_ext:
         lines.append(f"    SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE=\"\"")

@@ -293,6 +293,15 @@ class MacrosMatchHardware(unittest.TestCase):
             cfg = generator.generate(product, catalog=CATALOG)
             self.assertEqual(cfg.count("[gcode_macro T0]"), 1, product)
 
+    def test_yms_insertion_flow_never_fakes_a_homed_printer(self):
+        """T0's idle branch (insert re-arm) used SET_KINEMATIC_POSITION E=0: Klipper ignores E
+        there and declares XYZ homed at 0,0,0 — every macro guarded by homed_axes then moves
+        from a fake position. G92 E0 is the only E reset the flow needs."""
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        t0 = cfg.split("[gcode_macro T0]", 1)[1].split("\n[", 1)[0]
+        self.assertNotIn("SET_KINEMATIC_POSITION", t0)
+        self.assertIn("MOTION_SENSOR_INIT", t0)
+
 
 class ParkPositions(unittest.TestCase):
     """Every park position of the macros fits the machine's X axis (Orca: bed+7 approach, bed+20 pop tool)."""
