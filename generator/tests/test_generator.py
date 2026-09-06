@@ -309,6 +309,21 @@ class ParkPositions(unittest.TestCase):
                 self.assertLessEqual(comp["bed_size"] + off, x_max, "%s: bed+%g beyond X max %g" % (mid, off, x_max))
 
 
+class CancelSequence(unittest.TestCase):
+    """Cancel leaves the part at once: lift and travel before the slow shaping retract, moves guarded when unhomed."""
+
+    def test_lift_and_park_come_before_the_slow_retract(self):
+        body = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
+        lift, park, slow, long = body.index("G1 Z+{dz}"), body.index("G1 X{bed_size + 20}"), body.index("G1 E-20 F300"), body.index("G1 E-110")
+        self.assertLess(lift, park)
+        self.assertLess(park, slow)
+        self.assertLess(slow, long)
+        self.assertIn('"xyz" in printer.toolhead.homed_axes', body)
+        self.assertLess(body.index("homed_axes"), lift)
+        # heaters and motors are switched off in every case, after the park
+        self.assertLess(long, body.index("TURN_OFF_HEATERS"))
+
+
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
