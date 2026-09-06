@@ -130,10 +130,12 @@ command); the trunk `PRINT_END` tolerates entering already parked and retracted.
 
 `PRINT_START` on the trunk sets `printing_start`/`was_interrupted` and arms PLR itself once the
 profile guard passed; the same lines in the start block below are redundant and will be dropped
-with the next block revision. The colour-change block will become one line as well,
-`YUMI_TOOL_CHANGE TOOL=[next_extruder] TEMP=[new_filament_temp] FLUSH={flush_length}` (macro in
-progress on the trunk; until then call `YUMI_UNLOAD_TIP` and `T[next]`, which already loads to
-the head, instead of fixed E lengths).
+with the next block revision. The colour-change block stays **100 % scripted in Orca** (Nicolas, 2026-09-06 evening: profile
+updates reach the fleet more easily than machine macros). The slicer only calls the primitives that
+need machine knowledge: `T[next_extruder]` (feeder select, load to the head switch, then
+`head_to_nozzle`), `YUMI_UNLOAD_CHECK` (pull until the head switch releases) and `EXTRA_FLUSH`
+(operator's extra purge from the panel). `YUMI_TOOL_CHANGE` on the trunk is a bench test macro,
+not a production path.
 
 
 ```gcode
