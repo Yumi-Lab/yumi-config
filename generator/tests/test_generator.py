@@ -262,6 +262,29 @@ class StoppedPrint(unittest.TestCase):
             self.assertIn(cmd, defined, "%s called at boot is not a macro of this cfg" % cmd)
 
 
+class ToolChange(unittest.TestCase):
+    """The slicer colour-change block is exactly YUMI_TOOL_CHANGE TOOL= TEMP= FLUSH=: the machine
+    owns the sequence (contract with the Orca fork, 2026-09-06). Multicolour heads only."""
+
+    def test_sequence_and_single_sources(self):
+        m = macros(generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_TOOL_CHANGE"].split("gcode:", 1)[1]   # the description names the steps too
+        order = ["M104 S{unload_temp}", "G1 E-{tip.first_len}", "G1 Z{", "pop.approach_dx", "pop.pop_dx",
+                 "M109 S{unload_temp}", "YUMI_UNLOAD_TIP SKIP_FIRST=1", "T{tool}", "M104 S{temp}",
+                 "G1 E{c.prime_len}", "G1 E{flush}", "EXTRA_FLUSH", "M106 S255", "c.popoff_dx", "M106 S{fan}",
+                 "RESTORE_GCODE_STATE"]
+        positions = [body.index(step) for step in order]
+        self.assertEqual(positions, sorted(positions), "tool change steps out of order")
+        self.assertIn("|max", body.split("{% set flush")[1].split("%}")[0], "FLUSH floored at flush_min")
+        self.assertNotIn("bed + 20", body)
+        self.assertNotIn("bed + 11", body)
+        self.assertIn("variable_popoff_dx: 11", m["gcode_macro _YUMI_CHANGE"])
+        self.assertIn("variable_z_clearance: 3", m["gcode_macro _YUMI_CHANGE"])
+
+    def test_direct_drive_has_no_tool_change(self):
+        self.assertNotIn("[gcode_macro YUMI_TOOL_CHANGE]", generator.generate("C235_DD_LW_04", catalog=CATALOG))
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read
