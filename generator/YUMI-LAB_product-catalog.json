@@ -937,18 +937,9 @@
           "step_pin": "PA12",
           "dir_pin": "PA11",
           "enable_pin": "PA3"
-        },
-        "extruder_slot_overrides": {
-          "0": {
-            "dir_invert": true,
-            "gear_ratio": "57:11",
-            "_comments": {
-              "gear_ratio": "YMS MK12 EXTRDUER 50:17 #BMG 57:11"
-            }
-          }
         }
       },
-      "_doc": "Tete CHROMAX X12 : alimentee par les feeders YMS. Le feeder YMS-1 (slot E0) des pads usine .4/.5 et de la C335 (06/2026) tourne en sens inverse avec un BMG 57:11 ; le pad .3 avait encore un MK12 50:17 non inverse. Non detectable par les cartes -> choix de tete dans le wizard. A valider sur une machine CHROMAX."
+      "_doc": "Tete CHROMAX X12 : bowden, alimentee par les feeders YMS (extruder0..N sur les slots E, sens et ratio = defauts extruder_stepper du tronc : PB10 non inverse, MK12 50:17 — verifie sur le banc C235 06/09, comme le pad .3 et la cfg QC). Les pads usine .4/.5 et la C335 de juin avaient un YMS-1 BMG en sens inverse 57:11 : si cette generation de feeder revient, elle se declarera par une surcharge de slot (extruder_slot_overrides), pas dans ce defaut. [extruder] = moteur fictif sur pins libres (Klipper exige un [extruder])."
     },
     "HIGH_FLOW": {
       "layer": "hotend_type",
