@@ -346,9 +346,16 @@ def extruder_steppers(p):
 
 
 def _slot_pin(slot, pin):
+    """A slot pin on its MCU. Klipper wants the modifiers before the chip: "!smartbox:PB10",
+    never "smartbox:!PB10" (which is what a plain prefix produced, and no smartbox cfg could load)."""
+    raw = slot[pin]
+    mods = ""
+    while raw and raw[0] in "!^~":
+        mods += raw[0]
+        raw = raw[1:]
     mcu = slot.get('mcu')
     prefix = f"{mcu}:" if mcu and mcu != 'main' else ""
-    return f"{prefix}{slot[pin]}"
+    return f"{mods}{prefix}{raw}"
 
 
 def render_extruder_stepper(p, i, slot):

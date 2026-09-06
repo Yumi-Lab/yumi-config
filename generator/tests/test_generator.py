@@ -357,7 +357,12 @@ class Heads(unittest.TestCase):
         self.assertEqual(gen["extruder_stepper extruder1"]["dir_pin"], "PA4")
         self.assertEqual(gen["extruder_stepper extruder1"]["gear_ratio"], "50:17")
         self.assertEqual(gen["extruder_stepper extruder2"]["step_pin"], "smartbox:PB12")
+        self.assertEqual(gen["extruder_stepper extruder2"]["dir_pin"], "!smartbox:PB10")
         self.assertEqual(len([s for s in gen if s.startswith("extruder_stepper")]), 7)
+        # Klipper's pin syntax is [!] [chip:] pin — a modifier after the chip is a config error
+        for sec, opts in gen.items():
+            for opt, val in opts.items():
+                self.assertNotRegex(val, r"[A-Za-z0-9_]+:[!^~]", "%s/%s = %s" % (sec, opt, val))
 
 
 if __name__ == "__main__":
