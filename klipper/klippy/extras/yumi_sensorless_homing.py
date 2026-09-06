@@ -23,7 +23,44 @@
 # TOUTES les vitesses si semin>0 -> courant effectif reduit jusqu'a IRUN/4
 # (seimin=1). Il FAUT couper semin pendant le home (cf. _open_sg_window).
 #
-# A appeler depuis le homing_override : YUMI_SENSORLESS_HOME AXIS=Y.
+# Seuil StallGuard : la phase A et les taps n'heritent JAMAIS du registre tel
+# quel (un home avorte, un SET_TMC_FIELD a la main, un run_sgthrs applique
+# par un module tiers laissent une valeur imprevisible -> faux stall des le
+# depart du tap, gap ~ retract, reproductible au micron). Sans coarse_sgthrs /
+# tap_sgthrs explicites, la reference est le sg4_thrs de [autotune_tmc
+# stepper_X] (celui que l'autotune repose au boot et apres chaque home),
+# sinon la valeur lue a l'entree. Le marqueur "home base..." nomme la source.
+#
+# Repetabilite : StallGuard n'evalue le stall qu'une fois par PAS ENTIER, donc
+# la position de trigger est quantifiee au pas entier (rotation_distance /
+# full_steps_per_rotation, ex. 39/200 = 0.195 mm). La tolerance effective est
+# planchee a un pas entier : en dessous, la fenetre ne peut converger que si
+# tous les taps tombent sur le meme pas (convergence par chance).
+#
+# Options ([yumi_sensorless_homing], values in the generator's catalog):
+#   samples               taps concordants requis dans la fenetre glissante (default 5)
+#   warmup_taps           taps de chauffe ignores avant de mesurer (default 1)
+#   samples_tolerance     spread max de la fenetre en mm, planche a 1 pas entier (default 0.10)
+#   max_taps              budget total de taps par home (default 15)
+#   fine_speed            vitesse des taps en mm/s (default 20)
+#   fine_accel            acceleration des taps en mm/s^2, restauree apres (default 1000)
+#   travel_speed          vitesse des reculs en mm/s (default 40)
+#   retract               recul avant chaque tap en mm (default 5)
+#   overshoot             surcourse commandee dans le mur en mm (default 1, 0.3..3)
+#   dwell_ms              pause entre taps pour vider le flag StallGuard (default 1500)
+#   outlier_margin        marge de rejet autour de la mediane en mm (default 0.20)
+#   coarse_current_x, coarse_current_y   courant du home natif (G28) en A, 0 = inchange
+#   tap_current_x, tap_current_y         courant des taps en A, 0 = run_current
+#   run_current_x, run_current_y         courant restaure en sortie en A (default 1.2)
+#   coarse_sgthrs_x, coarse_sgthrs_y     sgthrs du home natif, 0 = reference autotune
+#   tap_sgthrs_x, tap_sgthrs_y           sgthrs des taps, 0 = reference autotune
+#   run_sgthrs_x, run_sgthrs_y           sgthrs re-applique APRES un home reussi seulement,
+#                                        0 = laisser l'autotune (recommande, cf. catalogue)
+#   restore_autotune      AUTOTUNE_TMC en sortie de home (default True)
+#   max_rehomes           re-homes de recuperation si aucun contact (default 2)
+#   fine_current_x, fine_current_y, fine_sgthrs_x, fine_sgthrs_y   obsoletes, ignores
+# Command: YUMI_SENSORLESS_HOME AXIS=X|Y [SAMPLES=] [WARMUP=] [TOLERANCE=]
+#   [MAX_TAPS=] [SPEED=] [SKIP_BASE=1]  -- a appeler depuis le homing_override.
 import logging
 
 AXIS_INDEX = {'X': 0, 'Y': 1, 'Z': 2}
@@ -84,6 +121,29 @@ class YumiSensorless:
         # Nb de re-homes de recuperation si aucun contact n'est trouve dans la
         # course attendue (= home de base foireux / depart mal positionne).
         self.max_rehomes = config.getint('max_rehomes', 2, minval=0)
+        # Reference sgthrs par axe quand coarse_sgthrs/tap_sgthrs valent 0 :
+        # le sg4_thrs de [autotune_tmc stepper_X], lu ici sans le marquer
+        # (note_valid=False : il appartient a l'autotune). None si absent.
+        # Pas entier par axe : full_steps_per_rotation du stepper (defaut
+        # Klipper 200) ; la rotation_distance effective (gear_ratio inclus)
+        # vient de l'objet stepper a l'execution.
+        self.autotune_sgthrs = {}
+        self.full_steps = {}
+        for axis in ('X', 'Y'):
+            st = axis.lower()
+            sg = None
+            sec = 'autotune_tmc stepper_%s' % st
+            if config.has_section(sec):
+                sg = config.getsection(sec).getint('sg4_thrs', None,
+                                                   note_valid=False)
+            self.autotune_sgthrs[axis] = sg
+            fs = 200
+            sec = 'stepper_%s' % st
+            if config.has_section(sec):
+                fs = config.getsection(sec).getint(
+                    'full_steps_per_rotation', 200, minval=1,
+                    note_valid=False)
+            self.full_steps[axis] = fs
         # Parametres obsoletes conserves pour compat printer.cfg (ignores).
         config.getfloat('fine_current_x', 0.0, minval=0.)
         config.getfloat('fine_current_y', 0.0, minval=0.)
@@ -167,6 +227,38 @@ class YumiSensorless:
         except Exception:
             return None
 
+    def _full_step(self, axis, rail):
+        # Taille d'un pas entier en mm : rotation_distance effective (gear_ratio
+        # inclus, lue sur l'objet stepper) / full_steps_per_rotation. None si
+        # l'API n'existe pas (vieux Klipper) -> pas de plancher, comportement
+        # d'origine.
+        steppers = rail.get_steppers()
+        if not steppers:
+            return None
+        get_rd = getattr(steppers[0], 'get_rotation_distance', None)
+        if get_rd is None:
+            return None
+        try:
+            rotation_dist = get_rd()[0]
+        except Exception:
+            return None
+        fs = self.full_steps.get(axis, 200)
+        if not rotation_dist or fs <= 0:
+            return None
+        return abs(rotation_dist) / fs
+
+    def _sgthrs_ref(self, axis, explicit, sg0):
+        # Seuil a poser pour une phase : la valeur explicite de la config si
+        # > 0, sinon le sg4_thrs de l'autotune, sinon la valeur lue a l'entree
+        # (dernier recours : aucune reference plus fiable disponible). Retourne
+        # (valeur ou None, nom de la source pour le marqueur).
+        if explicit > 0:
+            return explicit, "config"
+        at = self.autotune_sgthrs.get(axis)
+        if at is not None:
+            return at, "autotune sg4_thrs"
+        return sg0, "registre a l'entree"
+
     def _set_sgthrs(self, st, value, gcmd):
         # Ecrit sgthrs seulement si le driver l'a (2209) : sur un autre driver
         # SET_TMC_FIELD leverait "Unknown field name" et avorterait le home.
@@ -207,6 +299,19 @@ class YumiSensorless:
         # donc <= position_max ; le chariot surcourse physiquement).
         target_phys = pos_endstop - away * self.overshoot
 
+        # Plancher de tolerance = 1 pas entier (+1 % pour le bruit flottant
+        # d'une difference de positions). StallGuard evalue le stall une fois
+        # par pas entier : deux taps sur des pas voisins ont EXACTEMENT ce
+        # spread, ce n'est pas un defaut de butee. En dessous, la fenetre ne
+        # converge que si tous les taps tombent sur le meme pas.
+        full_step = self._full_step(axis, rail)
+        if full_step is not None and tol < full_step * 1.01:
+            gcmd.respond_info(
+                "YUMI_SENSORLESS_HOME %s: tolerance %.4f < 1 pas entier "
+                "%.4f (StallGuard evalue par pas entier) -> tolerance "
+                "effective %.4f" % (axis, tol, full_step, full_step * 1.01))
+            tol = full_step * 1.01
+
         # Le faux trigger d'arret tombe DANS la zone de deceleration du tap
         # (gap fantome ~ v_trigger^2/2a, observe 0.05-0.08 a 20mm/s/1000mm/s2).
         # La preuve de contact n'est discriminante que si l'overshoot depasse
@@ -228,18 +333,25 @@ class YumiSensorless:
         # Ouvre la fenetre StallGuard (tcoolthrs=0 + CoolStep coupe).
         self._open_sg_window(st)
 
+        # Seuils de reference des deux phases, resolus AVANT de bouger : jamais
+        # le registre tel quel (un home avorte y laisse ce que le dernier
+        # restore a pose ; un seuil trop sensible herite ainsi -> faux stall
+        # des le depart du tap, gap ~ retract, boucle auto-entretenue).
+        coarse_sg, coarse_src = self._sgthrs_ref(
+            axis, self.coarse_sgthrs[axis], sg0)
+        tap_sg, tap_src = self._sgthrs_ref(axis, self.tap_sgthrs[axis], sg0)
+
         # --- A) Home natif : localise le mur ---
-        csg = self.coarse_sgthrs[axis]
         if not skip_base:
             cc = self.coarse_current[axis]
             if cc > 0:
                 gcode.run_script_from_command(
                     "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f" % (st, cc))
-            if csg > 0:
-                self._set_sgthrs(st, csg, gcmd)
+            if coarse_sg is not None:
+                self._set_sgthrs(st, coarse_sg, gcmd)
             gcmd.respond_info(
-                "YUMI_SENSORLESS_HOME %s: home base... (sgthrs=%s)"
-                % (axis, self._read_field(st, 'sgthrs')))
+                "YUMI_SENSORLESS_HOME %s: home base... (sgthrs=%s via %s)"
+                % (axis, self._read_field(st, 'sgthrs'), coarse_src))
             self._g28(axis)
 
         # --- B) Prep taps : courant FRANC + sgthrs + accel constants ---
@@ -247,13 +359,13 @@ class YumiSensorless:
         tap_cur = self.tap_current[axis] or self.run_current[axis]
         gcode.run_script_from_command(
             "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f" % (st, tap_cur))
-        tap_sg = self.tap_sgthrs[axis]
-        if tap_sg > 0:
+        # Le seuil coarse etait pose pour le courant coarse : les taps a
+        # courant franc reprennent leur propre reference.
+        if tap_sg is not None:
             self._set_sgthrs(st, tap_sg, gcmd)
-        elif csg > 0 and sg0 is not None:
-            # coarse_sgthrs etait pose pour le courant coarse : ne pas le
-            # laisser aux taps a courant franc -> re-pose la valeur d'entree.
-            self._set_sgthrs(st, sg0, gcmd)
+        gcmd.respond_info(
+            "YUMI_SENSORLESS_HOME %s: taps a %.2fA (sgthrs=%s via %s)"
+            % (axis, tap_cur, self._read_field(st, 'sgthrs'), tap_src))
         eventtime = self.printer.get_reactor().monotonic()
         saved_accel = toolhead.get_status(eventtime).get('max_accel', 1000.)
         gcode.run_script_from_command(
@@ -422,11 +534,9 @@ class YumiSensorless:
                         "AUTOTUNE_TMC STEPPER=stepper_%s" % st)
                 except Exception as e:
                     logging.info("YUMI_SENSORLESS_HOME autotune: %s", e)
-            # run_sgthrs APRES l'autotune, sinon il serait re-ecrase par le
-            # sg4_thrs de l'autotune et deviendrait de la config morte.
-            rs = self.run_sgthrs[axis]
-            if rs > 0:
-                self._set_sgthrs(st, rs, gcmd)
+            # run_sgthrs n'est PAS re-applique ici : ce finally tourne aussi
+            # sur abort, et une valeur posee la serait heritee par le home
+            # suivant. Il est applique tout en bas, apres validation.
 
         # --- C) Decision : le zero est le hard-stop (pos_endstop). Les taps
         # servent a VERIFIER la repetabilite, pas a calculer le zero. ---
@@ -460,6 +570,11 @@ class YumiSensorless:
                 "YUMI_SENSORLESS_HOME %s: spread=%.4fmm sur %d taps "
                 "(tol=%.4f) -> butee non repetable, home avorte"
                 % (axis, spread, len(window), tol))
+        # run_sgthrs seulement ici, une fois le zero pose : APRES l'autotune du
+        # finally (sinon re-ecrase par sg4_thrs) et JAMAIS sur un abort.
+        rs = self.run_sgthrs[axis]
+        if rs > 0:
+            self._set_sgthrs(st, rs, gcmd)
         gcmd.respond_info(
             "YUMI_SENSORLESS_HOME %s %s: %d taps valides (%d rejetes) -> "
             "moyenne=%.4f spread=%.4fmm (tol=%.4f). Zero pose en butee=%.4f"
