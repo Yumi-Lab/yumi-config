@@ -448,7 +448,7 @@ class FilamentAtHead(unittest.TestCase):
     def test_head_sensor_module_is_generated(self):
         for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS"):
             gen = parse(generator.generate(product, catalog=CATALOG))
-            self.assertEqual(gen["yumi_filament_head"]["pin"], "!PA8")
+            self.assertEqual(gen["yumi_filament_head"]["pin"], "^!PA8")  # pull-up: the switch line floats otherwise
             self.assertIn("head_to_nozzle", gen["yumi_filament_head"])
             # the pin is the module's endstop: no second user of PA8
             self.assertNotIn("filament_switch_sensor head_sensor", gen)

@@ -1,19 +1,21 @@
-# Filament at the head — homing-style load onto the head sensor, checked unload
+# Filament at the head — step-and-check load onto the head sensor, checked unload
 #
 # The Yumi heads carry a filament switch at the inlet (PA8). Feeding is blind otherwise: a
 # print started with an empty head, or a colour change that never reached the nozzle, prints
-# air. This module owns that pin as an ENDSTOP and moves the extruder with a homing move onto
-# it: the feed is one continuous move and the MCU stops the steppers the instant the contact
-# flips — no step-and-check, no overshoot beyond the trigger, synchronous for the caller
-# (a tool macro or a start g-code blocks until the filament is really there).
+# air. This module owns that pin as an ENDSTOP (queried, with pull-up) and feeds the extruder
+# queue (extruder + synced feeders) in short steps, reading the switch after each one — the
+# factory QC procedure. Synchronous for the caller: a tool macro or a start g-code blocks until
+# the filament is really there. A continuous homing move (MCU trsync on the switch) was tried
+# first and failed 4/4 on the bench while the stepped feed detected at the first attempt; the
+# overshoot past the switch is at most one `step`.
 #
-#   YUMI_LOAD_TO_HEAD  [SPEED=] [MAX=] [HEAD_TO_NOZZLE=]
-#       homing move of the extruder queue (extruder + synced feeders) until the sensor
-#       triggers, MAX mm at most (error otherwise), then `head_to_nozzle` mm more to bring
-#       the tip to the nozzle (hot end above min_temp for that part only).
-#   YUMI_UNLOAD_CHECK  [MAX_EXTRA=]
-#       after a tip-shaping unload: the sensor must have released; if it still sees filament,
-#       homing move backwards until it releases (MAX_EXTRA mm at most, error otherwise).
+#   YUMI_LOAD_TO_HEAD  [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
+#       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
+#       most (error otherwise), then `head_to_nozzle` mm more to bring the tip to the nozzle
+#       (hot end above min_temp for that part only).
+#   YUMI_UNLOAD_CHECK  [MAX_EXTRA=] [STEP=]
+#       after a tip-shaping unload: the switch must have released; if it still sees filament,
+#       pull `step` mm at a time until it releases (MAX_EXTRA mm at most, error otherwise).
 #   SET_HEAD_SENSOR_BYPASS ENABLE=0|1
 #       a broken sensor must not stop production: bypassed, the LOAD STILL RUNS — blind, over
 #       `blind_load` mm (0 = the tip-shaping unload total read from the _YUMI_TIP macro) plus
@@ -23,8 +25,9 @@
 #   QUERY_HEAD_SENSOR
 #
 # Options ([yumi_filament_head], values in the printer.cfg generator's catalog):
-#   pin               the head switch, wired as an endstop pin (e.g. !PA8)
-#   speed             mm/s of the continuous load move (default 40)
+#   pin               the head switch, wired as an endstop pin (^!PA8: pull-up, the line floats otherwise)
+#   speed             mm/s of the load steps (default 16.7, the QC feed rate)
+#   step              mm fed between two readings of the switch = maximum overshoot (default 20)
 #   max_load          mm fed at most before "no filament at the head" is raised (default 800)
 #   head_to_nozzle    mm from the switch to the nozzle, fed after the trigger (default 0)
 #   nozzle_speed      mm/s of that last stretch into the melt zone (default 5)
@@ -34,7 +37,6 @@
 #   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
 # Status (printer.yumi_filament_head): loaded_mm, present (None = unknown or bypassed), bypass.
 import logging
-from . import homing
 
 
 class YumiFilamentHead:
@@ -43,7 +45,8 @@ class YumiFilamentHead:
         self.gcode = self.printer.lookup_object('gcode')
         ppins = self.printer.lookup_object('pins')
         self.mcu_endstop = ppins.setup_pin('endstop', config.get('pin'))
-        self.speed = config.getfloat('speed', 40., above=0.)                 # mm/s, continuous feed
+        self.speed = config.getfloat('speed', 16.7, above=0.)               # mm/s, feed steps
+        self.step = config.getfloat('step', 20., above=0.)                  # mm between two readings
         self.max_load = config.getfloat('max_load', 800., above=0.)
         self.head_to_nozzle = config.getfloat('head_to_nozzle', 0., minval=0.)
         self.nozzle_speed = config.getfloat('nozzle_speed', 5., above=0.)    # mm/s, into the melt zone
@@ -80,57 +83,21 @@ class YumiFilamentHead:
         return st
 
     # ── moves ──────────────────────────────────────────────────────────
-    def _extruder_steppers(self):
-        """The active extruder's stepper and every feeder synced to it (their motion queue)."""
-        toolhead = self.printer.lookup_object('toolhead')
-        extruder = toolhead.get_extruder()
-        steppers = []
-        es = getattr(extruder, 'extruder_stepper', None)
-        if es is not None:
-            steppers.append(es.stepper)
-        for _name, obj in self.printer.lookup_objects('extruder_stepper'):
-            real = getattr(obj, 'extruder_stepper', obj)   # lookup_objects returns the wrapper
-            if getattr(real, 'motion_queue', None) == extruder.get_name() and real.stepper not in steppers:
-                steppers.append(real.stepper)
-        return extruder, steppers
-
-    def _homing_feed(self, distance, speed, triggered, what):
-        """One continuous extruder move stopped by the head sensor (triggered=True: until it
-        sees filament; False: until it releases). Returns the distance actually fed (signed)."""
-        toolhead = self.printer.lookup_object('toolhead')
-        toolhead.wait_moves()
-        extruder, steppers = self._extruder_steppers()
-        if not steppers:
-            raise self.printer.command_error("YUMI head: no extruder stepper on the active extruder")
-        for s in steppers:
-            self.mcu_endstop.add_stepper(s)
-        start = toolhead.get_position()
-        movepos = list(start)
-        movepos[3] += distance
-        hmove = homing.HomingMove(self.printer, [(self.mcu_endstop, 'head_sensor')])
-        try:
-            hmove.homing_move(movepos, speed, probe_pos=True, triggered=triggered, check_triggered=True)
-        except self.printer.command_error as e:
-            self._resync_extruder(toolhead, extruder, steppers)
-            raise self.printer.command_error("%s: %s" % (what, str(e)))
-        fed = self._resync_extruder(toolhead, extruder, steppers) - start[3]
-        return fed
-
-    def _resync_extruder(self, toolhead, extruder, steppers):
-        """homing_move only puts the XYZ kinematics back in place; the extruder axis is ours:
-        the steppers stopped at the trigger, so the toolhead, the extruder and the g-code layer
-        must all take that halt position — otherwise the next extrusion would jump by the
-        distance that was never travelled."""
-        toolhead.flush_step_generation()
-        halt = steppers[0].get_commanded_position()
-        for s in steppers[1:]:
-            s.set_position([halt, 0., 0.])
-        extruder.last_position = halt
-        toolhead.set_extruder(extruder, halt)
-        self.printer.lookup_object('gcode_move').reset_last_position()
-        return halt
+    def _stepped_feed(self, direction, max_mm, step, speed, want_present):
+        """Feed `step` mm at a time (direction +1 load / -1 unload), reading the switch after
+        each step, until it reports `want_present`. Returns the signed distance fed; raises
+        "No trigger" past max_mm. The switch is read at rest, after M400, like the QC loop."""
+        fed = 0.
+        while fed < max_mm:
+            chunk = min(step, max_mm - fed)
+            self._move_e(direction * chunk, speed)
+            fed += chunk
+            if self._present() == want_present:
+                return direction * fed
+        raise self.printer.command_error("No trigger on head_sensor after %.0f mm" % max_mm)
 
     def _move_e(self, distance, speed):
+        """One relative extruder move, complete before returning (the switch is read at rest)."""
         self.gcode.run_script_from_command("SAVE_GCODE_STATE NAME=_yumi_head")
         self.gcode.run_script_from_command("M83")
         self.gcode.run_script_from_command("G1 E%.3f F%d" % (distance, int(speed * 60)))
@@ -159,6 +126,7 @@ class YumiFilamentHead:
         """Feed filament in one move until the head sensor sees it, then head_to_nozzle mm more"""
         speed = gcmd.get_float('SPEED', self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
+        step = gcmd.get_float('STEP', self.step, above=0.)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         if self.bypass:
             blind = self._blind_load_len()
@@ -173,7 +141,7 @@ class YumiFilamentHead:
             self.last["present"] = True
         else:
             try:
-                fed = self._homing_feed(max_load, speed, True, "YUMI_LOAD_TO_HEAD")
+                fed = self._stepped_feed(+1, max_load, step, speed, True)
             except self.printer.command_error as e:
                 if "No trigger" in str(e):
                     raise gcmd.error("No filament at the head after %.0f mm: check the spool and the feeder "
@@ -193,6 +161,7 @@ class YumiFilamentHead:
     def cmd_UNLOAD_CHECK(self, gcmd):
         """After an unload: the head sensor must have released, pull more (one move) if not"""
         max_extra = gcmd.get_float('MAX_EXTRA', self.max_unload_extra, minval=0.)
+        step = gcmd.get_float('STEP', self.step, above=0.)
         if self.bypass:
             gcmd.respond_info("head sensor BYPASSED: unload not checked")
             return
@@ -201,7 +170,7 @@ class YumiFilamentHead:
             self.last = {"loaded_mm": 0., "present": False}
             return
         try:
-            fed = self._homing_feed(-max_extra, self.speed, False, "YUMI_UNLOAD_CHECK")
+            fed = self._stepped_feed(-1, max_extra, step, self.speed, False)
         except self.printer.command_error as e:
             if "No trigger" in str(e):
                 raise gcmd.error("Filament still at the head after %.0f mm more of retraction: unload failed" % max_extra)

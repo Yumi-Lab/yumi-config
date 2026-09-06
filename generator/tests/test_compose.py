@@ -230,11 +230,11 @@ class Build(unittest.TestCase):
         self.assertEqual(code, compose.EXIT_APPLIED)
         code, summary = compose.apply(C235, CATALOG, self.dir)
         self.assertEqual(code, compose.EXIT_UNCHANGED)
-        prefs = {"overrides": {"filament_head": {"pin": "^!PA8"}}}
+        prefs = {"overrides": {"filament_head": {"pin": "^!PC15"}}}
         code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
         self.assertEqual(code, compose.EXIT_APPLIED)
         self.assertTrue(any("overrides changed" in r for r in summary["reasons"]))
-        self.assertIn("pin: ^!PA8", (self.dir / "printer.cfg").read_text())
+        self.assertIn("pin: ^!PC15", (self.dir / "printer.cfg").read_text())
         code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
         self.assertEqual(code, compose.EXIT_UNCHANGED, "the same override again is not a change")
 
