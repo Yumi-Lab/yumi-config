@@ -185,7 +185,7 @@ class MachineMacro(unittest.TestCase):
 
     def test_size_dependent_macros_read_the_single_macro(self):
         cfg = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
-        for name in ("gcode_macro SCREWS_TILT_CALCULATE",
+        for name in ("gcode_macro PRINT_START", "gcode_macro SCREWS_TILT_CALCULATE",
                      "gcode_macro CANCEL_PRINT", "gcode_macro WIPE_NOZZLE", "gcode_macro _YUMI_WELCOME"):
             self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', cfg[name], name)
         self.assertIn("_YUMI_MACHINE", cfg["delayed_gcode welcome"])
@@ -237,6 +237,19 @@ class BedDetection(unittest.TestCase):
         sec = parse(cfg)["yumi_bed_scan"]
         for key in ("center_dx", "center_dy", "range_x", "range_y", "z_clear", "z_step", "z_floor", "planes", "accel"):
             self.assertIn(key, sec)
+
+
+class SlicerProfileGuard(unittest.TestCase):
+    """A file sliced for another bed size is refused by PRINT_START, before anything moves."""
+
+    def test_print_start_checks_the_bed_size_from_the_slicer(self):
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
+        self.assertIn("params.BED_X", m)
+        self.assertIn("action_raise_error", m)
+        self.assertIn("Re-slice", m)
+        self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', m)
+        # the check comes before the actions of the macro
+        self.assertLess(m.index("action_raise_error"), m.index("M106 S140 P3"))
 
 
 class Comments(unittest.TestCase):
