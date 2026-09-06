@@ -36,3 +36,18 @@ class Units(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrinterCfgOwnership(unittest.TestCase):
+    """install.sh seeds printer.cfg only when there is none: the generator owns it afterwards.
+    The former unconditional replace (no-argument run = smartpad-generic) wiped the generated
+    cfg and its SAVE_CONFIG block twice on the bench, 2026-09-06."""
+
+    def test_existing_printer_cfg_is_never_replaced(self):
+        sh = INSTALL_SH.read_text()
+        self.assertNotIn('rm -f "$KLIPPER_CONFIG_DIR/printer.cfg"', sh)
+        self.assertNotIn("Backupupdate-printer.cfg", sh)
+        copy = [l for l in sh.splitlines() if 'cp "$PROJECT_DIR/$1/printer.cfg"' in l]
+        self.assertEqual(len(copy), 1)
+        guard_index = sh.index('[ ! -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]')
+        self.assertLess(guard_index, sh.index(copy[0]), "the copy must sit under the 'no printer.cfg yet' guard")

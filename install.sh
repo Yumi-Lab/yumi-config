@@ -113,13 +113,15 @@ EOF
       mv "$temp_file" $KLIPPER_CONFIG_DIR/moonraker.conf
   fi
 
-  # Only replace printer.cfg on first install, never during Moonraker updates
-  if [ "$1" == "smartpad-generic" ] && [ -z "$MOONRAKER_PROCESS_UID" ]; then
-      cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
-      rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg deleted successfully." || echo "Error deleting printer.cfg."
-      cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copied successfully." || echo "Error copying printer.cfg."
-  elif [ -n "$MOONRAKER_PROCESS_UID" ]; then
-      echo "Moonraker update detected — skipping printer.cfg replacement"
+  # printer.cfg belongs to the generator (generator/autoconfig.py rewrites it from the boards
+  # before every Klipper start, calibrations kept). This script only seeds a pad that has NO
+  # printer.cfg at all; an existing one is never replaced — this ran on every no-argument
+  # invocation (YUMI_SYNC re-runs install.sh whenever it changes) and wiped the generated cfg
+  # and its SAVE_CONFIG block (bed mesh) on the bench, twice, 2026-09-06.
+  if [ "$1" == "smartpad-generic" ] && [ -z "$MOONRAKER_PROCESS_UID" ] && [ ! -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
+      cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg seeded (none was present)." || echo "Error copying printer.cfg."
+  else
+      echo "printer.cfg present — left to the generator, not replaced."
   fi
 
   # Modify permissions so user "pi" retains rights on created or modified files
