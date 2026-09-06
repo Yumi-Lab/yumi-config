@@ -247,7 +247,10 @@ class StoppedPrint(unittest.TestCase):
         m = macros(cfg)["gcode_macro _YUMI_PRINT_ERROR"]
         self.assertIn("SAVE_VARIABLE VARIABLE=printing_start VALUE=False", m)
         self.assertIn("TURN_OFF_HEATERS", m)
-        self.assertFalse(re.search(r"^\s*G[01] ", m, re.M), "no motion in an error handler")
+        self.assertFalse(re.search(r"^\s*G[01] ", m, re.M), "no axis motion in an error handler")
+        commands = [l.strip() for l in m.splitlines() if l.strip() and not l.strip().startswith("#")]
+        self.assertLess(commands.index("SAVE_VARIABLE VARIABLE=printing_start VALUE=False"), commands.index("T0"),
+                        "T0 must find printing_start False to take its idle (re-arm) branch")
 
     def test_boot_init_never_loads_to_the_head(self):
         cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
