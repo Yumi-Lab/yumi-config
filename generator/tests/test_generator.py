@@ -294,6 +294,21 @@ class MacrosMatchHardware(unittest.TestCase):
             self.assertEqual(cfg.count("[gcode_macro T0]"), 1, product)
 
 
+class ParkPositions(unittest.TestCase):
+    """Every park position of the macros fits the machine's X axis (Orca: bed+7 approach, bed+20 pop tool)."""
+
+    def test_cancel_print_parks_inside_the_axis(self):
+        import re as _re
+        for mid, comp in generator.machines_of(CATALOG, "SMART_MAKER_1X"):
+            cfg = generator.generate("%s_DD_LW_04" % mid, catalog=CATALOG)
+            x_max = float(comp["stepper_x"]["position_max"])
+            body = macros(cfg)["gcode_macro CANCEL_PRINT"]
+            offsets = [float(o) for o in _re.findall(r"G1 X\{bed_size \+ ([0-9.]+)\}", body)]
+            self.assertTrue(offsets, "no bed-relative park move in CANCEL_PRINT")
+            for off in offsets:
+                self.assertLessEqual(comp["bed_size"] + off, x_max, "%s: bed+%g beyond X max %g" % (mid, off, x_max))
+
+
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
