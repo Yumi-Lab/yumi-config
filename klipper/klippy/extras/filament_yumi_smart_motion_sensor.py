@@ -289,7 +289,12 @@ class FilamentYumiSmartMotionSensor:
                 extruder_moved, self.detection_length)
             self.runout_triggered = True
 
-        self.runout_helper.note_filament_present(eventtime, filament_present)
+        # Only the ABSENCE is decided here. Presence is the encoder's business
+        # (encoder_event): declaring "present" from "the extruder did not move
+        # much" made an empty YMS look loaded after any print phase, so the
+        # insert_gcode (automatic load) never fired when filament was inserted.
+        if not filament_present:
+            self.runout_helper.note_filament_present(eventtime, False)
         return eventtime + CHECK_RUNOUT_TIMEOUT
 
     # ------------------------------------------------------------------
