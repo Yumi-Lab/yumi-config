@@ -13,9 +13,20 @@
 # ticked for the last time. A time-based grace swallowed that move, the sensor stayed
 # "present" and a second insertion into the same YMS was never seen.
 #
+# Which ticks count (bench 2026-09-06: ticks arriving at rest right after the load sequence,
+# once the motors were released, re-armed "present" and the next insertion was never seen):
+#   * FEEDING    the extruder moves and this YMS's motor is synced to it — filament driven;
+#   * INSERTION  the toolhead is idle (idle_timeout not "Printing") and the filament moves by hand;
+#   * ignored    a tick while the extruder moves but another feeder drives it (drag, vibration,
+#                EMI), or at rest while the toolhead has not settled yet (filament relaxing after
+#                the motors were released) — logged in klippy.log as "encoder tick ignored".
+#
 # Options ([filament_yumi_smart_motion_sensor <name>]):
 #   switch_pin                     encoder pin of the YMS
 #   extruder                       extruder whose travel is compared with the ticks (default extruder)
+#   motor                          this YMS's feeder, an [extruder_stepper <name>]: a tick while the
+#                                  extruder moves is filament fed only when that feeder is synced to it
+#                                  (default: none declared, any tick while moving is feeding)
 #   detection_length               mm of extruder travel without a tick = filament absent (default 7)
 #   mode                           free (default): a tick = present, nothing more; hold: pitch analysis
 #   pitch_view                     echo every pitch in the console (default False)
@@ -40,6 +51,8 @@ import time
 from . import filament_switch_sensor
 
 CHECK_RUNOUT_TIMEOUT = .250  # 250ms for better responsiveness
+MOTION_WINDOW = .1           # s: the extruder is "moving" at a tick if it travelled within this window
+IGNORED_LOG_PERIOD = 5.      # s: ignored ticks are logged at most once per period, with their count
 
 class FilamentYumiSmartMotionSensor:
     def __init__(self, config):
@@ -48,6 +61,10 @@ class FilamentYumiSmartMotionSensor:
         self.config = config
         switch_pin = config.get('switch_pin')
         self.extruder_name = config.get('extruder', 'extruder')
+        self.motor_name = config.get('motor', None)
+        self.motor = None
+        self.ignored_ticks = 0
+        self.ignored_log_time = 0.
         self.detection_length = config.getfloat('detection_length', 7.0, above=0.)
         self.sensor_name = config.get_name().split()[-1]
 
@@ -232,6 +249,10 @@ class FilamentYumiSmartMotionSensor:
     # ------------------------------------------------------------------
     def _handle_ready(self):
         self.extruder = self.printer.lookup_object(self.extruder_name)
+        if self.motor_name:
+            self.motor = self.printer.lookup_object('extruder_stepper ' + self.motor_name, None)
+            if self.motor is None:
+                self.motor = self.printer.lookup_object(self.motor_name)
         self.estimated_print_time = (
             self.printer.lookup_object('mcu').estimated_print_time)
         self._extruder_pos_update_timer = self.reactor.register_timer(
@@ -261,10 +282,8 @@ class FilamentYumiSmartMotionSensor:
             self._init_data_logging()
 
         pitch_window_info = self.pitch_window if self.blockage_detection else 1
-        logging.info("Detection reset for new print")
-        self.printer.lookup_object('gcode').respond_info(
-            f"// {self.sensor_name}: Filament sensor reset - ready "
-            f"(mode={self.mode}, window={pitch_window_info})")
+        logging.info("%s: pitch bookkeeping reset, toolhead moving (mode=%s, window=%s)",
+                     self.sensor_name, self.mode, pitch_window_info)
 
         self.reactor.update_timer(
             self._extruder_pos_update_timer, self.reactor.NOW)
@@ -319,13 +338,45 @@ class FilamentYumiSmartMotionSensor:
         return eventtime + CHECK_RUNOUT_TIMEOUT
 
     # ------------------------------------------------------------------
-    # Encoder event — dispatch to mode-specific processing
+    # Encoder event — which ticks count, then mode-specific processing
     # ------------------------------------------------------------------
+    def _motor_synced(self):
+        """Is this YMS's feeder driven by the tracked extruder right now? No feeder declared: yes."""
+        if self.motor is None:
+            return True
+        real = getattr(self.motor, 'extruder_stepper', self.motor)
+        return getattr(real, 'motion_queue', None) == self.extruder_name
+
+    def _classify_tick(self, eventtime):
+        """'feeding', 'insertion', or None for a tick that is not filament being fed or inserted."""
+        print_time = self.estimated_print_time(eventtime)
+        pos = self.extruder.find_past_position(print_time)
+        moving = abs(pos - self.extruder.find_past_position(print_time - MOTION_WINDOW)) > 1e-6
+        if moving:
+            if self._motor_synced():
+                return 'feeding'
+            reason = ("extruder moving, motor %s not synced to it: another feeder is pushing"
+                      % self.motor_name)
+        else:
+            state = self.printer.lookup_object('idle_timeout').get_status(eventtime)['state']
+            if state != "Printing":
+                return 'insertion'
+            reason = ("extruder at rest but the toolhead has not settled yet: filament relaxing "
+                      "after the motors were released")
+        self.ignored_ticks += 1
+        if eventtime - self.ignored_log_time >= IGNORED_LOG_PERIOD:
+            logging.info("%s: encoder tick ignored (%d since last report) — %s",
+                         self.sensor_name, self.ignored_ticks, reason)
+            self.ignored_log_time = eventtime
+            self.ignored_ticks = 0
+        return None
+
     def encoder_event(self, eventtime, state):
         if self.extruder is None or self.last_valid_pos is None:
             return
-        # Any tick, whatever the mode makes of it: filament is moving, the absence
-        # threshold starts again from here.
+        if self._classify_tick(eventtime) is None:
+            return
+        # Filament really fed or inserted: the absence threshold starts again from here.
         self.last_tick_pos = self._get_extruder_pos(eventtime)
         self.last_event_time = eventtime
         if self.mode == 'free':

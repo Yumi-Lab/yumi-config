@@ -100,16 +100,39 @@ class Config:
         return Exception(msg)
 
 
+class FeederStub:
+    """Klipper's ExtruderStepper: motion_queue names the extruder it is synced to, or None."""
+    def __init__(self, printer):
+        self.printer = printer
+
+    @property
+    def motion_queue(self):
+        return self.printer.motor_queue
+
+
 class Printer:
+    """Extruder positions are a step function of print time (= event time here), so a tick can
+    tell whether the extruder moved within the last MOTION_WINDOW like Klipper's step history."""
     def __init__(self):
         self.reactor = Reactor()
         self.handlers = {}
-        self.extruder_pos = 0.
+        self.samples = [(-1e9, 0.)]           # (time, extruder position)
+        self.state = "Ready"                  # idle_timeout state
+        self.motor_queue = None               # motion_queue of [extruder_stepper extruder1]
         self.button_callback = None
-        extruder = types.SimpleNamespace(find_past_position=lambda print_time: self.extruder_pos)
+        extruder = types.SimpleNamespace(find_past_position=self.find_past_position)
         mcu = types.SimpleNamespace(estimated_print_time=lambda eventtime: eventtime)
         gcode = types.SimpleNamespace(respond_info=lambda *a, **k: None, respond_raw=lambda *a, **k: None)
-        self.objects = {"extruder": extruder, "mcu": mcu, "gcode": gcode}
+        idle = types.SimpleNamespace(get_status=lambda eventtime: {"state": self.state})
+        motor = types.SimpleNamespace(extruder_stepper=FeederStub(self))
+        self.objects = {"extruder": extruder, "mcu": mcu, "gcode": gcode, "idle_timeout": idle,
+                        "extruder_stepper extruder1": motor}
+
+    def set_pos(self, t, pos):
+        self.samples.append((t, pos))
+
+    def find_past_position(self, print_time):
+        return [p for t, p in self.samples if t <= print_time][-1]
 
     def get_reactor(self):
         return self.reactor
@@ -124,8 +147,12 @@ class Printer:
     def register_event_handler(self, name, callback):
         self.handlers.setdefault(name, []).append(callback)
 
-    def lookup_object(self, name):
-        return self.objects[name]
+    def lookup_object(self, name, default=KeyError):
+        if name in self.objects:
+            return self.objects[name]
+        if default is KeyError:
+            raise KeyError(name)
+        return default
 
     def fire(self, name, *args):
         for cb in self.handlers.get(name, []):
@@ -140,26 +167,32 @@ class Bench:
         self.mod = load_module()
         self.printer = Printer()
         self.sensor = self.mod.FilamentYumiSmartMotionSensor(Config(self.printer, {
-            "switch_pin": "PC13", "extruder": "extruder", "mode": mode,
+            "switch_pin": "PC13", "extruder": "extruder", "motor": "extruder1", "mode": mode,
             "detection_length": self.DETECTION_LENGTH, "blockage_detection": True}))
         self.helper = self.sensor.runout_helper
         self.printer.fire("klippy:ready")
 
+    def sync_motor(self, synced):
+        """T macros: SYNC_EXTRUDER_MOTION EXTRUDER=extruder1 MOTION_QUEUE=extruder / \"\" """
+        self.printer.motor_queue = "extruder" if synced else None
+
     def tick(self, t, pos):
         self.printer.reactor.now = t
-        self.printer.extruder_pos = pos
+        self.printer.set_pos(t, pos)
         self.printer.button_callback(t, 1)
 
     def move_without_ticks(self, t, pos):
-        self.printer.extruder_pos = pos
+        self.printer.set_pos(t, pos)
         self.printer.reactor.run_timers(t)
 
     def toolhead_starts(self, t):
         self.printer.reactor.now = t
+        self.printer.state = "Printing"
         self.printer.fire("idle_timeout:printing", t)
 
     def toolhead_stops(self, t):
         self.printer.reactor.now = t
+        self.printer.state = "Ready"
         self.printer.fire("idle_timeout:ready", t)
 
     def push_with_ticks(self, t0, t1, pos0, pos1, pitch=2.):
@@ -175,13 +208,15 @@ class InsertionFlow(unittest.TestCase):
         # first insertion at idle: the encoder ticks → present → insert_gcode
         b.tick(100.0, 0.)
         self.assertEqual(b.helper.transitions, [(100.0, True)])
-        # LOAD_YMS: 50 mm push at 1000 mm/min, the YMS ticks all along
+        # LOAD_YMS: 50 mm push at 1000 mm/min, the YMS ticks all along, its feeder synced (T2)
         b.toolhead_starts(100.1)
+        b.sync_motor(True)
         b.push_with_ticks(100.1, 103.1, 0., 50.)
         b.move_without_ticks(103.2, 50.)
         self.assertTrue(b.helper.filament_present)
         # T0 → MOTION_SENSOR_INIT: 50 mm of extruder travel with no feeder synced (0.75 s),
         # the toolhead stops 0.5 s later — all of it within 2 s of the last tick
+        b.sync_motor(False)
         b.move_without_ticks(103.9, 100.)
         b.toolhead_stops(104.4)
         self.assertFalse(b.helper.filament_present,
@@ -209,7 +244,7 @@ class InsertionFlow(unittest.TestCase):
         b = Bench()
         b.tick(100.0, 0.)
         b.toolhead_starts(100.1)
-        b.printer.extruder_pos = 60.          # crossed, but no timer fired since
+        b.printer.set_pos(100.5, 60.)          # crossed, but no timer fired since
         b.toolhead_stops(100.9)
         self.assertFalse(b.helper.filament_present)
 
@@ -223,10 +258,50 @@ class InsertionFlow(unittest.TestCase):
         self.assertFalse(b.helper.filament_present)
         self.assertEqual(b.helper.transitions, [])
 
+    def test_ticks_at_rest_before_the_toolhead_settles_are_not_an_insertion(self):
+        """Bench 2026-09-06, second failure: once the load sequence ended and M18 released the
+        motors, the encoder ticked (filament relaxing) while idle_timeout was still Printing.
+        Those ticks re-armed "present" and the next insertion into the same YMS was never seen."""
+        b = Bench()
+        b.tick(100.0, 0.)
+        b.toolhead_starts(100.1)
+        b.sync_motor(True)
+        b.push_with_ticks(100.1, 103.1, 0., 50.)
+        b.sync_motor(False)
+        b.move_without_ticks(103.9, 100.)         # MOTION_SENSOR_INIT done, extruder at rest now
+        for t in (104.05, 104.2, 104.35):          # M18 → the filament settles back: ticks at rest
+            b.tick(t, 100.)
+        b.toolhead_stops(104.6)
+        self.assertFalse(b.helper.filament_present, "settling ticks must not look like an insertion")
+        b.tick(110.0, 100.)                        # the real insertion, toolhead idle
+        self.assertEqual([p for _t, p in b.helper.transitions], [True, False, True])
+
+    def test_ticks_while_another_feeder_pushes_are_a_disturbance(self):
+        """The extruder moves for YMS-1's load (this YMS's motor not synced): a tick here is
+        drag, vibration or noise, not filament fed by this YMS — it must not set "present"."""
+        b = Bench()
+        b.tick(100.0, 0.)
+        b.toolhead_starts(100.1)
+        b.sync_motor(False)
+        b.move_without_ticks(102.0, 30.)
+        b.tick(102.1, 32.)                         # spurious tick during another feeder's push
+        b.move_without_ticks(104.0, 100.)
+        b.toolhead_stops(104.6)
+        self.assertFalse(b.helper.filament_present)
+        self.assertEqual(b.sensor.last_tick_pos, 0., "an ignored tick must not move the reference")
+
+    def test_without_a_declared_motor_any_tick_while_moving_is_feeding(self):
+        b = Bench()
+        b.sensor.motor = None
+        b.toolhead_starts(100.0)
+        b.push_with_ticks(100.0, 101.0, 0., 10.)
+        self.assertTrue(b.helper.filament_present)
+
     def test_hold_mode_ticks_refresh_the_threshold_too(self):
         b = Bench(mode="hold")
         b.tick(100.0, 0.)
         b.toolhead_starts(100.1)
+        b.sync_motor(True)
         b.push_with_ticks(100.1, 103.1, 0., 50.)
         self.assertTrue(b.helper.filament_present)
         b.move_without_ticks(103.5, 80.)      # 30 mm since the last tick: present

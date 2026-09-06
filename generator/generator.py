@@ -443,9 +443,11 @@ def render_extruder_steppers(p):
         lines.append("detection_length: 50")
         lines.append("pause_on_runout: False")
         lines.append("extruder: extruder")
-        if i == 0:
-            lines.append("event_delay: 0.0001")
+        # no dead time after an event: a re-insertion right after "INSERT NEXT FILAMENT" would
+        # otherwise flip the state without firing (Klipper's default event_delay is 3 s)
+        lines.append("event_delay: 0.0001")
         if i == 1:
+            lines.append(f"motor: extruder{i}  # this YMS's feeder: a tick while the extruder moves counts only when it drives")
             lines.append("blockage_detection: True")
             lines.append("min_pitch: 0.7")
             lines.append("max_pitch: 2.6")
