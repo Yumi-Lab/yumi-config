@@ -355,8 +355,8 @@ class FilamentYumiSmartMotionSensor:
         if moving:
             if self._motor_synced():
                 return 'feeding'
-            reason = ("extruder moving, motor %s not synced to it: another feeder is pushing"
-                      % self.motor_name)
+            reason = ("extruder moving, motor %s not synced to it: another feeder is pushing, "
+                      "or the re-arm move of MOTION_SENSOR_INIT (nothing feeds this YMS)" % self.motor_name)
         else:
             state = self.printer.lookup_object('idle_timeout').get_status(eventtime)['state']
             if state != "Printing":
