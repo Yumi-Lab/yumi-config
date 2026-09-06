@@ -285,6 +285,18 @@ class ToolChange(unittest.TestCase):
         self.assertNotIn("[gcode_macro YUMI_TOOL_CHANGE]", generator.generate("C235_DD_LW_04", catalog=CATALOG))
 
 
+class SensorlessHoming(unittest.TestCase):
+    """No run_sgthrs re-applied after a home: the module's finally set it after the autotune, on
+    aborted homes too, so one repeatability failure poisoned the StallGuard register (150) and
+    every following coarse phase stalled 5.12 mm early — "aucun contact", in a loop (C235, 06/09)."""
+
+    def test_no_stallguard_threshold_reapplied_after_homing(self):
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        sec = parse(cfg)["yumi_sensorless_homing"]
+        for axis in ("x", "y"):
+            self.assertEqual(float(sec.get("run_sgthrs_%s" % axis, 0)), 0.0, "run_sgthrs_%s must stay 0" % axis)
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read

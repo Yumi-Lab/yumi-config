@@ -239,8 +239,11 @@
         "coarse_current_y": 0.55,
         "fine_current_y": 0.6,
         "fine_sgthrs_y": 0,
-        "run_sgthrs_y": 150,
-        "run_current_y": 1.2
+        "run_sgthrs_y": 0,
+        "run_current_y": 1.2,
+        "_comments": {
+          "run_sgthrs_y": "0 = rien reapplique apres le home. 150 empoisonnait le registre : le finally du module le posait apres l'autotune (sg4_thrs=50), meme sur un home avorte ; la phase 1 suivante heritait de 150 (coarse_sgthrs_y=0) -> faux stall 5.12 mm avant la butee, 'aucun contact', en boucle. Verifie C235 06/09 (claude-skills/sensorless-homing/historique-reglages.md, test 8)"
+        }
       },
       "extruder": {
         "_doc": "Chauffe et parametres d'extrusion communs. Les pins moteur viennent de la TETE : direct drive = moteur reel sur le driver E0 (motor_slot), CHROMAX = moteur fictif sur des pins libres (tete bowden, Klipper exige un [extruder] ; ce sont extruder0..N = les YMS qui poussent).",
