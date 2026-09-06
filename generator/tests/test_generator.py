@@ -272,7 +272,7 @@ class ProductGuard(unittest.TestCase):
     def test_print_start_checks_head_hotend_nozzle(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
         for key in ("params.HEAD", "params.HOTEND", "params.NOZZLE", 'printer["gcode_macro _YUMI_PRODUCT"]',
-                    "extruder.nozzle_diameter", "head. This machine has", "hotend. This machine has", "nozzle. This machine has"):
+                    "extruder.nozzle_diameter", "head. This machine is set as", "hotend. This machine is set as", "nozzle. This machine is set as", "change the head in Printer Config"):
             self.assertIn(key, m, key)
         commands = [l.strip() for l in m.splitlines() if not l.strip().startswith("#")]
         self.assertEqual(sum(1 for l in commands if l == "CANCEL_PRINT_DEFAULT"), 1)

@@ -94,9 +94,11 @@ Notes :
   insensible à la casse et aux espaces. `HOTEND=""` (machine mono-hotend) = non applicable.
   Messages, un seul à la fois, puis annulation propre de l'impression :
   `File sliced for YUMi C335. Please re-slice with the C235 profile.` ·
-  `File sliced for Direct Drive head. This machine has ChromaX12. Please re-slice.` ·
-  `File sliced for High Flow hotend. This machine has Low waste. Please re-slice.` ·
-  `File sliced for 0.6 nozzle. This machine has 0.4. Please re-slice.`
+  `File sliced for ChromaX12 head. This machine is set as Direct Drive. Re-slice, or change the head in Printer Config.` ·
+  `File sliced for High Flow hotend. This machine is set as Low waste. Re-slice, or change the hotend in Printer Config.` ·
+  `File sliced for 0.6 nozzle. This machine is set as 0.4. Re-slice, or change the nozzle in Printer Config.`
+  (tête, hotend et buse sont ce que le wizard « Printer Config » de l'écran a déclaré : la faute peut être
+  d'un côté comme de l'autre, le message nomme les deux issues)
   Un fichier sans ces paramètres (ancien start G-code) passe avec un simple avertissement.
 - `BED_MESH_PROFILE LOAD="default"` reste : si le profil n'existe pas encore (machine jamais meshée),
   le firmware construit le mesh lui-même (scan de la plaque métal de référence → `BED_DETECTION` →
