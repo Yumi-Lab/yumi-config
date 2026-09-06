@@ -72,8 +72,10 @@ restarting Klipper**, then `Z_TAP` puts the nozzle zero back — and the print g
 fresh mesh. Standalone, `BED_MESH_CALIBRATE` heats to 65 °C, soaks, saves and switches the bed
 off; no `SAVE_CONFIG` restart any more. The startup report only loads a mesh that exists.
 Every `refresh_every` prints (`variable_refresh_every: 20` of `BED_MESH_PROFILE`, counter
-`prints_since_mesh` in `variables.cfg`) the `LOAD` at print start scans the reference plate again
-(`BED_SCAN_ZERO`) and rebuilds the mesh before printing; any `BED_MESH_CALIBRATE` restarts the count.
+`prints_since_mesh` in `variables.cfg`, counted only from a running print) `PRINT_END` shows a
+screen prompt (`action:prompt`, KlipperScreen and Mainsail): "Later" or "Refresh now", the latter
+running `YUMI_MESH_REFRESH` (reference plate scan then mesh, bed at 65 °C, saved, bed off). The
+refresh never starts by itself, in a print or at boot; any `BED_MESH_CALIBRATE` restarts the count.
 
 `BED_DETECTION` probes the metal reference plate behind the bed (nozzle wiper) for its Z frame.
 Its position is measured, never guessed: when `bed_detect_x/y` are not in `variables.cfg` yet,

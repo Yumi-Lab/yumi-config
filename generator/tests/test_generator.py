@@ -223,22 +223,30 @@ class BedMesh(unittest.TestCase):
         # startup stays passive: the welcome only loads a mesh that exists
         self.assertIn('"default" in printer.bed_mesh.profiles', m["gcode_macro _YUMI_WELCOME"])
 
-    def test_periodic_refresh_rescans_the_reference_and_rebuilds(self):
-        """Every refresh_every prints (20) the LOAD scans the metal reference again and rebuilds
-        the mesh; a fresh mesh (any BED_MESH_CALIBRATE) restarts the count."""
+    def test_periodic_refresh_is_proposed_on_the_screen_never_run_alone(self):
+        """Every refresh_every prints (20) PRINT_END shows a prompt (action:prompt) with Later /
+        Refresh now; the refresh (reference scan + mesh) runs only from that button. LOAD in a
+        print never rebuilds an existing mesh, and only a LOAD from a running print counts (the
+        welcome loads the mesh at every Klipper start; one such start scanned the bed by itself
+        on 06/09 with the counter at 20)."""
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
         m = macros(cfg)
         prof = m["gcode_macro BED_MESH_PROFILE"]
         self.assertIn("variable_refresh_every: 20", prof)
-        self.assertIn("prints >= every", prof)
-        self.assertLess(prof.index("prints >= every"), prof.index("BED_SCAN_ZERO"),
-                        "the rescan belongs to the refresh branch only")
-        self.assertEqual(prof.count("BED_SCAN_ZERO"), 1)
-        self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE={prints + 1}", prof)
-        # the welcome loads the mesh at every Klipper start: neither counted nor a reason to rebuild
+        self.assertNotIn("BED_SCAN_ZERO", prof, "no rebuild of an existing mesh from LOAD")
         self.assertIn('printer.print_stats.state == "printing"', prof)
-        self.assertIn("load and in_print and every > 0", prof)
         self.assertIn("{% if load and in_print %}", prof)
+        self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE={prints + 1}", prof)
+        prompt = m["gcode_macro _YUMI_MESH_REFRESH_PROMPT"]
+        self.assertIn("prints >= every", prompt)
+        self.assertIn("action:prompt_begin", prompt)
+        self.assertIn("Later|_YUMI_PROMPT_END", prompt)
+        self.assertIn("Refresh now|YUMI_MESH_REFRESH", prompt)
+        self.assertNotIn("BED_SCAN_ZERO", prompt, "the prompt only asks")
+        refresh = m["gcode_macro YUMI_MESH_REFRESH"]
+        self.assertLess(refresh.index("BED_SCAN_ZERO"), refresh.index("BED_MESH_CALIBRATE"))
+        end = m["gcode_macro PRINT_END"]
+        self.assertLess(end.index("M84"), end.index("_YUMI_MESH_REFRESH_PROMPT"), "proposed once parked and off")
         self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=0", m["gcode_macro BED_MESH_CALIBRATE"])
 
 
