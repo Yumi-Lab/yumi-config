@@ -186,7 +186,7 @@ class MachineMacro(unittest.TestCase):
     def test_size_dependent_macros_read_the_single_macro(self):
         cfg = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
         for name in ("gcode_macro PRINT_START", "gcode_macro SCREWS_TILT_CALCULATE",
-                     "gcode_macro CANCEL_PRINT", "gcode_macro WIPE_NOZZLE", "gcode_macro _YUMI_WELCOME"):
+                     "gcode_macro _YUMI_POP_TOOL", "gcode_macro WIPE_NOZZLE", "gcode_macro _YUMI_WELCOME"):
             self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', cfg[name], name)
         self.assertIn("_YUMI_MACHINE", cfg["delayed_gcode welcome"])
 
@@ -379,31 +379,65 @@ class MacrosMatchHardware(unittest.TestCase):
 class ParkPositions(unittest.TestCase):
     """Every park position of the macros fits the machine's X axis (Orca: bed+7 approach, bed+20 pop tool)."""
 
-    def test_cancel_print_parks_inside_the_axis(self):
+    def test_pop_tool_is_inside_the_axis_on_every_size(self):
+        """One pop-tool macro for every park (PRINT_END, CANCEL_PRINT, tool change): its offsets fit every X axis."""
         import re as _re
         for mid, comp in generator.machines_of(CATALOG, "SMART_MAKER_1X"):
             cfg = generator.generate("%s_DD_LW_04" % mid, catalog=CATALOG)
             x_max = float(comp["stepper_x"]["position_max"])
-            body = macros(cfg)["gcode_macro CANCEL_PRINT"]
-            offsets = [float(o) for o in _re.findall(r"G1 X\{bed_size \+ ([0-9.]+)\}", body)]
-            self.assertTrue(offsets, "no bed-relative park move in CANCEL_PRINT")
-            for off in offsets:
-                self.assertLessEqual(comp["bed_size"] + off, x_max, "%s: bed+%g beyond X max %g" % (mid, off, x_max))
+            m = macros(cfg)
+            pop = m["gcode_macro _YUMI_POP_TOOL"]
+            offsets = {k: float(v) for k, v in _re.findall(r"variable_(approach_dx|pop_dx): ([0-9.]+)", pop)}
+            self.assertEqual(set(offsets), {"approach_dx", "pop_dx"})
+            for k, off in offsets.items():
+                self.assertLessEqual(comp["bed_size"] + off, x_max, "%s: %s bed+%g beyond X max %g" % (mid, k, off, x_max))
+            self.assertIn("G1 X{bed_size + approach_dx}", pop)
+            self.assertIn("G1 X{bed_size + pop_dx}", pop)
+            for user in ("gcode_macro _YUMI_LEAVE_PART_AND_UNLOAD",):
+                self.assertIn("_YUMI_POP_TOOL", m[user])
+            self.assertNotIn("bed_size + 20", m["gcode_macro CANCEL_PRINT"], "park position hard-coded outside _YUMI_POP_TOOL")
 
 
 class CancelSequence(unittest.TestCase):
     """Cancel leaves the part at once: lift and travel before the slow shaping retract, moves guarded when unhomed."""
 
     def test_lift_and_park_come_before_the_tip_unload(self):
-        body = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
-        first, lift, park, unload = body.index("G1 E-{tip.first_len}"), body.index("G1 Z+{dz}"), body.index("G1 X{bed_size + 20}"), body.index("YUMI_UNLOAD_TIP SKIP_FIRST=1")
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        body = m["gcode_macro _YUMI_LEAVE_PART_AND_UNLOAD"]
+        first, lift, park, unload = body.index("G1 E-{tip.first_len}"), body.index("G1 Z+{dz}"), body.index("_YUMI_POP_TOOL"), body.index("YUMI_UNLOAD_TIP SKIP_FIRST=1")
         self.assertLess(first, lift)
         self.assertLess(lift, park)
         self.assertLess(park, unload)
         self.assertIn('"xyz" in printer.toolhead.homed_axes', body)
         self.assertLess(body.index("homed_axes"), lift)
-        self.assertLess(unload, body.index("TURN_OFF_HEATERS"))
         self.assertIn("M83", body)
+        # both callers: unload while hot, heaters off afterwards, state back to idle
+        for name in ("gcode_macro CANCEL_PRINT", "gcode_macro PRINT_END"):
+            caller = m[name]
+            self.assertLess(caller.index("_YUMI_LEAVE_PART_AND_UNLOAD"), caller.index("TURN_OFF_HEATERS"), name)
+            self.assertIn("SAVE_VARIABLE VARIABLE=printing_start VALUE=False", caller, name)
+            self.assertIn("SAVE_VARIABLE VARIABLE=was_interrupted VALUE=False", caller, name)
+            self.assertFalse(re.search(r"^\s*(M104|M109) S0", caller, re.M), "%s: heaters off only through TURN_OFF_HEATERS, after the unload" % name)
+
+    def test_print_end_is_the_whole_end_gcode(self):
+        """The slicer end block is exactly PRINT_END: no hard-coded retract lengths, no park
+        coordinates, PLR cleared here (guarded: plr.cfg is an include, not the trunk)."""
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        end = m["gcode_macro PRINT_END"]
+        self.assertFalse(re.search(r"G1 E-\d", end), "retract lengths live in _YUMI_TIP")
+        self.assertNotIn("G0 X", end)
+        self.assertIn('"gcode_macro clear_last_file" in printer', end)
+        self.assertIn("clear_plr", end)
+        self.assertLess(end.index("TURN_OFF_HEATERS"), end.index("M84"))
+
+    def test_print_start_owns_the_print_state(self):
+        """printing_start and the PLR arming are machine state: set by PRINT_START once the
+        profile guard passed, never by the slicer block."""
+        start = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
+        self.assertIn("SAVE_VARIABLE VARIABLE=printing_start VALUE=True", start)
+        self.assertIn("SAVE_VARIABLE VARIABLE=was_interrupted VALUE=True", start)
+        self.assertIn('"gcode_macro save_last_file" in printer', start)
+        self.assertLess(start.index("CANCEL_PRINT_DEFAULT"), start.index("printing_start VALUE=True"), "state set only when the guard passed")
 
     def test_tip_sequence_is_one_source(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))

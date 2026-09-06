@@ -117,6 +117,25 @@ Notes :
 
 ## 2. Machine end G-Code
 
+**Contract agreed with the Orca fork session on 2026-09-06 (trunk `feat/generator-common-layer`):
+the end block is exactly one line, `PRINT_END`.** The machine owns the sequence: off the part
+(short retract, lift), pop tool (`_YUMI_POP_TOOL`: bed+7 then bed+20, Y max), tip-shaping unload
+until the head switch releases (`YUMI_UNLOAD_TIP` + `YUMI_UNLOAD_CHECK`, nozzle still hot),
+then heaters and fans off, `printing_start`/`was_interrupted` back to false, PLR cleared, motors
+off. The block below is the previous one: its inline retracts (E-7/E-10/E-20/E-110), park
+coordinates, `SAVE_VARIABLE`, `G31`, `clear_last_file` duplicate machine business and left the
+filament at the head switch between two prints. Transition for pads not yet on the trunk: the
+block may keep a 3 mm retract, a lift and the pop-tool park before `PRINT_END` (no heater
+command); the trunk `PRINT_END` tolerates entering already parked and retracted.
+
+`PRINT_START` on the trunk sets `printing_start`/`was_interrupted` and arms PLR itself once the
+profile guard passed; the same lines in the start block below are redundant and will be dropped
+with the next block revision. The colour-change block will become one line as well,
+`YUMI_TOOL_CHANGE TOOL=[next_extruder] TEMP=[new_filament_temp] FLUSH={flush_length}` (macro in
+progress on the trunk; until then call `YUMI_UNLOAD_TIP` and `T[next]`, which already loads to
+the head, instead of fixed E lengths).
+
+
 ```gcode
 ;;;;;;;;;;;;;;;;;;;;;;;;;END G-CODE;;;;;;;;;;;;;;;;;;;;;;;;
 M220 S100 ;Set the feed speed to 100%
