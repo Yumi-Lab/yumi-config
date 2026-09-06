@@ -80,6 +80,38 @@ class HeadSensor(unittest.TestCase):
             self.assertIsNone(prefs.head_sensor_state())
 
 
+class Cutter(unittest.TestCase):
+    """The filament cutter bypass: a saved variable read by CUT_FILAMENT at every call, switched
+    from the panel or YUMI_SETUP CUTTER=, live during a print, without touching the G-code."""
+
+    def test_state_and_bypass_go_through_moonraker(self):
+        import io, json as _json
+        from unittest import mock
+        payload = _json.dumps({"result": {"status": {
+            "save_variables": {"variables": {"cut_filament_bypass": 1}},
+            "configfile": {"settings": {"gcode_macro cut_filament": {}}}}}}).encode()
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(payload)
+            self.assertEqual(prefs.cutter_state(), {"bypass": True})
+        no_cutter = _json.dumps({"result": {"status": {"save_variables": {"variables": {}}, "configfile": {"settings": {}}}}}).encode()
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(no_cutter)
+            self.assertIsNone(prefs.cutter_state(), "no CUT_FILAMENT in this cfg: no row")
+        with mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(b'{"result": "ok"}')
+            self.assertTrue(prefs.set_cutter_bypass(True))
+            self.assertIn("SET_CUT_FILAMENT_BYPASS%20ENABLE%3D1", uo.call_args[0][0].full_url)
+
+    def test_yumi_setup_cutter_key(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(prefs, "set_cutter_bypass") as bypass:
+                changed = prefs.apply_settings(CATALOG, d, {"CUTTER": "0"})
+            self.assertEqual(changed, {"cutter": "bypassed"})
+            bypass.assert_called_once_with(True)
+            self.assertEqual(prefs.load_prefs(CATALOG, d), {}, "a cutter switch writes no preference file")
+
+
 class Setup(unittest.TestCase):
     """YUMI_SETUP / prefs.py --set: one line, ids or slicer labels, same prefs file as the panel."""
 

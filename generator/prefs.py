@@ -132,6 +132,10 @@ HEAD_SENSOR_OBJECT = "yumi_filament_head"
 # YUMI_SETUP / CLI keys -> selection layers
 SETUP_KEYS = {"HEAD": "hotend", "HOTEND": "hotend_type", "NOZZLE": "nozzle", "MACHINE": MACHINE_LAYER}
 HEAD_SENSOR_BYPASS_CMD = "SET_HEAD_SENSOR_BYPASS ENABLE=%d"
+# filament cutter: CUT_FILAMENT reads this saved variable at every call (1 = skipped); the
+# slicer G-code keeps calling it, the printer decides, live during a print
+CUTTER_BYPASS_VARIABLE = "cut_filament_bypass"
+CUTTER_BYPASS_CMD = "SET_CUT_FILAMENT_BYPASS ENABLE=%d"
 
 
 def head_sensor_state():
@@ -156,6 +160,29 @@ def set_head_sensor_bypass(enable):
         return json.load(r).get("result") == "ok"
 
 
+def cutter_state():
+    """{'bypass': bool} from the saved variables through Moonraker, None if unavailable (Klipper
+    down) or when this cfg has no CUT_FILAMENT macro."""
+    try:
+        url = "%s/printer/objects/query?save_variables&configfile=settings" % autoconfig.MOONRAKER
+        with urllib.request.urlopen(url, timeout=5) as r:
+            st = json.load(r)["result"]["status"]
+    except Exception:
+        return None
+    if "gcode_macro cut_filament" not in (st.get("configfile") or {}).get("settings", {}):
+        return None
+    variables = (st.get("save_variables") or {}).get("variables") or {}
+    return {"bypass": int(variables.get(CUTTER_BYPASS_VARIABLE, 0) or 0) == 1}
+
+
+def set_cutter_bypass(enable):
+    """Skip every CUT_FILAMENT call (1) or restore the cut (0); persisted by Klipper."""
+    script = urllib.parse.quote(CUTTER_BYPASS_CMD % (1 if enable else 0))
+    req = urllib.request.Request("%s/printer/gcode/script?script=%s" % (autoconfig.MOONRAKER, script), method="POST")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r).get("result") == "ok"
+
+
 def resolve_option(catalog, layer, text):
     """The component of a layer named by its id, its name or its slicer label, case-insensitive
     ("CHROMAX_X12", "ChromaX12", "chromax x12" all work). None if nothing matches."""
@@ -170,8 +197,8 @@ def resolve_option(catalog, layer, text):
 
 
 def apply_settings(catalog, config_dir, settings):
-    """One line of KEY=VALUE (YUMI_SETUP HEAD=... HOTEND=... NOZZLE=... MACHINE=... HEAD_SENSOR=0|1):
-    writes the preferences (and the head sensor bypass through Klipper). Returns what changed."""
+    """One line of KEY=VALUE (YUMI_SETUP HEAD=... HOTEND=... NOZZLE=... MACHINE=... HEAD_SENSOR=0|1 CUTTER=0|1):
+    writes the preferences (and the head sensor / cutter bypass through Klipper). Returns what changed."""
     prefs = load_prefs(catalog, config_dir)
     changed, errors = {}, []
     for key, value in settings.items():
@@ -180,6 +207,10 @@ def apply_settings(catalog, config_dir, settings):
             enabled = str(value).strip().lower() in ("1", "true", "on", "enabled", "yes")
             set_head_sensor_bypass(not enabled)
             changed["head_sensor"] = "enabled" if enabled else "bypassed"
+        elif key == "CUTTER":
+            enabled = str(value).strip().lower() in ("1", "true", "on", "enabled", "yes")
+            set_cutter_bypass(not enabled)
+            changed["cutter"] = "enabled" if enabled else "bypassed"
         elif key in SETUP_KEYS:
             layer = SETUP_KEYS[key]
             cid = resolve_option(catalog, layer, value)
@@ -190,10 +221,10 @@ def apply_settings(catalog, config_dir, settings):
                 prefs[layer] = cid
                 changed[layer] = cid
         else:
-            errors.append("%s: unknown setting (HEAD, HOTEND, NOZZLE, MACHINE, HEAD_SENSOR)" % key)
+            errors.append("%s: unknown setting (HEAD, HOTEND, NOZZLE, MACHINE, HEAD_SENSOR, CUTTER)" % key)
     if errors:
         raise ValueError("; ".join(errors))
-    if any(k != "head_sensor" for k in changed):
+    if any(k not in ("head_sensor", "cutter") for k in changed):
         save_prefs(catalog, config_dir, prefs)
     return changed
 
@@ -244,7 +275,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="Declare the machine's configuration (what the Printer Config panel does)")
     ap.add_argument("--set", nargs="+", metavar="KEY=VALUE", default=[],
-                    help="HEAD= HOTEND= NOZZLE= MACHINE= HEAD_SENSOR=0|1 (ids, names or slicer labels)")
+                    help="HEAD= HOTEND= NOZZLE= MACHINE= HEAD_SENSOR=0|1 CUTTER=0|1 (ids, names or slicer labels)")
     ap.add_argument("--apply", action="store_true", help="restart Klipper through Moonraker: printer.cfg is regenerated")
     ap.add_argument("--config-dir", default=str(compose.DEFAULT_CONFIG_DIR))
     a = ap.parse_args()

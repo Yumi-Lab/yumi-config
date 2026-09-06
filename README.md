@@ -93,6 +93,14 @@ parameter, the status fields — right above its section (`generator.module_doc`
 `DOCUMENTED_MODULES`, part of the recipe hash). A test fails when an option or command read by
 the module is missing from its header.
 
+**Filament cutter.** `CUT_FILAMENT` (every head, every size) travels to `approach_offset` mm before
+the configured X minimum, pushes slowly to that minimum (the cutter lever, far left) and comes
+back; nothing else (no E move, no heating: the slicer G-code places Y/Z before and retracts
+after). Geometry and speeds in `_YUMI_CUTTER`. The saved variable `cut_filament_bypass` (1 =
+`CUT_FILAMENT` does nothing) is switched live, during a print, from the Printer Config panel
+("Filament cutter" row), `YUMI_SETUP CUTTER=0|1` or `SET_CUT_FILAMENT_BYPASS ENABLE=`, so the
+G-code never changes.
+
 ### Wizard — KlipperScreen "Printer Config" (`cfg_wizard.py`, logic in `prefs.py`)
 
 From the last scan: a **Yumi machine** is recognised → choose the print head, hotend type and

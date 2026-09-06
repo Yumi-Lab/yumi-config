@@ -338,6 +338,17 @@ class Cutter(unittest.TestCase):
             self.assertLess(speeds["cut_speed"], speeds["release_speed"])
             self.assertLessEqual(speeds["cut_speed"], 600, "the cut is a slow push")
 
+    def test_bypass_variable_skips_the_cut_before_any_move(self):
+        """cut_filament_bypass = 1 (panel, YUMI_SETUP CUTTER=0, SET_CUT_FILAMENT_BYPASS) makes
+        CUT_FILAMENT a no-op: the slicer G-code keeps calling it, the printer decides, live."""
+        m = macros(generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG))
+        cut = m["gcode_macro CUT_FILAMENT"].split("gcode:", 1)[1]
+        self.assertIn("cut_filament_bypass|default(0)|int == 1", cut)
+        self.assertLess(cut.index("cut_filament_bypass"), cut.index("G1 X"), "checked before any motion")
+        self.assertLess(cut.index("cut_filament_bypass"), cut.index("homed_axes"), "a bypassed cut needs no homing")
+        setter = m["gcode_macro SET_CUT_FILAMENT_BYPASS"]
+        self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
+
 
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it

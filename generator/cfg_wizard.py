@@ -84,6 +84,9 @@ class Panel(ScreenPanel):
         head = wizard.head_sensor_state()
         if head is not None:
             box.pack_start(self._head_sensor_row(head), False, False, 0)
+        cutter = wizard.cutter_state()
+        if cutter is not None:
+            box.pack_start(self._cutter_row(cutter), False, False, 0)
 
         footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         footer.set_valign(Gtk.Align.END)
@@ -132,6 +135,27 @@ class Panel(ScreenPanel):
         if state:
             row.pack_start(self._label(state, small=True), False, False, 0)
         return row
+
+    def _cutter_row(self, cutter):
+        """Filament cutter: CUT_FILAMENT called by the slicer G-code is skipped while bypassed —
+        switchable live during a print, the G-code does not change."""
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        name = self._label("Filament cutter")
+        name.set_size_request(150, -1)
+        row.pack_start(name, False, False, 0)
+        for enable, label in ((False, "Enabled"), (True, "Bypassed")):
+            btn = self._gtk.Button(None, label, "color1" if cutter["bypass"] == enable else None)
+            btn.connect("clicked", self._on_cutter, enable)
+            row.pack_start(btn, True, True, 0)
+        return row
+
+    def _on_cutter(self, widget, enable):
+        try:
+            wizard.set_cutter_bypass(enable)
+        except Exception as e:
+            logger.error("cfg_wizard: cutter bypass: %s", e)
+            self._screen.show_popup_message("Cannot change the cutter setting: %s" % e, level=3)
+        self._build()
 
     def _on_head_sensor(self, widget, enable):
         try:
