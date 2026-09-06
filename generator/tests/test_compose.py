@@ -223,6 +223,30 @@ class Build(unittest.TestCase):
         self.assertEqual(state["recipe"], "new-recipe")
 
 
+class WizardHead(unittest.TestCase):
+    """Choosing another head in the wizard regenerates the cfg even though no board changed."""
+
+    def test_head_change_regenerates_and_keeps_calibrations(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "CHROMAX_X12"})
+            self.assertEqual(summary["product"], "C235_CX12_LW_04_2YMS")
+            cfg = (d / "printer.cfg").read_text()
+            (d / "printer.cfg").write_text(cfg.rstrip("\n") + "\n#*# [probe]\n#*# z_offset = 1.234\n")
+            # same choice again: untouched
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "CHROMAX_X12"})
+            self.assertEqual(code, compose.EXIT_UNCHANGED)
+            # the operator mounts a direct drive and says so in the wizard
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "DIRECT_DRIVE"})
+            self.assertEqual(code, compose.EXIT_APPLIED)
+            self.assertEqual(summary["product"], "C235_DD_LW_04")
+            self.assertEqual(summary["mode"], "preserve")
+            self.assertTrue(any("choice changed" in r for r in summary["reasons"]))
+            new = (d / "printer.cfg").read_text()
+            self.assertIn("z_offset = 1.234", new)
+            self.assertIn('variable_head: "Direct Drive"', new)
+
+
 class WizardMachine(unittest.TestCase):
     """The boards name no machine: the wizard does (prefs "machine")."""
 

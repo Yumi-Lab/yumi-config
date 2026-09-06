@@ -267,12 +267,17 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     recorded = state.get("composition")
     same_boards = recorded is not None and hardware_fingerprint(recorded) == hardware_fingerprint(composition)
     same_recipe = state.get("recipe") == recipe_hash()
-    if not factory and not minimal and current is not None and same_boards and same_recipe:
+    # the wizard changes the head / hotend / nozzle without touching a board: a new product is a change
+    same_product = state.get("chain") == sel["chain"]
+    if not factory and not minimal and current is not None and same_boards and same_recipe and same_product:
         summary["mode"] = "unchanged"
         summary["reasons"].append("same boards as recorded on %s: printer.cfg left untouched" % state.get("ts"))
         return EXIT_UNCHANGED, summary, None
     if same_boards and not same_recipe and state.get("recipe"):
         summary["reasons"].append("catalog/generator changed since %s: printer.cfg regenerated" % state.get("ts"))
+    if same_boards and not same_product and state.get("chain"):
+        summary["reasons"].append("head/hotend/nozzle choice changed (%s -> %s): printer.cfg regenerated"
+                                  % (state.get("product"), sel["product"]))
 
     if sel["alert"]:
         summary["mode"] = "alert"
