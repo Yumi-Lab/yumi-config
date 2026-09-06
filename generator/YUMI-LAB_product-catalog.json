@@ -259,12 +259,17 @@
         "max_extrude_cross_section": 40,
         "min_extrude_temp": 0,
         "pressure_advance": 0,
+        "pressure_advance_smooth_time": 0.04,
+        "lead_time": 0.03,
         "control": "pid",
         "_comments": {
           "rotation_distance": "before 33.500 #rotation_distance: 22.6789511 #Bondtech 5mm Drive Gears",
           "gear_ratio": "TITAN Gear Ratio 3:1 ,  BMG Raatio 50:17",
           "full_steps_per_rotation": "200 for 1.8 degree, 400 for 0.9 degree",
-          "sensor_type": "EPCOS 100K B57560G104F #ATC Semitec 104GT-2"
+          "sensor_type": "EPCOS 100K B57560G104F #ATC Semitec 104GT-2",
+          "pressure_advance": "0 volontaire : le PA module l'amplitude (surepaisseurs aux angles, motion extrudeur pollue pour la detection YMS)",
+          "pressure_advance_smooth_time": "bas pour garder le pic de retract lisible par les encodeurs YMS",
+          "lead_time": "fork Yumi-Lab/klipper : decalage temporel du trapq extrudeur (depressurisation anticipee), valide en impression 06/2026 avec PA 0 + smooth 0.04"
         },
         "_notes": [
           "max_extrude_only_accel: 10000",

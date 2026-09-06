@@ -324,6 +324,17 @@ class CancelSequence(unittest.TestCase):
         self.assertLess(long, body.index("TURN_OFF_HEATERS"))
 
 
+class LeadTime(unittest.TestCase):
+    """The validated extrusion tuning is generated: PA 0, smooth 0.04, lead 0.03 (fork option)."""
+
+    def test_extruder_carries_the_lead_time_tuning(self):
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS"):
+            ext = parse(generator.generate(product, catalog=CATALOG))["extruder"]
+            self.assertEqual(norm(ext["pressure_advance"]), 0)
+            self.assertEqual(norm(ext["pressure_advance_smooth_time"]), 0.04)
+            self.assertEqual(norm(ext["lead_time"]), 0.03)
+
+
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
