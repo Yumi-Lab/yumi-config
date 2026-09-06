@@ -137,6 +137,9 @@ class QCReference(unittest.TestCase):
         ("extruder", "enable_pin"): "same",
         ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
         ("autotune_tmc stepper_y", "motor"): "same",
+        ("yumi_sensorless_homing", "run_sgthrs_y"): "QC still re-applies 150 after the home; the trunk sets 0: re-applied "
+                                                    "on aborted homes too, it poisoned the register and looped on "
+                                                    "'aucun contact' (C235 06/09, sensorless-homing journal test 8)",
     }
 
     def _compare(self, machine):
