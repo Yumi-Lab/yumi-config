@@ -246,12 +246,30 @@ class SlicerProfileGuard(unittest.TestCase):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
         self.assertIn("params.BED_X", m)
         self.assertIn('MSG="File sliced for {what}. Please re-slice with the {machine.model} profile."', m)
+        self.assertNotIn("matches", m)          # silent when the profile is right
+        self.assertNotIn("M106 S140 P3", m)     # the motherboard fan is automatic (controller_fan)
         self.assertIn("CANCEL_PRINT_DEFAULT", m)
         self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', m)
         # the check comes before the actions of the macro, and the cancel is Klipper's own (no motion)
-        self.assertLess(m.index("CANCEL_PRINT_DEFAULT"), m.index("M106 S140 P3"))
+        self.assertLess(m.index("CANCEL_PRINT_DEFAULT"), m.index("G92 E0"))
         cancel = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
         self.assertIn("rename_existing: CANCEL_PRINT_DEFAULT", cancel)
+
+
+class MacrosMatchHardware(unittest.TestCase):
+    """A macro may only drive fans that exist as fan_generic; tools exist on every head."""
+
+    def test_set_fan_speed_targets_are_fan_generic(self):
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS"):
+            cfg = generator.generate(product, catalog=CATALOG)
+            fans = {s.split(" ", 1)[1] for s in parse(cfg) if s.startswith("fan_generic ")}
+            targets = set(re.findall(r"SET_FAN_SPEED FAN=(\w+)", cfg))
+            self.assertTrue(targets <= fans, "%s: SET_FAN_SPEED on non fan_generic %s" % (product, targets - fans))
+
+    def test_t0_exists_once_on_every_head(self):
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS"):
+            cfg = generator.generate(product, catalog=CATALOG)
+            self.assertEqual(cfg.count("[gcode_macro T0]"), 1, product)
 
 
 class Comments(unittest.TestCase):

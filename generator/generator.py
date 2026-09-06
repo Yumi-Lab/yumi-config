@@ -141,6 +141,8 @@ def check_condition(condition, product):
         return product.get("features", {}).get(feat, False)
     if condition == "yms_count > 0":
         return product.get("yms_count", 0) > 0
+    if condition == "yms_count == 0":
+        return product.get("yms_count", 0) == 0
     if condition == "has_dryer":
         return product.get("has_dryer", False)
     if condition == "has_smartbox":
