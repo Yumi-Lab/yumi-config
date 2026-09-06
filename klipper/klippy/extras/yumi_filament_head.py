@@ -2,12 +2,12 @@
 #
 # The Yumi heads carry a filament switch at the inlet (PA8). Feeding is blind otherwise: a
 # print started with an empty head, or a colour change that never reached the nozzle, prints
-# air. This module owns that pin as an ENDSTOP (queried, with pull-up) and feeds the extruder
-# queue (extruder + synced feeders) in short steps, reading the switch after each one — the
-# factory QC procedure. Synchronous for the caller: a tool macro or a start g-code blocks until
-# the filament is really there. A continuous homing move (MCU trsync on the switch) was tried
-# first and failed 4/4 on the bench while the stepped feed detected at the first attempt; the
-# overshoot past the switch is at most one `step`.
+# air. This module reads that pin through Klipper's buttons module (debounced, live state) and
+# feeds the extruder queue (extruder + synced feeders) in short steps, reading the switch after
+# each one — the factory QC procedure. Synchronous for the caller: a tool macro or a start
+# g-code blocks until the filament is really there. A continuous homing move (MCU trsync on the
+# switch) was tried first and failed 4/4 on the bench while the stepped feed detected at the
+# first attempt; the overshoot past the switch is at most one `step`.
 #
 #   YUMI_LOAD_TO_HEAD  [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
 #       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
@@ -25,7 +25,7 @@
 #   QUERY_HEAD_SENSOR
 #
 # Options ([yumi_filament_head], values in the printer.cfg generator's catalog):
-#   pin               the head switch, wired as an endstop pin (^!PA8: pull-up, the line floats otherwise)
+#   pin               the head switch (^!PA8: pull-up, the line floats otherwise; ! = filament pulls it low)
 #   speed             mm/s of the load steps (default 16.7, the QC feed rate)
 #   step              mm fed between two readings of the switch = maximum overshoot (default 20)
 #   max_load          mm fed at most before "no filament at the head" is raised (default 800)
@@ -35,7 +35,8 @@
 #   blind_load        mm fed when the sensor is bypassed; 0 = the unload total of _YUMI_TIP (default 0)
 #   min_temp          degC the hotend must have reached before head_to_nozzle is fed (default 170)
 #   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
-# Status (printer.yumi_filament_head): loaded_mm, present (None = unknown or bypassed), bypass.
+# Status (printer.yumi_filament_head): present (live switch state, usable in macros: e.g. cut and
+# pull the previous filament before loading another tool), loaded_mm (last load), bypass.
 import logging
 
 
@@ -43,8 +44,9 @@ class YumiFilamentHead:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
-        ppins = self.printer.lookup_object('pins')
-        self.mcu_endstop = ppins.setup_pin('endstop', config.get('pin'))
+        buttons = self.printer.load_object(config, 'buttons')
+        buttons.register_buttons([config.get('pin')], self._button_handler)
+        self.present = False
         self.speed = config.getfloat('speed', 16.7, above=0.)               # mm/s, feed steps
         self.step = config.getfloat('step', 20., above=0.)                  # mm between two readings
         self.max_load = config.getfloat('max_load', 800., above=0.)
@@ -55,7 +57,7 @@ class YumiFilamentHead:
         self.min_temp = config.getfloat('min_temp', 170., minval=0.)
         self.bypass_variable = config.get('bypass_variable', 'head_sensor_bypass')
         self.bypass = False
-        self.last = {"loaded_mm": 0., "present": None}
+        self.loaded_mm = 0.
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         for name, func in (("YUMI_LOAD_TO_HEAD", self.cmd_LOAD), ("YUMI_UNLOAD_CHECK", self.cmd_UNLOAD_CHECK),
                            ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY)):
@@ -69,18 +71,20 @@ class YumiFilamentHead:
         if self.bypass:
             logging.warning("yumi_filament_head: head sensor BYPASSED (saved variable %s)", self.bypass_variable)
 
+    def _button_handler(self, eventtime, state):
+        self.present = bool(state)
+
     def _present(self):
-        toolhead = self.printer.lookup_object('toolhead')
-        return bool(self.mcu_endstop.query_endstop(toolhead.get_last_move_time()))
+        """The switch state once the queued moves are done and the MCU had time to report it.
+        No MCU query from here (get_status is polled from the reactor's main context, where an
+        awaited MCU answer took Klipper down on 06/09): the buttons module pushes the state."""
+        self.printer.lookup_object('toolhead').wait_moves()
+        reactor = self.printer.get_reactor()
+        reactor.pause(reactor.monotonic() + 0.1)
+        return self.present
 
     def get_status(self, eventtime):
-        # NEVER query the MCU here: get_status runs in the reactor's main context (Moonraker,
-        # KlipperScreen polls) where waiting for an MCU response is not allowed — the answer
-        # arriving asynchronously took Klipper down ("'NoneType' object has no attribute
-        # 'timer_is_running'"). The presence is the one seen by the last command.
-        st = dict(self.last)
-        st["bypass"] = self.bypass
-        return st
+        return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass}
 
     # ── moves ──────────────────────────────────────────────────────────
     def _stepped_feed(self, direction, max_mm, step, speed, want_present):
@@ -138,7 +142,6 @@ class YumiFilamentHead:
         elif self._present():
             gcmd.respond_info("filament already at the head")
             fed = 0.
-            self.last["present"] = True
         else:
             try:
                 fed = self._stepped_feed(+1, max_load, step, speed, True)
@@ -148,14 +151,13 @@ class YumiFilamentHead:
                                      "(SET_HEAD_SENSOR_BYPASS ENABLE=1 if the sensor is broken)" % max_load)
                 raise
             gcmd.respond_info("filament reached the head after %.0f mm" % fed)
-            self.last["present"] = True
         if to_nozzle > 0:
             temp = self._hotend_temp()
             if temp is not None and temp < self.min_temp:
                 raise gcmd.error("Hotend at %.0fC: heat above %.0fC before loading to the nozzle" % (temp, self.min_temp))
             self._move_e(to_nozzle, self.nozzle_speed)
             fed += to_nozzle
-        self.last = {"loaded_mm": fed, "present": None if self.bypass else True}
+        self.loaded_mm = fed
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     def cmd_UNLOAD_CHECK(self, gcmd):
@@ -167,7 +169,7 @@ class YumiFilamentHead:
             return
         if not self._present():
             gcmd.respond_info("filament out of the head")
-            self.last = {"loaded_mm": 0., "present": False}
+            self.loaded_mm = 0.
             return
         try:
             fed = self._stepped_feed(-1, max_extra, step, self.speed, False)
@@ -175,7 +177,7 @@ class YumiFilamentHead:
             if "No trigger" in str(e):
                 raise gcmd.error("Filament still at the head after %.0f mm more of retraction: unload failed" % max_extra)
             raise
-        self.last = {"loaded_mm": fed, "present": False}
+        self.loaded_mm = 0.
         gcmd.respond_info("filament out of the head after %.0f mm more" % -fed)
 
     def cmd_BYPASS(self, gcmd):
@@ -189,7 +191,6 @@ class YumiFilamentHead:
     def cmd_QUERY(self, gcmd):
         """State of the head sensor"""
         present = self._present()
-        self.last["present"] = present
         gcmd.respond_info("head sensor: %s%s" % ("filament present" if present else "no filament",
                                                  " (BYPASSED)" if self.bypass else ""))
 
