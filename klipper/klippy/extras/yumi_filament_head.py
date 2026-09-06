@@ -42,7 +42,7 @@ class YumiFilamentHead:
         self.min_temp = config.getfloat('min_temp', 170., minval=0.)
         self.bypass_variable = config.get('bypass_variable', 'head_sensor_bypass')
         self.bypass = False
-        self.last = {"loaded_mm": 0.}
+        self.last = {"loaded_mm": 0., "present": None}
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         for name, func in (("YUMI_LOAD_TO_HEAD", self.cmd_LOAD), ("YUMI_UNLOAD_CHECK", self.cmd_UNLOAD_CHECK),
                            ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY)):
@@ -61,12 +61,12 @@ class YumiFilamentHead:
         return bool(self.mcu_endstop.query_endstop(toolhead.get_last_move_time()))
 
     def get_status(self, eventtime):
+        # NEVER query the MCU here: get_status runs in the reactor's main context (Moonraker,
+        # KlipperScreen polls) where waiting for an MCU response is not allowed — the answer
+        # arriving asynchronously took Klipper down ("'NoneType' object has no attribute
+        # 'timer_is_running'"). The presence is the one seen by the last command.
         st = dict(self.last)
         st["bypass"] = self.bypass
-        try:
-            st["present"] = self._present()
-        except Exception:
-            st["present"] = None
         return st
 
     # ── moves ──────────────────────────────────────────────────────────
@@ -160,6 +160,7 @@ class YumiFilamentHead:
         elif self._present():
             gcmd.respond_info("filament already at the head")
             fed = 0.
+            self.last["present"] = True
         else:
             try:
                 fed = self._homing_feed(max_load, speed, True, "YUMI_LOAD_TO_HEAD")
@@ -169,13 +170,14 @@ class YumiFilamentHead:
                                      "(SET_HEAD_SENSOR_BYPASS ENABLE=1 if the sensor is broken)" % max_load)
                 raise
             gcmd.respond_info("filament reached the head after %.0f mm" % fed)
+            self.last["present"] = True
         if to_nozzle > 0:
             temp = self._hotend_temp()
             if temp is not None and temp < self.min_temp:
                 raise gcmd.error("Hotend at %.0fC: heat above %.0fC before loading to the nozzle" % (temp, self.min_temp))
             self._move_e(to_nozzle, self.nozzle_speed)
             fed += to_nozzle
-        self.last = {"loaded_mm": fed}
+        self.last = {"loaded_mm": fed, "present": None if self.bypass else True}
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     def cmd_UNLOAD_CHECK(self, gcmd):
@@ -186,7 +188,7 @@ class YumiFilamentHead:
             return
         if not self._present():
             gcmd.respond_info("filament out of the head")
-            self.last = {"loaded_mm": 0.}
+            self.last = {"loaded_mm": 0., "present": False}
             return
         try:
             fed = self._homing_feed(-max_extra, self.speed, False, "YUMI_UNLOAD_CHECK")
@@ -194,7 +196,7 @@ class YumiFilamentHead:
             if "No trigger" in str(e):
                 raise gcmd.error("Filament still at the head after %.0f mm more of retraction: unload failed" % max_extra)
             raise
-        self.last = {"loaded_mm": fed}
+        self.last = {"loaded_mm": fed, "present": False}
         gcmd.respond_info("filament out of the head after %.0f mm more" % -fed)
 
     def cmd_BYPASS(self, gcmd):
@@ -207,7 +209,9 @@ class YumiFilamentHead:
 
     def cmd_QUERY(self, gcmd):
         """State of the head sensor"""
-        gcmd.respond_info("head sensor: %s%s" % ("filament present" if self._present() else "no filament",
+        present = self._present()
+        self.last["present"] = present
+        gcmd.respond_info("head sensor: %s%s" % ("filament present" if present else "no filament",
                                                  " (BYPASSED)" if self.bypass else ""))
 
 
