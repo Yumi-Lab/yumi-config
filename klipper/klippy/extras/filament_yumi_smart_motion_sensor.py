@@ -13,6 +13,25 @@
 # ticked for the last time. A time-based grace swallowed that move, the sensor stayed
 # "present" and a second insertion into the same YMS was never seen.
 #
+# Options ([filament_yumi_smart_motion_sensor <name>]):
+#   switch_pin                     encoder pin of the YMS
+#   extruder                       extruder whose travel is compared with the ticks (default extruder)
+#   detection_length               mm of extruder travel without a tick = filament absent (default 7)
+#   mode                           free (default): a tick = present, nothing more; hold: pitch analysis
+#   pitch_view                     echo every pitch in the console (default False)
+#   data_logging, log_file_path    CSV log of every tick (default False, /tmp/filament_sensor_log.csv)
+#   low_pitch_filter               mm; ticks closer than this are noise, left out of the pitch (default 0.015)
+#   blockage_detection             hold only: pause when the averaged pitch leaves [min_pitch, max_pitch] (default False)
+#   min_pitch, max_pitch           mm per tick considered normal (defaults 1.0, 2.4)
+#   blockage_threshold             abnormal windows in a row before the blockage is declared (default 2)
+#   reset_motion_sensor_threshold  normal windows that clear an anomaly, or re-arm after a pause (default 16)
+#   pitch_window                   ticks averaged per window (default 4)
+#   post_retract_skip              windows ignored after a travel / retraction artefact (default 2)
+#   retraction_min                 mm; smaller negative deltas are pressure-advance micro-retractions (default 0.1)
+#   pause_on_runout, runout_gcode, insert_gcode, event_delay, pause_delay  as Klipper's filament sensors
+# Commands: SET_FILAMENT_SENSOR SENSOR=<name> ENABLE=0|1, QUERY_FILAMENT_SENSOR SENSOR=<name>.
+# Status (printer["filament_yumi_smart_motion_sensor <name>"]): filament_detected, enabled.
+#
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 import csv

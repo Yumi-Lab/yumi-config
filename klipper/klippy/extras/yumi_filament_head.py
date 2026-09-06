@@ -22,7 +22,17 @@
 #       restarts; set from the Printer Config panel, YUMI_SETUP or the console.
 #   QUERY_HEAD_SENSOR
 #
-# Settings live in the printer.cfg generator's catalog ([yumi_filament_head]).
+# Options ([yumi_filament_head], values in the printer.cfg generator's catalog):
+#   pin               the head switch, wired as an endstop pin (e.g. !PA8)
+#   speed             mm/s of the continuous load move (default 40)
+#   max_load          mm fed at most before "no filament at the head" is raised (default 800)
+#   head_to_nozzle    mm from the switch to the nozzle, fed after the trigger (default 0)
+#   nozzle_speed      mm/s of that last stretch into the melt zone (default 5)
+#   max_unload_extra  mm pulled at most by YUMI_UNLOAD_CHECK while the switch still sees filament (default 200)
+#   blind_load        mm fed when the sensor is bypassed; 0 = the unload total of _YUMI_TIP (default 0)
+#   min_temp          degC the hotend must have reached before head_to_nozzle is fed (default 170)
+#   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
+# Status (printer.yumi_filament_head): loaded_mm, present (None = unknown or bypassed), bypass.
 import logging
 from . import homing
 

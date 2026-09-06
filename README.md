@@ -81,6 +81,13 @@ after first contact and saves the centre of their bounding box — synchronously
 `LOAD` → detection → scan → mesh → tap chain runs inside a start g-code without racing the print.
 Bench C235: 25 points on planes 0.4/0.3/0.2, plate centre (121.5, 209) in nozzle coordinates.
 
+The Klipper modules shipped by this repo (`klipper/klippy/extras/`: `[yumi_filament_head]`,
+`[yumi_bed_scan]`, `[filament_yumi_smart_motion_sensor …]`) document themselves in `printer.cfg`:
+the generator quotes each module's header — what it does, every option, every command and
+parameter, the status fields — right above its section (`generator.module_doc`, files listed in
+`DOCUMENTED_MODULES`, part of the recipe hash). A test fails when an option or command read by
+the module is missing from its header.
+
 ### Wizard — KlipperScreen "Printer Config" (`cfg_wizard.py`, logic in `prefs.py`)
 
 From the last scan: a **Yumi machine** is recognised → choose the print head, hotend type and

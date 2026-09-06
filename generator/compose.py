@@ -64,6 +64,8 @@ def recipe_hash():
     h = hashlib.sha256()
     for name in RECIPE_FILES:
         h.update((HERE / name).read_bytes())
+    for fname in generator.DOCUMENTED_MODULES.values():   # their headers are quoted in printer.cfg
+        h.update((generator.EXTRAS_DIR / fname).read_bytes())
     return h.hexdigest()[:16]
 
 

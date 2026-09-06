@@ -25,6 +25,21 @@
 # the printer.cfg generator's catalog; BED_SCAN_ZERO accepts the same names
 # as parameters (CENTER_X, CENTER_Y, RANGE_X, RANGE_Y, STEP_X, STEP_Y,
 # Z_CLEAR, Z_STEP, Z_FLOOR, PLANES).
+#
+# Options ([yumi_bed_scan], nozzle coordinates, values in the generator's catalog):
+#   center_dx, center_dy  scan centre = (bed/2 + center_dx, bed + center_dy) (defaults 8, -23)
+#   range_x, range_y      half-widths of the scanned window in mm (defaults 10, 8)
+#   step_x, step_y        grid pitch in mm (defaults 2, 2)
+#   z_clear               height of the first plane swept (default 0.6)
+#   z_step                descent between two planes (default 0.1)
+#   z_floor               lowest plane ever swept, nozzle frame (default 0.1)
+#   planes                planes kept after the first contact (default 3)
+#   speed, z_speed        XY and Z speeds of the sweep in mm/s (defaults 150, 10)
+#   lift                  Z clearance before an XY travel (default 5)
+#   accel                 acceleration during the sweep, restored afterwards (default 1000)
+# Command: BED_SCAN_ZERO [CENTER_X= CENTER_Y=] [RANGE_X= RANGE_Y=] [STEP_X= STEP_Y=] [Z_CLEAR=]
+#   [Z_STEP=] [Z_FLOOR=] [PLANES=] — homes, scans, saves bed_detect_x/y/z in save_variables.
+# Status (printer.yumi_bed_scan): found, x, y, z, points.
 import logging
 
 

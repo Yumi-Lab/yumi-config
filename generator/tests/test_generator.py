@@ -220,6 +220,52 @@ class BedMesh(unittest.TestCase):
         # startup stays passive: the welcome only loads a mesh that exists
         self.assertIn('"default" in printer.bed_mesh.profiles', m["gcode_macro _YUMI_WELCOME"])
 
+    def test_periodic_refresh_rescans_the_reference_and_rebuilds(self):
+        """Every refresh_every prints (20) the LOAD scans the metal reference again and rebuilds
+        the mesh; a fresh mesh (any BED_MESH_CALIBRATE) restarts the count."""
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        m = macros(cfg)
+        prof = m["gcode_macro BED_MESH_PROFILE"]
+        self.assertIn("variable_refresh_every: 20", prof)
+        self.assertIn("prints >= every", prof)
+        self.assertLess(prof.index("prints >= every"), prof.index("BED_SCAN_ZERO"),
+                        "the rescan belongs to the refresh branch only")
+        self.assertEqual(prof.count("BED_SCAN_ZERO"), 1)
+        self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE={prints + 1}", prof)
+        self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=0", m["gcode_macro BED_MESH_CALIBRATE"])
+
+
+class ModuleDocs(unittest.TestCase):
+    """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
+    does, every option, every command, the status fields — is emitted above its section, read
+    from the module file (one source). Nothing configurable may be missing from that header."""
+
+    INHERITED = {"filament_yumi_smart_motion_sensor": ("SET_FILAMENT_SENSOR", "QUERY_FILAMENT_SENSOR",
+                                                       "pause_on_runout", "runout_gcode", "insert_gcode")}
+
+    def test_every_option_command_and_parameter_is_in_the_header(self):
+        for section, fname in generator.DOCUMENTED_MODULES.items():
+            src = (generator.EXTRAS_DIR / fname).read_text(encoding="utf-8")
+            header = generator.module_doc(section)
+            options = set(re.findall(r"config\.get(?:float|int|boolean)?\(\s*'([a-z_]+)'", src))
+            commands = set(re.findall(r"register_(?:mux_)?command\(\s*'([A-Z_]+)'", src))
+            commands |= set(re.findall(r'\("([A-Z_]+)", self\.cmd_', src))
+            params = set(re.findall(r"gcmd\.get(?:_float|_int)?\(\s*'([A-Z_]+)'", src))
+            self.assertTrue(options, fname)
+            for name in options | commands | params | set(self.INHERITED.get(section, ())):
+                self.assertIn(name, header, "%s: %s is not documented in the module header" % (fname, name))
+
+    def test_header_sits_right_above_the_section(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        for section in generator.DOCUMENTED_MODULES:
+            doc = generator.module_doc(section)
+            self.assertIn(doc, cfg, section)
+            after = cfg[cfg.index(doc) + len(doc):].lstrip("\n")
+            self.assertTrue(after.startswith("[%s" % section), "%s: header not directly above its section" % section)
+        # direct drive: no YMS sensor, no smart sensor header either
+        dd = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        self.assertNotIn("filament_yumi_smart_motion_sensor", dd)
+
 
 class BedDetection(unittest.TestCase):
     """The metal reference is measured (BED_SCAN_ZERO), never guessed from the bed size."""

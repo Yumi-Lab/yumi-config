@@ -34,6 +34,31 @@ CATALOG_FILE = BASE_DIR / "YUMI-LAB_product-catalog.json"
 
 # Keys of a catalog dict that are documentation, not Klipper options.
 META_KEYS = {"_comment", "_comments", "_notes", "_status", "_TODO", "_doc"}
+
+# Klipper modules shipped by this repo (symlinked into klippy/extras by install.sh). Their
+# section in printer.cfg is preceded by the module's own header — what it does, every option,
+# every command, the status fields — read from the module file: one source, never a copy.
+EXTRAS_DIR = Path(__file__).resolve().parent.parent / "klipper" / "klippy" / "extras"
+DOCUMENTED_MODULES = {
+    "yumi_filament_head": "yumi_filament_head.py",
+    "yumi_bed_scan": "yumi_bed_scan.py",
+    "filament_yumi_smart_motion_sensor": "filament_yumi_smart_motion_sensor.py",
+}
+
+
+def module_doc(section):
+    """The leading comment block of a documented module, under a title line naming the file."""
+    fname = DOCUMENTED_MODULES[section]
+    header = []
+    for raw in (EXTRAS_DIR / fname).read_text(encoding="utf-8").splitlines():
+        if not raw.startswith("#"):
+            break
+        header.append(raw)
+    return "\n".join([f"# ═══ {section} — yumi-config/klipper/klippy/extras/{fname} ═══"] + header)
+
+
+def with_module_doc(section, block):
+    return f"{module_doc(section)}\n{block}" if block else block
 # Nested dicts rendered as their own Klipper section, never as an option of the parent.
 SUBSECTION_KEYS = {"tmc2209", "autotune"}
 # Keys carried by a merged component that describe the product, not a Klipper section.
@@ -228,7 +253,7 @@ def render_probe_pressure(p):
 
 def render_head_sensor(p):
     """[yumi_filament_head]: the head sensor pin (as an endstop) and the load/unload settings."""
-    return emit("yumi_filament_head", p.get('filament_head'))
+    return with_module_doc("yumi_filament_head", emit("yumi_filament_head", p.get('filament_head')))
 
 
 def render_sensorless_homing(p):
@@ -411,6 +436,8 @@ def render_extruder_steppers(p):
         # Filament sensor — YMS-2 carries the smart motion sensor (jam detection)
         yms_num = i + 1
         sensor_type = "filament_yumi_smart_motion_sensor" if i == 1 else "filament_motion_sensor"
+        if sensor_type in DOCUMENTED_MODULES:
+            lines.append(module_doc(sensor_type))
         lines.append(f"[{sensor_type} YMS-{yms_num}]")
         lines.append(f"switch_pin: {_slot_pin(slot, 'filament_sensor_pin')}")
         lines.append("detection_length: 50")
@@ -515,7 +542,7 @@ def render_probe(p):
 
 def render_bed_scan(p):
     """[yumi_bed_scan]: the inductive scan of the metal reference plate (BED_SCAN_ZERO)."""
-    return emit("yumi_bed_scan", p.get('bed_scan'))
+    return with_module_doc("yumi_bed_scan", emit("yumi_bed_scan", p.get('bed_scan')))
 
 
 def render_bed_mesh(p):
