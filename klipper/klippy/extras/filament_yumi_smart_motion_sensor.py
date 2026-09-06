@@ -3,6 +3,16 @@
 # Copyright (C) 2021 Xtrack33 by YUMI
 # Modifications: Dual-mode (free/hold), sliding window pitch averaging
 #
+# Presence contract (same as Klipper's filament_motion_sensor, which the YMS insertion
+# flow was designed against):
+#   * PRESENT  only when the encoder ticks — filament really moving through the YMS;
+#   * ABSENT   when the tracked extruder travelled `detection_length` since the last tick,
+#     checked every 250 ms while the toolhead moves and once more when it stops.
+# No grace period after a tick: T0's MOTION_SENSOR_INIT re-arms every YMS by moving the
+# (fictive) extruder 50 mm with no feeder synced, less than 2 s after the loading YMS
+# ticked for the last time. A time-based grace swallowed that move, the sensor stayed
+# "present" and a second insertion into the same YMS was never seen.
+#
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 import csv
@@ -82,7 +92,7 @@ class FilamentYumiSmartMotionSensor:
         self.get_status = self.runout_helper.get_status
         self.extruder = None
         self.estimated_print_time = None
-        self.filament_runout_pos = None
+        self.last_tick_pos = None   # extruder position at the last encoder tick (presence)
 
         # Logging initialization
         if self.data_logging:
@@ -201,31 +211,24 @@ class FilamentYumiSmartMotionSensor:
     # ------------------------------------------------------------------
     # Lifecycle handlers
     # ------------------------------------------------------------------
-    def _update_filament_runout_pos(self, eventtime=None):
-        """Update detection position BASED ON ACTUAL FILAMENT MOVEMENT"""
-        if self.last_valid_pos is None:
-            return
-        self.filament_runout_pos = self.last_valid_pos + self.detection_length
-        logging.info("New runout threshold: %.2f mm (based on filament pos: %.2f)",
-                    self.filament_runout_pos, self.last_valid_pos)
-
     def _handle_ready(self):
         self.extruder = self.printer.lookup_object(self.extruder_name)
         self.estimated_print_time = (
             self.printer.lookup_object('mcu').estimated_print_time)
-        self._update_filament_runout_pos()
         self._extruder_pos_update_timer = self.reactor.register_timer(
             self._extruder_pos_update_event)
         self.start_time = self.reactor.monotonic()
         self.last_valid_pos = self._get_extruder_pos()
+        self.last_tick_pos = self.last_valid_pos
         self.last_retraction_pos = self.last_valid_pos
         self.ignore_next_pitch = False
 
     def _handle_printing(self, print_time):
-        self._update_filament_runout_pos()
+        # Pitch bookkeeping restarts with the print; the presence reference (last_tick_pos)
+        # does not: a YMS that has not ticked for detection_length mm of extruder travel is
+        # empty, whether that travel happened before or after this move started.
         self.last_valid_pos = self._get_extruder_pos()
         self.last_retraction_pos = self.last_valid_pos
-        self.runout_triggered = False
         self.ignore_next_pitch = False
         self.event_seq = 0
         self.skip_counter = 0
@@ -250,6 +253,9 @@ class FilamentYumiSmartMotionSensor:
     def _handle_not_printing(self, print_time):
         self.reactor.update_timer(
             self._extruder_pos_update_timer, self.reactor.NEVER)
+        # The toolhead stopped: judge the final position now, so a move that crossed the
+        # threshold right before the stop is never missed between two timer ticks.
+        self._check_presence(self.reactor.monotonic())
         if self.data_logging and self.log_file is not None:
             self.log_file.close()
             self.log_file = None
@@ -271,30 +277,26 @@ class FilamentYumiSmartMotionSensor:
     # ------------------------------------------------------------------
     # Continuous runout check (timer-based)
     # ------------------------------------------------------------------
-    def _extruder_pos_update_event(self, eventtime):
-        if self.last_valid_pos is None:
-            return eventtime + CHECK_RUNOUT_TIMEOUT
-
-        extruder_pos = self._get_extruder_pos(eventtime)
-        extruder_moved = extruder_pos - self.last_valid_pos
-        filament_present = extruder_moved < self.detection_length
-
-        if self.last_event_time and (eventtime - self.last_event_time) < 5.0:
-            filament_present = True
-
-        if not filament_present and not getattr(self, 'pause_sent', False):
+    def _check_presence(self, eventtime):
+        """Only the ABSENCE is decided here: the extruder travelled detection_length since
+        the last encoder tick. Presence is the encoder's business (encoder_event) — declaring
+        "present" from "the extruder did not move much" made an empty YMS look loaded, and
+        a time-based grace after a tick hid the re-arm move of MOTION_SENSOR_INIT."""
+        if self.last_tick_pos is None:
+            return
+        extruder_moved = self._get_extruder_pos(eventtime) - self.last_tick_pos
+        if extruder_moved < self.detection_length:
+            return
+        if not self.runout_triggered:
             logging.info(
-                "Potential runout detected. Extruder moved: %.2fmm "
-                "beyond last valid position (threshold: %.2fmm)",
+                "%s: extruder moved %.2f mm since the last encoder tick "
+                "(threshold %.2f mm): no filament", self.sensor_name,
                 extruder_moved, self.detection_length)
             self.runout_triggered = True
+        self.runout_helper.note_filament_present(eventtime, False)
 
-        # Only the ABSENCE is decided here. Presence is the encoder's business
-        # (encoder_event): declaring "present" from "the extruder did not move
-        # much" made an empty YMS look loaded after any print phase, so the
-        # insert_gcode (automatic load) never fired when filament was inserted.
-        if not filament_present:
-            self.runout_helper.note_filament_present(eventtime, False)
+    def _extruder_pos_update_event(self, eventtime):
+        self._check_presence(eventtime)
         return eventtime + CHECK_RUNOUT_TIMEOUT
 
     # ------------------------------------------------------------------
@@ -303,6 +305,10 @@ class FilamentYumiSmartMotionSensor:
     def encoder_event(self, eventtime, state):
         if self.extruder is None or self.last_valid_pos is None:
             return
+        # Any tick, whatever the mode makes of it: filament is moving, the absence
+        # threshold starts again from here.
+        self.last_tick_pos = self._get_extruder_pos(eventtime)
+        self.last_event_time = eventtime
         if self.mode == 'free':
             self._process_free(eventtime, state)
         else:
@@ -321,7 +327,6 @@ class FilamentYumiSmartMotionSensor:
         self.last_event_pos = current_pos
         self.last_event_time = eventtime
 
-        self._update_filament_runout_pos(eventtime)
         self.runout_helper.note_filament_present(eventtime, True)
 
     # ------------------------------------------------------------------
@@ -454,7 +459,6 @@ class FilamentYumiSmartMotionSensor:
         self.last_event_time = eventtime
         self.last_retraction_pos = current_pos
 
-        self._update_filament_runout_pos(eventtime)
         self.runout_helper.note_filament_present(eventtime, True)
 
     # ------------------------------------------------------------------
