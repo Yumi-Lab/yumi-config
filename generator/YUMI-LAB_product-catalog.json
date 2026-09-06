@@ -542,7 +542,7 @@
         "_comment": "capteur d'arrivee du filament dans la tete = ENDSTOP du module yumi_filament_head : YUMI_LOAD_TO_HEAD = un seul mouvement continu stoppe par le MCU au contact (homing), YUMI_UNLOAD_CHECK verifie le retrait ; SET_HEAD_SENSOR_BYPASS ENABLE=1 si casse",
         "pin": "!PA8",
         "speed": 40,
-        "max_load": 800,
+        "max_load": 2500,
         "head_to_nozzle": 0,
         "nozzle_speed": 5,
         "max_unload_extra": 200,
@@ -550,7 +550,7 @@
         "min_temp": 170,
         "_comments": {
           "speed": "vitesse de la charge continue (mm/s)",
-          "max_load": "C235 : le filament arrive a la tete ~650 mm apres le YMS (QC 06/2026)",
+          "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
           "head_to_nozzle": "mm a pousser apres detection pour amener le bout a la buse — A MESURER, 0 = on s'arrete au capteur",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
           "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)"
