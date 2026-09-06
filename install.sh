@@ -52,6 +52,13 @@ run_privileged() {
     fi
 }
 
+# Install a systemd unit from generator/, with @PROJECT_DIR@ rendered to this checkout.
+# (systemd's %h is the manager's home — /root for a system unit — not the unit's User=.)
+install_unit() {
+    local src="$1" dst="$2"
+    sed "s#@PROJECT_DIR@#$PROJECT_DIR#g" "$src" | run_privileged tee "$dst" >/dev/null
+}
+
 # Define the installation function
 function install {
   # Replace project files in the Klipper directory
@@ -529,13 +536,13 @@ fi
 # Klipper regenerates its printer.cfg before every start (boot, update, YUMI_SETUP, panel)
 echo "Installing the klipper.service autoconfig drop-in..."
 if run_privileged mkdir -p /etc/systemd/system/klipper.service.d \
-   && run_privileged cp "$PROJECT_DIR/generator/klipper-autoconfig.conf" /etc/systemd/system/klipper.service.d/yumi-autoconfig.conf; then
+   && install_unit "$PROJECT_DIR/generator/klipper-autoconfig.conf" /etc/systemd/system/klipper.service.d/yumi-autoconfig.conf; then
     run_privileged systemctl daemon-reload
     echo "klipper.service drop-in installed (autoconfig --boot as ExecStartPre)"
 fi
 
 echo "Installing yumi-autoconfig.service..."
-if run_privileged cp "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
+if install_unit "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
     run_privileged systemctl daemon-reload
     run_privileged systemctl enable yumi-autoconfig.service
     echo "yumi-autoconfig.service enabled at boot (boards scan, printer.cfg only rewritten when they change)"

@@ -24,13 +24,17 @@ generator/autoconfig.py [--dry-run] [--factory] [--minimal]
 3. Policy: same main board (uid) → the `SAVE_CONFIG` block is preserved; different board →
    factory cfg; no main board → alert, nothing touched (exit 2); no matching product → minimal cfg
    (`[mcu]` sections + `kinematics: none`) so Klipper still connects (exit 3); identical cfg → exit 4.
-4. At boot (`yumi-autoconfig.service`, before Klipper) nothing is rewritten while the boards and
-   the recipe (catalog + generator, hashed in the state) are the ones recorded. When yumi-config
-   ships a new catalog or generator, every machine regenerates its cfg at the next boot with its
-   calibrations kept: a fix on the common trunk reaches the whole fleet.
+4. Before every start of Klipper — boot (`yumi-autoconfig.service`) and every restart of
+   `klipper.service` (drop-in `ExecStartPre`, so a Moonraker update, `YUMI_SETUP` or the Printer
+   Config panel all go through it) — `autoconfig.py --boot` runs and nothing is rewritten while
+   the boards, the preferences and the recipe (catalog + generator, hashed in the state) are the
+   ones recorded. When yumi-config ships a new catalog or generator, every machine regenerates its
+   cfg at the next start with its calibrations kept: a fix on the common trunk reaches the whole
+   fleet. Both units are rendered by `install.sh` with the checkout's path (`@PROJECT_DIR@`): a
+   systemd `%h` would point at `/root` for a system unit, whatever its `User=`.
 
-Klipper is stopped and started through Moonraker's API (no sudo needed). Everything that decides
-is data in the catalog, not code.
+When run by hand or from the panel, Klipper is stopped and started through Moonraker's API (no
+sudo needed). Everything that decides is data in the catalog, not code.
 
 ### The catalog: one common trunk, machines carry their geometry only
 
