@@ -1,99 +1,693 @@
 {
-  "_doc": "YUMI-LAB Product Catalog — Source of truth for printer.cfg generation",
-
+  "_doc": "YUMI-LAB Product Catalog — source unique du printer.cfg. Couches : board (tronc commun : pins, courants, sondes, homing, macros valables pour toutes les tailles) -> machine (geometrie seulement) -> hotend (tete, choisie dans le wizard : indetectable) -> hotend_type -> nozzle -> yms. Une valeur ne vit qu'a un endroit ; les commentaires d'origine sont conserves (_comment sur la section, _comments par cle, _notes = lignes commentees). Les macros n'ont aucune valeur machine : elles lisent printer.configfile.settings et la macro unique _YUMI_MACHINE (classe deduite de la longueur de l'axe X). slicer_label (tete, type de hotend) = libelle exact du profil OrcaSlicer (curr_print_head, curr_hotend), recopie dans la macro _YUMI_PRODUCT du printer.cfg genere et compare par PRINT_START.",
   "selection_layers": [
-    { "id": "board",       "label": "Board",           "priority": 0 },
-    { "id": "machine",     "label": "Machine Size",    "priority": 1 },
-    { "id": "hotend",      "label": "Print Head",      "priority": 2 },
-    { "id": "hotend_type", "label": "Hotend Type",     "priority": 3 },
-    { "id": "nozzle",      "label": "Nozzle Size",     "priority": 4 },
-    { "id": "yms",         "label": "YMS System",      "priority": 5 },
-    { "id": "accessory",   "label": "Accessories",     "priority": 6 }
+    {
+      "id": "board",
+      "label": "Board",
+      "priority": 0
+    },
+    {
+      "id": "machine",
+      "label": "Machine Size",
+      "priority": 1
+    },
+    {
+      "id": "hotend",
+      "label": "Print Head",
+      "priority": 2
+    },
+    {
+      "id": "hotend_type",
+      "label": "Hotend Type",
+      "priority": 3
+    },
+    {
+      "id": "nozzle",
+      "label": "Nozzle Size",
+      "priority": 4
+    },
+    {
+      "id": "yms",
+      "label": "YMS System",
+      "priority": 5
+    },
+    {
+      "id": "accessory",
+      "label": "Accessories",
+      "priority": 6
+    }
   ],
   "detection": {
-    "_doc": "Rules used by compose.py to turn the hardware composition (yumi-detect.py: boards read from the YUMI_CONFIG descriptor burned in each MCU firmware) into a product of this catalog. Descriptor fields: board= cpu= conn= device= x/y/z/e0/e1= mx/my/mz= piezo= lot= uid=. Machines are the components of layer 'machine' (device= is their id).",
-    "main_boards": { "SMART_MAKER_1_X": "SMART_MAKER_1X" },
-    "smartbox_devices": ["HYPERDRIVE_3P2L"],
-    "with_smartbox": { "hotend": "CHROMAX_X12", "yms": "YMS_7_PRO" },
+    "_doc": "Rules used by compose.py to turn the hardware composition (yumi-detect.py: boards read from the YUMI_CONFIG descriptor burned in each MCU firmware) into a product of this catalog. Descriptor fields: board= cpu= conn= device= x/y/z/e0/e1= mx/my/mz= piezo= lot= uid=. Machines are the components of layer 'machine' (device= is their id). machine_x_tolerance: demi-fenetre (mm) autour de stepper_x.position_max de chaque machine, utilisee par la macro _YUMI_MACHINE pour reconnaitre la machine a l'execution. defaults.hotend = CHROMAX_X12 : meme defaut que default_print_head des profils OrcaSlicer (une machine sans smartbox et sans choix au wizard = ChromaX12 + 2 YMS Lite) ; le direct drive est un choix explicite des deux cotes.",
+    "main_boards": {
+      "SMART_MAKER_1_X": "SMART_MAKER_1X"
+    },
+    "smartbox_devices": [
+      "HYPERDRIVE_3P2L"
+    ],
+    "with_smartbox": {
+      "hotend": "CHROMAX_X12",
+      "yms": "YMS_7_PRO"
+    },
     "chromax_without_smartbox_yms": "YMS_2_LITE",
-    "defaults": { "hotend": "DIRECT_DRIVE", "hotend_type": "LOW_WASTE", "nozzle": "NOZZLE_04" },
+    "defaults": {
+      "hotend": "CHROMAX_X12",
+      "hotend_type": "LOW_WASTE",
+      "nozzle": "NOZZLE_04"
+    },
     "prefs_file": ".yumi_product_prefs.json",
     "state_file": ".detected_hardware.json",
-    "backup_pattern": "printer-{ts}-autoconfig.cfg"
+    "backup_pattern": "printer-{ts}-autoconfig.cfg",
+    "machine_x_tolerance": 15
   },
-
   "components": {
-
     "SMART_MAKER_1X": {
       "layer": "board",
       "name": "Smart Maker 1.x",
-      "children": ["C235", "C335", "C435"],
-
-      "mcu": { "serial": "/dev/ttyS1", "restart_method": "command" },
-
-      "stepper_x": { "step_pin": "PB1", "dir_pin": "PB0", "enable_pin": "!PA15", "uart_pin": "PB15", "diag_pin": "PA13" },
-      "stepper_y": { "step_pin": "PA1", "dir_pin": "!PA0", "enable_pin": "!PC5", "uart_pin": "PC11", "diag_pin": "PB9" },
-      "stepper_z": { "step_pin": "PC3", "dir_pin": "PC2", "enable_pin": "!PC4", "uart_pin": "PC10" },
-
-      "extruder": { "step_pin": "PA12", "dir_pin": "PA11", "enable_pin": "PA3", "heater_pin": "PC8", "sensor_pin": "PC1", "uart_pin": "PB14" },
-
-      "extruder_slots": [
-        { "index": 0, "label": "E0", "mcu": "main", "step_pin": "PB12", "dir_pin": "PB10", "enable_pin": "!PB13", "uart_pin": "PB14", "filament_sensor_pin": "!PC14" },
-        { "index": 1, "label": "E1", "mcu": "main", "step_pin": "PA5", "dir_pin": "PA4", "enable_pin": "!PA6", "uart_pin": "PA7", "filament_sensor_pin": "PC13" }
+      "_doc": "Tronc commun de toutes les machines Yumi sur carte Smart Maker 1.x : pins, courants, vitesses, sondes, homing, macros. Une machine (C235/C335/C435) ne porte QUE sa geometrie. Valeurs = lignee usine/QC (qc/qc_printer_*.cfg, sauvegardes pads 06/2026), commentaires d'origine conserves (_comment, _comments, _notes).",
+      "children": [
+        "C235",
+        "C335",
+        "C435"
       ],
-
+      "mcu": {
+        "serial": "/dev/ttyS1",
+        "restart_method": "command",
+        "_comments": {
+          "serial": "RJ11"
+        },
+        "_notes": [
+          "serial: /dev/ttyACM0                                        #NANO V3.0 & V3.1",
+          "serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0   #NANO V3.2"
+        ]
+      },
+      "host_mcu": {
+        "name": "rpi",
+        "serial": "/tmp/klipper_host_mcu"
+      },
+      "adxl": {
+        "cs_pin": "gpio13",
+        "spi_bus": "spidev1.0"
+      },
+      "printer": {
+        "kinematics": "cartesian",
+        "max_velocity": 700,
+        "max_accel": 20000,
+        "max_z_velocity": 50,
+        "max_z_accel": 200
+      },
+      "stepper_x": {
+        "step_pin": "PB1",
+        "dir_pin": "PB0",
+        "enable_pin": "!PA15",
+        "microsteps": 16,
+        "rotation_distance": 39,
+        "endstop_pin": "tmc2209_stepper_x: virtual_endstop",
+        "position_min": -10,
+        "homing_speed": 50,
+        "second_homing_speed": 20,
+        "homing_retract_dist": 0,
+        "_comments": {
+          "rotation_distance": "valeur usine/QC (20T GT2 theorique = 40) : endstops et vis regles avec 39"
+        },
+        "tmc2209": {
+          "uart_pin": "PB15",
+          "run_current": 1.2,
+          "hold_current": 1.1,
+          "stealthchop_threshold": 0,
+          "driver_sgthrs": 150,
+          "diag_pin": "PA13",
+          "_comments": {
+            "hold_current": "motor hold current"
+          },
+          "_notes": [
+            "interpolate: True"
+          ]
+        },
+        "autotune": {
+          "motor": "BJ42D29-28V31",
+          "tuning_goal": "auto",
+          "toff": 3,
+          "tbl": 2,
+          "voltage": 24,
+          "sg4_thrs": 50,
+          "extra_hysteresis": 0,
+          "pwm_freq_target": 25000,
+          "_comments": {
+            "tuning_goal": "silent"
+          }
+        }
+      },
+      "stepper_y": {
+        "step_pin": "PA1",
+        "dir_pin": "!PA0",
+        "enable_pin": "!PC5",
+        "microsteps": 16,
+        "rotation_distance": 39,
+        "endstop_pin": "tmc2209_stepper_y: virtual_endstop",
+        "position_endstop": -30,
+        "position_min": -30,
+        "homing_speed": 20,
+        "second_homing_speed": 20,
+        "homing_retract_dist": 0,
+        "_comments": {
+          "position_endstop": "30",
+          "position_min": "30",
+          "rotation_distance": "valeur usine/QC (20T GT2 theorique = 40)"
+        },
+        "tmc2209": {
+          "uart_pin": "PC11",
+          "run_current": 1.2,
+          "hold_current": 1.2,
+          "stealthchop_threshold": 0,
+          "driver_sgthrs": 150,
+          "diag_pin": "PB9",
+          "_comments": {
+            "hold_current": "motor hold current"
+          },
+          "_notes": [
+            "interpolate: True"
+          ]
+        },
+        "autotune": {
+          "motor": "BJ42D29-28V31",
+          "tuning_goal": "auto",
+          "toff": 3,
+          "tbl": 2,
+          "voltage": 24,
+          "sg4_thrs": 50,
+          "extra_hysteresis": 0,
+          "pwm_freq_target": 25000,
+          "_comments": {
+            "tuning_goal": "silent"
+          }
+        }
+      },
+      "stepper_z": {
+        "step_pin": "PC3",
+        "dir_pin": "PC2",
+        "enable_pin": "!PC4",
+        "microsteps": 16,
+        "rotation_distance": 8,
+        "endstop_pin": "probe:z_virtual_endstop",
+        "position_min": -5,
+        "homing_speed": 5,
+        "second_homing_speed": 5,
+        "homing_retract_dist": 5,
+        "_notes": [
+          "position_endstop: 0"
+        ],
+        "tmc2209": {
+          "uart_pin": "PC10",
+          "run_current": 1.2,
+          "hold_current": 1.2,
+          "stealthchop_threshold": 0,
+          "_comments": {
+            "hold_current": "motor hold current"
+          },
+          "_notes": [
+            "interpolate: True"
+          ]
+        },
+        "autotune": {
+          "motor": "BJ42D07-06V02",
+          "tuning_goal": "auto",
+          "toff": 3,
+          "tbl": 2,
+          "voltage": 24,
+          "sg4_thrs": 50,
+          "extra_hysteresis": 0,
+          "pwm_freq_target": 25000,
+          "_comments": {
+            "tuning_goal": "silent"
+          }
+        }
+      },
+      "sensorless_homing": {
+        "_comment": "YUMI_SENSORLESS_HOME : homing X/Y multi-tap valide (module yumi_sensorless_homing)",
+        "samples": 4,
+        "samples_tolerance": 0.05,
+        "max_taps": 16,
+        "fine_speed": 20,
+        "fine_accel": 1000,
+        "travel_speed": 40,
+        "retract": 5,
+        "overshoot": 2,
+        "coarse_current_x": 1.0,
+        "fine_current_x": 0.6,
+        "run_current_x": 1.2,
+        "coarse_current_y": 0.55,
+        "fine_current_y": 0.6,
+        "fine_sgthrs_y": 0,
+        "run_sgthrs_y": 0,
+        "run_current_y": 1.2,
+        "_comments": {
+          "run_sgthrs_y": "0 = rien reapplique apres le home. 150 empoisonnait le registre : le finally du module le posait apres l'autotune (sg4_thrs=50), meme sur un home avorte ; la phase 1 suivante heritait de 150 (coarse_sgthrs_y=0) -> faux stall 5.12 mm avant la butee, 'aucun contact', en boucle. Verifie C235 06/09 (claude-skills/sensorless-homing/historique-reglages.md, test 8)"
+        }
+      },
+      "extruder": {
+        "_doc": "Chauffe et parametres d'extrusion communs. Les pins moteur viennent de la TETE : direct drive = moteur reel sur le driver E0 (motor_slot), CHROMAX = moteur fictif sur des pins libres (tete bowden, Klipper exige un [extruder] ; ce sont extruder0..N = les YMS qui poussent).",
+        "rotation_distance": 22.6789511,
+        "gear_ratio": "50:17",
+        "microsteps": 16,
+        "full_steps_per_rotation": 200,
+        "filament_diameter": 1.75,
+        "heater_pin": "PC8",
+        "sensor_type": "100K4190YUMI",
+        "sensor_pin": "PC1",
+        "min_temp": -200,
+        "max_temp": 300,
+        "max_extrude_only_velocity": 500,
+        "max_extrude_only_distance": 8000.0,
+        "max_extrude_cross_section": 40,
+        "min_extrude_temp": 0,
+        "pressure_advance": 0,
+        "pressure_advance_smooth_time": 0.04,
+        "lead_time": 0.03,
+        "control": "pid",
+        "_comments": {
+          "rotation_distance": "before 33.500 #rotation_distance: 22.6789511 #Bondtech 5mm Drive Gears",
+          "gear_ratio": "TITAN Gear Ratio 3:1 ,  BMG Raatio 50:17",
+          "full_steps_per_rotation": "200 for 1.8 degree, 400 for 0.9 degree",
+          "sensor_type": "EPCOS 100K B57560G104F #ATC Semitec 104GT-2",
+          "pressure_advance": "0 volontaire : le PA module l'amplitude (surepaisseurs aux angles, motion extrudeur pollue pour la detection YMS)",
+          "pressure_advance_smooth_time": "bas pour garder le pic de retract lisible par les encodeurs YMS",
+          "lead_time": "fork Yumi-Lab/klipper : decalage temporel du trapq extrudeur (depressurisation anticipee), valide en impression 06/2026 avec PA 0 + smooth 0.04"
+        },
+        "_notes": [
+          "max_extrude_only_accel: 10000",
+          "rotation_distance: 4.5",
+          "control: pid",
+          "pid_kp = 46.919",
+          "pid_ki = 10.090",
+          "pid_kd = 54.543"
+        ]
+      },
+      "extruder_stepper": {
+        "_doc": "Reglages communs a tous les slots E (tete DD sur E0, feeders YMS). Le sens et le ratio d'un slot se surchargent par tete (extruder_slot_overrides).",
+        "microsteps": 16,
+        "rotation_distance": 22.6789511,
+        "gear_ratio": "50:17",
+        "full_steps_per_rotation": 200,
+        "pressure_advance": 0.0,
+        "_comments": {
+          "rotation_distance": "before 33.500 #BMG rotation_distance: 22.6789511 #Bondtech 5mm Drive Gears 26.20 #rotation YMS 22.906",
+          "gear_ratio": "for MK12 EXTRDUER 50:17  #BMG 57:11",
+          "full_steps_per_rotation": "200 for 1.8 degree, 400 for 0.9 degree"
+        },
+        "_notes": [
+          "rotation_distance: 24.85",
+          "rotation_distance: 14.6 #36圆形电机"
+        ],
+        "tmc2209": {
+          "run_current": 1.2,
+          "hold_current": 0.3,
+          "stealthchop_threshold": 0,
+          "_comments": {
+            "hold_current": "motor hold current"
+          },
+          "_notes": [
+            "interpolate: True"
+          ]
+        },
+        "autotune": {
+          "motor": "BJ42D07-06V02",
+          "tuning_goal": "auto",
+          "toff": 1,
+          "tbl": 1,
+          "voltage": 24,
+          "sg4_thrs": 150,
+          "extra_hysteresis": 2,
+          "pwm_freq_target": 60000,
+          "_comments": {
+            "tuning_goal": "silent"
+          }
+        }
+      },
+      "extruder_slots": [
+        {
+          "index": 0,
+          "label": "E0",
+          "mcu": "main",
+          "step_pin": "PB12",
+          "dir_pin": "PB10",
+          "enable_pin": "!PB13",
+          "uart_pin": "PB14",
+          "filament_sensor_pin": "!PC14"
+        },
+        {
+          "index": 1,
+          "label": "E1",
+          "mcu": "main",
+          "step_pin": "PA5",
+          "dir_pin": "PA4",
+          "enable_pin": "!PA6",
+          "uart_pin": "PA7",
+          "filament_sensor_pin": "PC13"
+        }
+      ],
       "smartbox": {
         "serial": "/dev/ttyS2",
         "restart_method": "command",
         "mcu_name": "smartbox",
         "extruder_slots": [
-          { "index": 2, "label": "E2", "step_pin": "PB12", "dir_pin": "!PB10", "enable_pin": "!PB13", "uart_pin": "PB14", "filament_sensor_pin": "PA13" },
-          { "index": 3, "label": "E3", "step_pin": "PA5", "dir_pin": "!PA4", "enable_pin": "!PA6", "uart_pin": "PA7", "filament_sensor_pin": "PB9" },
-          { "index": 4, "label": "E4", "step_pin": "PB1", "dir_pin": "!PB0", "enable_pin": "!PA15", "uart_pin": "PB15", "filament_sensor_pin": "PC13" },
-          { "index": 5, "label": "E5", "step_pin": "PA1", "dir_pin": "!PA0", "enable_pin": "!PC5", "uart_pin": "PC11", "filament_sensor_pin": "PC14" },
-          { "index": 6, "label": "E6", "step_pin": "PC3", "dir_pin": "!PC2", "enable_pin": "!PC4", "uart_pin": "PC10", "filament_sensor_pin": "PB7" }
+          {
+            "index": 2,
+            "label": "E2",
+            "step_pin": "PB12",
+            "dir_pin": "!PB10",
+            "enable_pin": "!PB13",
+            "uart_pin": "PB14",
+            "filament_sensor_pin": "PA13"
+          },
+          {
+            "index": 3,
+            "label": "E3",
+            "step_pin": "PA5",
+            "dir_pin": "!PA4",
+            "enable_pin": "!PA6",
+            "uart_pin": "PA7",
+            "filament_sensor_pin": "PB9"
+          },
+          {
+            "index": 4,
+            "label": "E4",
+            "step_pin": "PB1",
+            "dir_pin": "!PB0",
+            "enable_pin": "!PA15",
+            "uart_pin": "PB15",
+            "filament_sensor_pin": "PC13"
+          },
+          {
+            "index": 5,
+            "label": "E5",
+            "step_pin": "PA1",
+            "dir_pin": "!PA0",
+            "enable_pin": "!PC5",
+            "uart_pin": "PC11",
+            "filament_sensor_pin": "PC14"
+          },
+          {
+            "index": 6,
+            "label": "E6",
+            "step_pin": "PC3",
+            "dir_pin": "!PC2",
+            "enable_pin": "!PC4",
+            "uart_pin": "PC10",
+            "filament_sensor_pin": "PB7"
+          }
         ],
-        "dryer": { "heater_pin": "PC8", "sensor_pin": "PC1", "fan_pin": "PC6" },
-        "fans": { "box_fan": "PB8" }
+        "dryer": {
+          "heater_pin": "PC8",
+          "sensor_pin": "PC1",
+          "fan_pin": "PC6"
+        },
+        "fans": {
+          "box": {
+            "pin": "PB8",
+            "fan_speed": 1,
+            "idle_timeout": 10,
+            "idle_speed": 0,
+            "kick_start_time": 0.01,
+            "off_below": 0.1
+          }
+        }
       },
-
-      "heater_bed": { "heater_pin": "PC9", "sensor_pin": "PC0" },
-      "fans": { "part_cooling": "PC7", "hotend": "PC6", "motherboard": "PB8", "aux": "PA2" },
-      "probe": { "pin": "PA14" },
-      "probe_pressure": { "pin": "!PB7" },
-      "thermistor": { "name": "100K4190YUMI", "temperature1": 25, "resistance1": 100000, "beta": 4300 },
-
+      "heater_bed": {
+        "heater_pin": "PC9",
+        "sensor_type": "100K3950YUMI",
+        "sensor_pin": "PC0",
+        "control": "pid",
+        "pid_Kp": 28.566,
+        "pid_Ki": 0.281,
+        "pid_Kd": 725.21,
+        "max_power": 1.0,
+        "min_temp": -100,
+        "max_temp": 130,
+        "_notes": [
+          "smooth_time: 00.1",
+          "control: watermark",
+          "control: pid",
+          "pid_Kp: 27.486",
+          "pid_Ki: 0.306",
+          "pid_Kd: 617.406"
+        ]
+      },
+      "verify_heater": {
+        "extruder": {
+          "max_error": 500,
+          "check_gain_time": 20,
+          "hysteresis": 20,
+          "heating_gain": 1
+        },
+        "heater_bed": {
+          "check_gain_time": 120,
+          "max_error": 500,
+          "hysteresis": 20,
+          "heating_gain": 1
+        }
+      },
+      "thermistors": [
+        {
+          "name": "100K4190YUMI",
+          "temperature1": 25,
+          "resistance1": 100000,
+          "beta": 4300,
+          "_comments": {
+            "beta": "4190 #4460 pour descendre de 20°"
+          }
+        },
+        {
+          "name": "100K3950YUMI",
+          "temperature1": 25,
+          "resistance1": 100000,
+          "beta": 3950
+        }
+      ],
+      "fans": {
+        "part_cooling": {
+          "pin": "PC7",
+          "_comments": {
+            "pin": "fan1"
+          }
+        },
+        "hotend": {
+          "pin": "PC6",
+          "max_power": 1,
+          "kick_start_time": 0.5,
+          "heater": "extruder",
+          "heater_temp": 50.0,
+          "fan_speed": 1,
+          "shutdown_speed": 1.0
+        },
+        "motherboard": {
+          "pin": "PB8",
+          "fan_speed": 0.7,
+          "idle_timeout": 10,
+          "idle_speed": 0,
+          "kick_start_time": 0.01,
+          "off_below": 0.1
+        },
+        "aux": {
+          "pin": "PA2"
+        }
+      },
+      "host_temperature_sensor": {
+        "sensor_type": "temperature_host",
+        "min_temp": 0,
+        "max_temp": 100
+      },
+      "probe": {
+        "pin": "PA14",
+        "x_offset": -17,
+        "y_offset": 30,
+        "z_offset": 0.1,
+        "speed": 5,
+        "samples": 3,
+        "samples_result": "median",
+        "sample_retract_dist": 2,
+        "samples_tolerance": 0.05,
+        "samples_tolerance_retries": 20,
+        "_comments": {
+          "samples": "probe one point 3 times get an average",
+          "samples_result": "average",
+          "samples_tolerance": "0.08 # precision"
+        },
+        "_notes": [
+          "z_offset: 0"
+        ]
+      },
+      "bed_scan": {
+        "_comment": "BED_SCAN_ZERO : cherche la plaque metal de reference (racleur perfore derriere le plateau) a la sonde inductive, sauve bed_detect_x/y/z",
+        "center_dx": 8.0,
+        "center_dy": -23.0,
+        "range_x": 10.0,
+        "range_y": 8.0,
+        "step_x": 2.0,
+        "step_y": 2.0,
+        "z_clear": 0.6,
+        "z_step": 0.1,
+        "z_floor": 0.1,
+        "planes": 3,
+        "speed": 150,
+        "z_speed": 10,
+        "lift": 5,
+        "accel": 1000,
+        "_comments": {
+          "center_dx": "centre X = plateau/2 + dx (mesure : C235 +7.5, C335 +8.5)",
+          "center_dy": "centre Y = plateau + dy, coordonnees BUSE (sonde a +30 derriere) ; mesure : C235 -25, C335 -21",
+          "z_floor": "le nez reste au-dessus du plateau pendant que la sonde est derriere : jamais sous ce Z (repere tap)",
+          "planes": "plans scannes a partir du 1er contact (le champ inductif s'elargit en descendant)",
+          "accel": "acceleration pendant le balayage (20000 = a-coups bruyants sur des mouvements de 2 mm)"
+        }
+      },
+      "filament_head": {
+        "_comment": "capteur d'arrivee du filament dans la tete, lu par le module yumi_filament_head : YUMI_LOAD_TO_HEAD = avance par pas de `step` mm avec lecture du capteur entre chaque pas (procedure QC ; le homing continu a echoue 4/4 au banc 06/09), YUMI_UNLOAD_CHECK verifie le retrait ; SET_HEAD_SENSOR_BYPASS ENABLE=1 si casse",
+        "pin": "^!PA8",
+        "speed": 16.7,
+        "step": 20,
+        "max_load": 2500,
+        "head_to_nozzle": 0,
+        "nozzle_speed": 5,
+        "max_unload_extra": 200,
+        "blind_load": 0,
+        "min_temp": 170,
+        "_comments": {
+          "pin": "^ = tirage interne : sans lui la ligne du capteur flotte (lectures differentes d'un redemarrage a l'autre au banc)",
+          "speed": "vitesse des pas de charge (mm/s) = F1000 du QC",
+          "step": "mm entre deux lectures du capteur = depassement maximal apres detection",
+          "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
+          "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
+          "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
+          "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)"
+        }
+      },
+      "probe_pressure": {
+        "pin": "!PB7",
+        "speed": 6,
+        "lift_speed": 6
+      },
+      "z_tap": {
+        "travel_speed": 70,
+        "compression_offset": 0.0,
+        "max_probe_times": 200,
+        "probe_delay": 2,
+        "z_hop": 3,
+        "samples": 5,
+        "samples_tolerance": 0.01,
+        "safe_z": 10,
+        "_comments": {
+          "max_probe_times": "最大探测次数",
+          "probe_delay": "探测延迟（ms）",
+          "samples_tolerance": "precision"
+        }
+      },
+      "bed_mesh": {
+        "speed": 200,
+        "horizontal_move_z": 7,
+        "probe_count": "9,9",
+        "algorithm": "bicubic",
+        "bicubic_tension": 0.2,
+        "mesh_pps": "2,2",
+        "adaptive_margin": 10,
+        "_comments": {
+          "probe_count": "10,10"
+        }
+      },
+      "screws_tilt": {
+        "screw1_name": "front left screw",
+        "screw2_name": "front right screw",
+        "screw3_name": "rear right screw",
+        "screw4_name": "rear left screw",
+        "horizontal_move_z": 10,
+        "speed": 200,
+        "screw_thread": "CCW-M3"
+      },
       "motor_constants": {
-        "BJ42D29-28V31": { "resistance": 1.4, "inductance": 0.0026, "holding_torque": 0.460, "max_current": 1.5, "steps_per_revolution": 200 },
-        "BJ42D29-28V03": { "resistance": 1.4, "inductance": 0.0026, "holding_torque": 0.460, "max_current": 1.5, "steps_per_revolution": 200 },
-        "BJ42D07-06V02": { "resistance": 1.4, "inductance": 0.0022, "holding_torque": 0.16, "max_current": 1.20, "steps_per_revolution": 200 },
-        "BJ42D07-03V05": { "resistance": 4.3, "inductance": 0.0058, "holding_torque": 0.150, "max_current": 0.84, "steps_per_revolution": 200 }
+        "BJ42D29-28V31": {
+          "resistance": 1.4,
+          "inductance": 0.0026,
+          "holding_torque": 0.46,
+          "max_current": 1.5,
+          "steps_per_revolution": 200,
+          "_comment": "MOTOR X/Y C SERIES",
+          "_comments": {
+            "resistance": "Coil resistance, Ohms",
+            "inductance": "Coil inductance, Henries",
+            "holding_torque": "Holding torque, Nm",
+            "max_current": "Nominal rated current, Amps",
+            "steps_per_revolution": "Steps per revolution (1.8deg motors use 200, 0.9deg motors use 400)"
+          }
+        },
+        "BJ42D29-28V03": {
+          "resistance": 1.4,
+          "inductance": 0.0026,
+          "holding_torque": 0.46,
+          "max_current": 1.5,
+          "steps_per_revolution": 200,
+          "_comment": "MOTOR Y C435",
+          "_comments": {
+            "resistance": "Coil resistance, Ohms",
+            "inductance": "Coil inductance, Henries",
+            "holding_torque": "Holding torque, Nm",
+            "max_current": "Nominal rated current, Amps",
+            "steps_per_revolution": "Steps per revolution (1.8deg motors use 200, 0.9deg motors use 400)"
+          }
+        },
+        "BJ42D07-06V02": {
+          "resistance": 1.4,
+          "inductance": 0.0022,
+          "holding_torque": 0.16,
+          "max_current": 1.2,
+          "steps_per_revolution": 200,
+          "_comment": "YMS MOTOR",
+          "_comments": {
+            "resistance": "Coil resistance, Ohms",
+            "inductance": "Coil inductance, Henries",
+            "holding_torque": "Holding torque, Nm",
+            "max_current": "Nominal rated current, Amps",
+            "steps_per_revolution": "Steps per revolution (1.8deg motors use 200, 0.9deg motors use 400)"
+          }
+        },
+        "BJ42D07-03V05": {
+          "resistance": 4.3,
+          "inductance": 0.0058,
+          "holding_torque": 0.15,
+          "max_current": 0.84,
+          "steps_per_revolution": 200,
+          "_comment": "1GEN YMS MOTOR",
+          "_comments": {
+            "resistance": "Coil resistance, Ohms",
+            "inductance": "Coil inductance, Henries",
+            "holding_torque": "Holding torque, Nm",
+            "max_current": "Nominal rated current, Amps",
+            "steps_per_revolution": "Steps per revolution (1.8deg motors use 200, 0.9deg motors use 400)"
+          }
+        }
       },
-
-      "tmc_autotune": {
-        "stepper_x": { "toff": 3, "tbl": 2, "voltage": 24, "sg4_thrs": 40, "extra_hysteresis": 0, "pwm_freq_target": 25000 },
-        "stepper_y": { "toff": 3, "tbl": 2, "voltage": 24, "sg4_thrs": 60, "extra_hysteresis": 0, "pwm_freq_target": 25000 },
-        "stepper_z": { "toff": 3, "tbl": 2, "voltage": 24, "sg4_thrs": 70, "extra_hysteresis": 0, "pwm_freq_target": 25000 },
-        "extruder": { "toff": 1, "tbl": 1, "voltage": 24, "sg4_thrs": 150, "extra_hysteresis": 2, "pwm_freq_target": 60000 }
+      "features": {
+        "adxl": true,
+        "tmc_autotune": true,
+        "probe_pressure": true,
+        "plr": true,
+        "timelapse": true,
+        "obico": true
       },
-
-      "features": { "adxl": true, "tmc_autotune": true, "probe_pressure": true, "plr": true, "timelapse": true, "obico": true },
-
       "gcode_macros": [
         {
           "id": "system_core",
           "condition": "always",
-          "gcode": "[save_variables]\nfilename: ~/printer_data/config/variables.cfg\n\n[exclude_object]\n\n[gcode_arcs]\nresolution: 0.1\n\n[respond]\ndefault_type: echo\ndefault_prefix: echo:\n\n[display_status]\n\n[pause_resume]\n\n[idle_timeout]\ntimeout: 99999999\n\n[virtual_sdcard]\npath: ~/printer_data/gcodes/"
+          "gcode": "[save_variables]\nfilename: ~/printer_data/config/variables.cfg\n\n[exclude_object]\n\n[gcode_arcs]\nresolution: 0.1\n\n[respond]\ndefault_type: echo\ndefault_prefix: echo:\n\n[display_status]\n\n[pause_resume]\n\n[idle_timeout]\ntimeout: 99999999\n\n[virtual_sdcard]\npath: ~/printer_data/gcodes/\non_error_gcode: _YUMI_PRINT_ERROR\n\n[gcode_macro _YUMI_PRINT_ERROR]\ndescription: virtual_sdcard on_error_gcode: a print stopped by an error. Heaters off, print state back to idle, YMS sensors re-armed (T0 idle branch); no axis motion, the error may be a motion error\ngcode:\n    # printing_start drives the T macros and the YMS insert_gcode: left True by a stopped print,\n    # the next boot's INIT_YMS T0 or the next insertion would run a load to the head\n    SAVE_VARIABLE VARIABLE=printing_start VALUE=False\n    TURN_OFF_HEATERS\n    M117 Print stopped on error\n    # back to the idle state: the printing T macro had left only the active tool's sensor\n    # enabled — an insertion into any other YMS would go unnoticed until the next boot.\n    # T0's idle branch unsyncs every feeder, re-arms the sensors (fictive extruder move, no\n    # axis motion) and releases the motors.\n    T0"
         },
         {
           "id": "homing_override",
           "condition": "always",
-          "gcode": "[homing_override]\naxes: xyz\nset_position_z: 0\ngcode:\n    {% set coarse_current_x = 1.0 %}\n    {% set coarse_current_y = 1.2 %}\n    {% set retract_coarse = 8 %}\n    {% set coarse_travel = 3000 %}\n    {% set fine_current_x = 0.5 %}\n    {% set fine_current_y = 0.6 %}\n    {% set retract_fine = 3 %}\n    {% set fine_travel = 900 %}\n    {% set run_current = 1.2 %}\n    {% set homing_travel_speed = 1800 %}\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set x_min = printer.configfile.settings.stepper_x.position_min|float %}\n    {% set y_max = printer.configfile.settings.stepper_y.position_max|float %}\n    {% set y_min = printer.configfile.settings.stepper_y.position_min|float %}\n    {% set mesh_min = printer.configfile.settings.bed_mesh.mesh_min %}\n    {% set mesh_max = printer.configfile.settings.bed_mesh.mesh_max %}\n    {% set x_center = (mesh_min[0]|float + mesh_max[0]|float) / 2 %}\n    {% set y_center = (mesh_min[1]|float + mesh_max[1]|float) / 2 %}\n    {% set home_all = 'X' not in params and 'Y' not in params and 'Z' not in params %}\n    G90\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z20 F300\n    SET_KINEMATIC_POSITION X={x_max} Y={y_min}\n    G1 X{x_max - retract_coarse} Y{y_min + retract_coarse} F{coarse_travel}\n    SET_TMC_FIELD STEPPER=stepper_x FIELD=tcoolthrs VALUE=0\n    SET_TMC_FIELD STEPPER=stepper_y FIELD=tcoolthrs VALUE=0\n    {% if home_all or 'X' in params %}\n        SET_TMC_CURRENT STEPPER=stepper_x CURRENT={coarse_current_x}\n        G28 X\n        G91\n        G1 X-{retract_coarse} F{coarse_travel}\n        G90\n        SET_TMC_CURRENT STEPPER=stepper_x CURRENT={fine_current_x}\n        G28 X\n        G91\n        G1 X-{retract_fine} F{fine_travel}\n        G90\n        SET_TMC_CURRENT STEPPER=stepper_x CURRENT={run_current}\n    {% endif %}\n    {% if home_all or 'Y' in params %}\n        SET_TMC_CURRENT STEPPER=stepper_y CURRENT={coarse_current_y}\n        G28 Y\n        G91\n        G1 Y{retract_coarse} F{coarse_travel}\n        G90\n        SET_TMC_CURRENT STEPPER=stepper_y CURRENT={fine_current_y}\n        G28 Y\n        G91\n        G1 Y{retract_fine} F{fine_travel}\n        G90\n        SET_TMC_CURRENT STEPPER=stepper_y CURRENT={run_current}\n    {% endif %}\n    {% if home_all or 'Z' in params %}\n        {% if not home_all %}\n            SET_TMC_CURRENT STEPPER=stepper_x CURRENT={coarse_current_x}\n            G28 X\n            G91\n            G1 X-{retract_coarse} F{coarse_travel}\n            G90\n            SET_TMC_CURRENT STEPPER=stepper_x CURRENT={fine_current_x}\n            G28 X\n            G91\n            G1 X-{retract_fine} F{fine_travel}\n            G90\n            SET_TMC_CURRENT STEPPER=stepper_x CURRENT={run_current}\n            SET_TMC_CURRENT STEPPER=stepper_y CURRENT={coarse_current_y}\n            G28 Y\n            G91\n            G1 Y{retract_coarse} F{coarse_travel}\n            G90\n            SET_TMC_CURRENT STEPPER=stepper_y CURRENT={fine_current_y}\n            G28 Y\n            G91\n            G1 Y{retract_fine} F{fine_travel}\n            G90\n            SET_TMC_CURRENT STEPPER=stepper_y CURRENT={run_current}\n        {% endif %}\n        {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}\n        SET_KINEMATIC_POSITION Z={z_max}\n        YUMI_Z_TAP SAVE=0\n        G1 X{x_max} F{homing_travel_speed}\n    {% endif %}\n    AUTOTUNE_TMC STEPPER=stepper_x\n    AUTOTUNE_TMC STEPPER=stepper_y"
+          "gcode": "[homing_override]\naxes: xyz\nset_position_z: 0\ngcode:\n    # ══════════════════════════════════════════════════\n    # YUMI Bambu-Grade 2-Phase Sensorless Homing\n    # X/Y : YUMI_SENSORLESS_HOME (module yumi_sensorless_homing) — courants,\n    #       vitesses et validation multi-tap dans [yumi_sensorless_homing]\n    # Z   : nozzle tap via probe_pressure (YUMI_Z_TAP, [yumi_z_tap])\n    # Aucune valeur machine ici : tout vient de printer.configfile.settings\n    # ══════════════════════════════════════════════════\n    {% set retract_coarse = 8 %}\n    {% set coarse_travel = 3000 %}\n    {% set homing_travel_speed = 1800 %}\n\n    # ── Read stepper limits ──\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set y_min = printer.configfile.settings.stepper_y.position_min|float %}\n    {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}\n\n    {% set raw = params|join('') %}\n    {% set has_x = 'X' in raw %}\n    {% set has_y = 'Y' in raw %}\n    {% set has_z = 'Z' in raw %}\n    {% set home_all = not has_x and not has_y and not has_z %}\n\n    G90\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z20 F300\n\n    # ── Phase 0: Simultaneous XY retract (Bambu-style) ──\n    # Clear endstops if carriage is already at a limit\n    SET_KINEMATIC_POSITION X={x_max} Y={y_min}\n    G1 X{x_max - retract_coarse} Y{y_min + retract_coarse} F{coarse_travel}\n\n    # ── Sensorless prep: neutralise CoolStep/autotune → fenetre StallGuard pleine-gamme ──\n    SET_TMC_FIELD STEPPER=stepper_x FIELD=tcoolthrs VALUE=0\n    SET_TMC_FIELD STEPPER=stepper_y FIELD=tcoolthrs VALUE=0\n\n    # ── HOME X / Y: multi-tap valide (yumi_sensorless_homing) ──\n    # G28 Z seul : X et Y sont homes d'abord (le tap Z demande une position XY vraie)\n    {% if home_all or has_x or has_z %}\n        YUMI_SENSORLESS_HOME AXIS=X\n    {% endif %}\n    {% if home_all or has_y or has_z %}\n        YUMI_SENSORLESS_HOME AXIS=Y\n    {% endif %}\n\n    # ── HOME Z: nozzle tap via probe_pressure ──\n    {% if home_all or has_z %}\n        SET_KINEMATIC_POSITION Z={z_max}\n        YUMI_Z_TAP SAVE=0\n        G1 X{x_max} F{homing_travel_speed}\n    {% endif %}\n\n    # ── Restore autotune (tuning silencieux coolstep/pwm) ──\n    AUTOTUNE_TMC STEPPER=stepper_x\n    AUTOTUNE_TMC STEPPER=stepper_y"
         },
         {
           "id": "welcome",
           "condition": "always",
-          "gcode": "[delayed_gcode welcome]\ninitial_duration: 1\ngcode:\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% if x_max >= 245 and x_max <= 275 %}\n        {% set model = \"C235\" %}\n        {% set bed_size = 235 %}\n    {% elif x_max >= 345 and x_max <= 375 %}\n        {% set model = \"C335\" %}\n        {% set bed_size = 335 %}\n    {% elif x_max >= 445 and x_max <= 475 %}\n        {% set model = \"C435\" %}\n        {% set bed_size = 435 %}\n    {% else %}\n        {% set model = \"UNKNOWN\" %}\n        {% set bed_size = 0 %}\n    {% endif %}\n    {% set has_smartbox = 'mcu smartbox' in printer %}\n    {% set ns = namespace(yms=0) %}\n    {% if 'extruder_stepper extruder0' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder1' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder2' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder3' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder4' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder5' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder6' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% set ns2 = namespace(dryer_pos=\"none\", has_dryer=false) %}\n    {% if 'heater_generic yms-3-pro' in printer.configfile.settings %}{% set ns2.has_dryer = true %}{% set ns2.dryer_pos = \"YMS-3\" %}{% endif %}\n    {% set yms_type = \"PRO\" if ns2.has_dryer else (\"LITE\" if ns.yms > 0 else \"NONE\") %}\n    {% set has_probe_pressure = 'probe_pressure' in printer.configfile.settings %}\n    {% set probe_type = \"pressure\" if has_probe_pressure else \"standard\" %}\n    {% set has_adxl = 'mcu rpi' in printer %}\n    {% if ns.yms > 0 %}\n        {% set full_model = model ~ \" \" ~ ns.yms ~ \"YMS-\" ~ yms_type %}\n    {% else %}\n        {% set full_model = model ~ \" 1COLOR\" %}\n    {% endif %}\n    SAVE_VARIABLE VARIABLE=machine_model VALUE=\"'{model}'\"\n    SAVE_VARIABLE VARIABLE=machine_full_model VALUE=\"'{full_model}'\"\n    SAVE_VARIABLE VARIABLE=machine_bed_size VALUE={bed_size}\n    SAVE_VARIABLE VARIABLE=machine_yms_count VALUE={ns.yms}\n    SAVE_VARIABLE VARIABLE=machine_yms_type VALUE=\"'{yms_type}'\"\n    SAVE_VARIABLE VARIABLE=machine_has_smartbox VALUE={1 if has_smartbox else 0}\n    SAVE_VARIABLE VARIABLE=machine_probe_type VALUE=\"'{probe_type}'\"\n    SAVE_VARIABLE VARIABLE=machine_has_adxl VALUE={1 if has_adxl else 0}\n    BED_MESH_PROFILE LOAD=default\n    RESPOND MSG=\"YUMI {full_model} | Probe:{probe_type} | ADXL:{'yes' if has_adxl else 'no'} | Smartbox:{'yes' if has_smartbox else 'no'}\"\n    M117 {full_model}"
+          "gcode": "[delayed_gcode welcome]\ninitial_duration: 1\ngcode:\n    _YUMI_MACHINE\n    _YUMI_WELCOME\n\n[gcode_macro _YUMI_WELCOME]\ndescription: Startup report — machine class from _YUMI_MACHINE, options read from the config\ngcode:\n    {% set model = printer[\"gcode_macro _YUMI_MACHINE\"].model %}\n    {% set bed_size = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|int %}\n    {% set has_smartbox = 'mcu smartbox' in printer %}\n    {% set ns = namespace(yms=0) %}\n    {% if 'extruder_stepper extruder0' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder1' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder2' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder3' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder4' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder5' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% if 'extruder_stepper extruder6' in printer.configfile.settings %}{% set ns.yms = ns.yms + 1 %}{% endif %}\n    {% set ns2 = namespace(dryer_pos=\"none\", has_dryer=false) %}\n    {% if 'heater_generic yms-3-pro' in printer.configfile.settings %}{% set ns2.has_dryer = true %}{% set ns2.dryer_pos = \"YMS-3\" %}{% endif %}\n    {% set yms_type = \"PRO\" if ns2.has_dryer else (\"LITE\" if ns.yms > 0 else \"NONE\") %}\n    {% set has_probe_pressure = 'probe_pressure' in printer.configfile.settings %}\n    {% set probe_type = \"pressure\" if has_probe_pressure else \"standard\" %}\n    {% set has_adxl = 'mcu rpi' in printer %}\n    {% if ns.yms > 0 %}\n        {% set full_model = model ~ \" \" ~ ns.yms ~ \"YMS-\" ~ yms_type %}\n    {% else %}\n        {% set full_model = model ~ \" 1COLOR\" %}\n    {% endif %}\n    SAVE_VARIABLE VARIABLE=machine_model VALUE=\"'{model}'\"\n    SAVE_VARIABLE VARIABLE=machine_full_model VALUE=\"'{full_model}'\"\n    SAVE_VARIABLE VARIABLE=machine_bed_size VALUE={bed_size}\n    SAVE_VARIABLE VARIABLE=machine_yms_count VALUE={ns.yms}\n    SAVE_VARIABLE VARIABLE=machine_yms_type VALUE=\"'{yms_type}'\"\n    SAVE_VARIABLE VARIABLE=machine_has_smartbox VALUE={1 if has_smartbox else 0}\n    SAVE_VARIABLE VARIABLE=machine_probe_type VALUE=\"'{probe_type}'\"\n    SAVE_VARIABLE VARIABLE=machine_has_adxl VALUE={1 if has_adxl else 0}\n    # a fresh machine has no mesh yet: loading a missing profile is an error popup at every boot\n    {% if \"default\" in printer.bed_mesh.profiles %}\n        BED_MESH_PROFILE LOAD=default\n    {% endif %}\n    RESPOND MSG=\"YUMI {full_model} | Probe:{probe_type} | ADXL:{'yes' if has_adxl else 'no'} | Smartbox:{'yes' if has_smartbox else 'no'}\"\n    M117 {full_model}"
         },
         {
           "id": "set_gcode_offset",
@@ -111,14 +705,29 @@
           "gcode": "[gcode_macro RESUME]\ndescription: Resume the running print\nrename_existing: RESUME_BASE\nvariable_prime: 40.0\ngcode:\n    {% set svv = printer.save_variables.variables %}\n    {% set fan_speed = svv.fan_speed|default(0)|int %}\n    {% set x_park = printer.toolhead.axis_maximum.x|float %}\n    G1 X{x_park} F6000\n    {% if 'pause_x' in svv and 'pause_y' in svv and 'pause_z' in svv %}\n        {% set px = svv.pause_x|float %}\n        {% set py = svv.pause_y|float %}\n        {% set pz = svv.pause_z|float %}\n    {% else %}\n        {action_respond_info(\"Pause coordinates not found\")}\n        M117 ERROR: Unknown pause position\n    {% endif %}\n    {% set E = printer[\"gcode_macro PAUSE\"].extrude|float %}\n    {% if 'VELOCITY' in params|upper %}\n        {% set get_params = ('VELOCITY=' + params.VELOCITY) %}\n    {% else %}\n        {% set get_params = \"\" %}\n    {% endif %}\n    {% if printer.extruder.can_extrude|lower == 'true' %}\n        G91\n        G1 E{prime|float} F300\n        G92 E0\n        M106 S255\n        G4 P5000\n        G90\n        G1 X{x_park - 11} F26000\n        G92 E0\n        G1 X{px} Y{py} Z{pz} F6000\n        G1 E{E} F10800\n        M106 S{fan_speed}\n    {% else %}\n        {action_respond_info(\"Extruder not hot enough\")}\n    {% endif %}\n    RESUME_BASE {get_params}\n    M117 printing..."
         },
         {
+          "id": "tip_shaping",
+          "condition": "always",
+          "gcode": "[gcode_macro _YUMI_TIP]\ndescription: Single source of the filament tip-shaping unload sequence (mm and mm/s); tune live with SET_GCODE_VARIABLE, then freeze the winning values here\n# 1. short fast retract that breaks the pressure — the only step done over the part (CANCEL_PRINT)\nvariable_first_len: 7\nvariable_first_speed: 80\n# 2. the cut: fast pull that shears the molten part from the solid filament\nvariable_cut_len: 10\nvariable_cut_speed: 65\n# 3. slow pull: the tip stretches and cools as it leaves the melt zone\nvariable_slow_len: 20\nvariable_slow_speed: 5\n# 4. the pull up into the PTFE (tip visible above the hotend from ~142 mm total)\nvariable_pull_len: 110\nvariable_pull_speed: 35\n# reload: back down the same distance, then a small slow purge\nvariable_purge_len: 10\nvariable_purge_speed: 5\ngcode:\n    {% set t = printer[\"gcode_macro _YUMI_TIP\"] %}\n    RESPOND MSG=\"tip: first {t.first_len}mm@{t.first_speed} | cut {t.cut_len}mm@{t.cut_speed} | slow {t.slow_len}mm@{t.slow_speed} | pull {t.pull_len}mm@{t.pull_speed} | purge {t.purge_len}mm@{t.purge_speed} (mm/s)\"\n\n[gcode_macro YUMI_UNLOAD_TIP]\ndescription: Tip-shaping unload: first retract, cut, slow pull, pull up into the PTFE. SKIP_FIRST=1 when the first retract was already done. Any _YUMI_TIP variable can be given as a parameter (CUT_SPEED=65 ...).\ngcode:\n    {% set t = printer[\"gcode_macro _YUMI_TIP\"] %}\n    {% set first_len = params.FIRST_LEN|default(t.first_len)|float %}\n    {% set first_speed = params.FIRST_SPEED|default(t.first_speed)|float %}\n    {% set cut_len = params.CUT_LEN|default(t.cut_len)|float %}\n    {% set cut_speed = params.CUT_SPEED|default(t.cut_speed)|float %}\n    {% set slow_len = params.SLOW_LEN|default(t.slow_len)|float %}\n    {% set slow_speed = params.SLOW_SPEED|default(t.slow_speed)|float %}\n    {% set pull_len = params.PULL_LEN|default(t.pull_len)|float %}\n    {% set pull_speed = params.PULL_SPEED|default(t.pull_speed)|float %}\n    SAVE_GCODE_STATE NAME=yumi_tip\n    M83\n    {% if params.SKIP_FIRST|default(0)|int == 0 %}\n        G1 E-{first_len} F{(first_speed * 60)|int}\n    {% endif %}\n    G1 E-{cut_len} F{(cut_speed * 60)|int}\n    G1 E-{slow_len} F{(slow_speed * 60)|int}\n    G1 E-{pull_len} F{(pull_speed * 60)|int}\n    RESTORE_GCODE_STATE NAME=yumi_tip\n    # the head sensor must have released: pulls more if needed, error if the filament never left\n    YUMI_UNLOAD_CHECK\n\n[gcode_macro YUMI_TIP_TEST]\ndescription: Filament change without the cutter: CYCLES x (load + purge, tip-shaping unload up into the PTFE, wait WAIT s), then a final load. TEMP hotend, TOOL selects the YMS feeder (T<n>) on a ChromaX12. The head does not move (parked at the pop tool if homed). Tip parameters as in YUMI_UNLOAD_TIP.\ngcode:\n    {% set t = printer[\"gcode_macro _YUMI_TIP\"] %}\n    {% set cycles = params.CYCLES|default(2)|int %}\n    {% set temp = params.TEMP|default(220)|float %}\n    {% set wait = params.WAIT|default(10)|float %}\n    {% set bed_size = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|float %}\n    {% set first_len = params.FIRST_LEN|default(t.first_len)|float %}\n    {% set cut_len = params.CUT_LEN|default(t.cut_len)|float %}\n    {% set slow_len = params.SLOW_LEN|default(t.slow_len)|float %}\n    {% set pull_len = params.PULL_LEN|default(t.pull_len)|float %}\n    {% set pull_speed = params.PULL_SPEED|default(t.pull_speed)|float %}\n    {% set purge_len = params.PURGE_LEN|default(t.purge_len)|float %}\n    {% set purge_speed = params.PURGE_SPEED|default(t.purge_speed)|float %}\n    {% set load_len = first_len + cut_len + slow_len + pull_len %}\n    {% set tip_args = [] %}\n    {% for k, v in params.items() if k not in ('CYCLES', 'TEMP', 'WAIT', 'TOOL') %}{% set _ = tip_args.append(k ~ '=' ~ v) %}{% endfor %}\n    {% if params.TOOL is defined %}\n        T{params.TOOL|int}\n    {% endif %}\n    {% if \"xyz\" in printer.toolhead.homed_axes %}\n        SAVE_GCODE_STATE NAME=yumi_tip_test\n        G90\n        {% if printer.toolhead.position.z < 20 %}\n            G1 Z20 F600\n        {% endif %}\n        G1 X{bed_size + 7} F12000\n        G1 X{bed_size + 20} F5000\n        RESTORE_GCODE_STATE NAME=yumi_tip_test\n    {% endif %}\n    RESPOND MSG=\"tip test: {cycles} cycle(s), {temp}C, load to the head sensor + purge {purge_len}mm, wait {wait}s\"\n    M109 S{temp}\n    SAVE_GCODE_STATE NAME=yumi_tip_test2\n    M83\n    {% for i in range(cycles) %}\n        RESPOND MSG=\"tip test {i + 1}/{cycles}: load to the head sensor\"\n        YUMI_LOAD_TO_HEAD\n        G1 E{purge_len} F{(purge_speed * 60)|int}\n        M400\n        RESPOND MSG=\"tip test {i + 1}/{cycles}: unload (tip shaping)\"\n        YUMI_UNLOAD_TIP {tip_args|join(' ')}\n        M400\n        RESPOND MSG=\"tip test {i + 1}/{cycles}: tip up in the PTFE, waiting {wait}s\"\n        G4 P{(wait * 1000)|int}\n    {% endfor %}\n    RESPOND MSG=\"tip test: final load to the head sensor + purge — check the filament came back to the nozzle\"\n    YUMI_LOAD_TO_HEAD\n    G1 E{purge_len} F{(purge_speed * 60)|int}\n    M400\n    RESTORE_GCODE_STATE NAME=yumi_tip_test2\n    RESPOND MSG=\"tip test done\""
+        },
+        {
           "id": "cancel_print",
           "condition": "always",
-          "gcode": "[gcode_macro CANCEL_PRINT]\nrename_existing: CANCEL_PRINT_DEFAULT\ndescription: Cancel print, retract & park head safely\ngcode:\n    CANCEL_PRINT_DEFAULT\n    M220 S100\n    M221 S100\n    SAVE_VARIABLE VARIABLE=was_interrupted VALUE=False\n    SAVE_VARIABLE VARIABLE=printing_start VALUE=False\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% if x_max >= 245 and x_max <= 275 %}\n        {% set bed_size = 235 %}\n    {% elif x_max >= 345 and x_max <= 375 %}\n        {% set bed_size = 335 %}\n    {% elif x_max >= 445 and x_max <= 475 %}\n        {% set bed_size = 435 %}\n    {% else %}\n        {% set bed_size = 235 %}\n    {% endif %}\n    {% set y_park = printer.configfile.settings.stepper_y.position_max|float %}\n    {% set z_max = printer.toolhead.axis_maximum.z|float %}\n    {% set z_lift = 10.0 %}\n    SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=10000\n    G92 E0\n    G1 E-7 F4800\n    G1 E-10 F2100\n    G1 E-20 F300\n    G91\n    {% set dz = z_lift if (printer.gcode_move.position.z + z_lift) < z_max else (z_max - printer.gcode_move.position.z) %}\n    G1 Z+{dz} F3000\n    G90\n    G1 X{bed_size + 11} F26000\n    G1 X{bed_size + 25} F5000\n    SET_VELOCITY_LIMIT ACCEL=9000 ACCEL_TO_DECEL=4500\n    G1 Y{y_park} F3000\n    SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=10000\n    G92 E0\n    G1 E-110 F2100\n    M106 S0\n    G92 E0\n    ALL_FAN_OFF\n    TURN_OFF_HEATERS\n    M84"
+          "gcode": "[gcode_macro _YUMI_POP_TOOL]\ndescription: Pop tool position, single source for every macro that parks there (PRINT_END, CANCEL_PRINT, tool change): X = bed + approach_dx then bed + pop_dx (the slicer start block positions; X max is bed + 21 on every size), Y = position_max\nvariable_approach_dx: 7\nvariable_pop_dx: 20\nvariable_approach_speed: 26000\nvariable_pop_speed: 5000\nvariable_y_speed: 3000\ngcode:\n    {% set bed_size = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|float %}\n    {% set y_park = printer.configfile.settings.stepper_y.position_max|float %}\n    G90\n    G1 X{bed_size + approach_dx} F{approach_speed}\n    G1 X{bed_size + pop_dx} F{pop_speed}\n    SET_VELOCITY_LIMIT ACCEL=9000 ACCEL_TO_DECEL=4500\n    G1 Y{y_park} F{y_speed}\n    SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=10000\n\n[gcode_macro _YUMI_LEAVE_PART_AND_UNLOAD]\ndescription: Shared by PRINT_END and CANCEL_PRINT. Off the part at once (the short fast retract of the tip sequence, lift), pop tool, then the tip-shaping unload with the head-switch release check. Nozzle still hot: heaters are switched off by the caller afterwards. Tolerates being entered already parked or partly retracted (slicer end block of an older firmware)\ngcode:\n    {% set z_max = printer.toolhead.axis_maximum.z|float %}\n    {% set z_lift = 10.0 %}\n    {% set tip = printer[\"gcode_macro _YUMI_TIP\"] %}\n    SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=10000\n    M106 S0\n    # moves only on a REAL homing: toolhead.homed_axes says xyz after plr.cfg's KINEMATIC_POSITION\n    # at boot, with the head anywhere; the sensorless module knows which axes it really homed\n    {% set real = printer[\"yumi_sensorless_homing\"].homed|default(\"\") %}\n    {% if \"x\" in real and \"y\" in real and \"z\" in printer.toolhead.homed_axes %}\n        # 1. leave the part immediately: the short fast retract of the tip sequence, lift,\n        #    then travel to the pop tool\n        SAVE_GCODE_STATE NAME=yumi_leave\n        M83\n        G1 E-{tip.first_len} F{(tip.first_speed * 60)|int}\n        RESTORE_GCODE_STATE NAME=yumi_leave\n        G91\n        {% set dz = z_lift if (printer.gcode_move.position.z + z_lift) < z_max else (z_max - printer.gcode_move.position.z) %}\n        G1 Z+{dz} F3000\n        G90\n        _YUMI_POP_TOOL\n    {% endif %}\n    {% else %}\n        RESPOND MSG=\"not really homed: no travel, filament unloaded where the head is\"\n    {% endif %}\n    # 2. at the park: the tip-shaping unload (cut, slow pull, pull up into the PTFE) — one\n    #    source for its speeds and lengths: _YUMI_TIP / YUMI_UNLOAD_TIP — then the head switch\n    #    must have released (YUMI_UNLOAD_CHECK inside). Never over the part.\n    YUMI_UNLOAD_TIP SKIP_FIRST=1\n\n[gcode_macro CANCEL_PRINT]\nrename_existing: CANCEL_PRINT_DEFAULT\ndescription: Cancel print: off the part at once (short retract, lift, travel to the pop tool), then the shaping retract at the park\ngcode:\n    CANCEL_PRINT_DEFAULT\n    SAVE_VARIABLE VARIABLE=was_interrupted VALUE=False\n    SAVE_VARIABLE VARIABLE=printing_start VALUE=False\n    _YUMI_LEAVE_PART_AND_UNLOAD\n    M220 S100\n    M221 S100\n    ALL_FAN_OFF\n    TURN_OFF_HEATERS\n    M84"
+        },
+        {
+          "id": "yumi_setup",
+          "condition": "always",
+          "gcode": "[gcode_shell_command yumi_setup]\n# generator/prefs.py of yumi-config: writes the machine's preferences and asks Moonraker to\n# restart Klipper — the klipper.service ExecStartPre (autoconfig --boot) regenerates printer.cfg\ncommand: sh -c \"python3 ~/printer_data/../yumi-config/generator/prefs.py --apply --set \\\"$@\\\"\" yumi_setup\ntimeout: 60\nverbose: True\n\n[gcode_macro YUMI_SETUP]\ndescription: Declare the machine's configuration in one line and regenerate printer.cfg — what the Printer Config panel does, from the console or remotely: YUMI_SETUP HEAD=CHROMAX_X12 HOTEND=LOW_WASTE NOZZLE=NOZZLE_04 [MACHINE=C235] [HEAD_SENSOR=1|0]. Klipper restarts.\ngcode:\n    {% set args = [] %}\n    {% for k, v in params.items() %}{% set _ = args.append(k ~ '=' ~ v) %}{% endfor %}\n    {% if not args %}\n        RESPOND TYPE=error MSG=\"YUMI_SETUP: nothing to set (HEAD= HOTEND= NOZZLE= MACHINE= HEAD_SENSOR=)\"\n    {% else %}\n        RESPOND MSG=\"YUMI_SETUP {args|join(' ')} — Klipper restarts with the regenerated printer.cfg\"\n        RUN_SHELL_COMMAND CMD=yumi_setup PARAMS=\"{args|join(' ')}\"\n    {% endif %}"
         },
         {
           "id": "print_start_end",
           "condition": "always",
-          "gcode": "[gcode_macro PRINT_START]\ngcode:\n    M106 S140 P3\n    G92 E0\n\n[gcode_macro PRINT_END]\ndescription: End print safely\ngcode:\n    SAVE_VARIABLE VARIABLE=was_interrupted VALUE=False\n    clear_last_file\n    RUN_SHELL_COMMAND CMD=clear_plr\n    M400\n    G92 E0\n    G91\n    G1 E-2 F2700\n    G1 Z5 F3000\n    G90\n    {% set x_max = printer.toolhead.axis_maximum.x|float %}\n    {% set y_max = printer.toolhead.axis_maximum.y|float %}\n    G0 X{x_max} Y{y_max} F6000\n    ALL_FAN_OFF\n    TURN_OFF_HEATERS\n    M84\n\n[gcode_macro ALL_FAN_OFF]\ndescription: Turn off all fans\ngcode:\n    M107\n    SET_FAN_SPEED FAN=Aux_Fan SPEED=0\n\n[gcode_macro M600]\ndescription: Filament change (pause)\ngcode:\n    PAUSE\n\n[gcode_macro M84]\ndescription: Disable motors with position reset\nrename_existing: M84.1\ngcode:\n    SET_STEPPER_ENABLE STEPPER=stepper_x enable=0\n    SET_STEPPER_ENABLE STEPPER=stepper_y enable=0\n    SET_STEPPER_ENABLE STEPPER=stepper_z enable=0\n    SET_STEPPER_ENABLE STEPPER=extruder enable=0\n    SET_KINEMATIC_POSITION"
+          "gcode": "[gcode_macro PRINT_START]\ndescription: First line of the slicer start g-code. BED_X/BED_Y/MODEL/HEAD/HOTEND/NOZZLE come from the slicer profile: a file sliced for another machine, head, hotend or nozzle is cancelled here, cold, before any heating or motion.\ngcode:\n    {% set machine = printer[\"gcode_macro _YUMI_MACHINE\"] %}\n    {% set product = printer[\"gcode_macro _YUMI_PRODUCT\"] %}\n    {% set bed = machine.bed_size|float %}\n    {% set model = params.MODEL|default(\"\")|string %}\n    {% set ns = namespace(reason=\"\", checked=false) %}\n    # bed size -> machine model (X axis length)\n    {% if params.BED_X is defined %}\n        {% set ns.checked = true %}\n        {% set bed_x = params.BED_X|float %}\n        {% set bed_y = params.BED_Y|default(params.BED_X)|float %}\n        {% if bed <= 0 %}\n            RESPOND TYPE=echo MSG=\"PRINT_START: machine size unknown (_YUMI_MACHINE), slicer profile not checked\"\n        {% elif (bed_x - bed)|abs > 1 or (bed_y - bed)|abs > 1 %}\n            {% set what = model if model else (bed_x|int ~ \"x\" ~ bed_y|int ~ \" bed\") %}\n            {% set ns.reason = \"File sliced for \" ~ what ~ \". Please re-slice with the \" ~ machine.model ~ \" profile.\" %}\n        {% endif %}\n    {% endif %}\n    # print head (Direct Drive / ChromaX12): what this printer.cfg was generated for\n    {% set head = params.HEAD|default(\"\")|string %}\n    {% if not ns.reason and head and product.head %}\n        {% set ns.checked = true %}\n        {% if head|lower|replace(\" \", \"\") != product.head|lower|replace(\" \", \"\") %}\n            {% set ns.reason = \"File sliced for \" ~ head ~ \" head. This machine is set as \" ~ product.head ~ \". Re-slice, or change the head in Printer Config.\" %}\n        {% endif %}\n    {% endif %}\n    # hotend type (Low waste / High Flow); empty = single hotend machine, not applicable\n    {% set hotend = params.HOTEND|default(\"\")|string %}\n    {% if not ns.reason and hotend and product.hotend %}\n        {% set ns.checked = true %}\n        {% if hotend|lower|replace(\" \", \"\") != product.hotend|lower|replace(\" \", \"\") %}\n            {% set ns.reason = \"File sliced for \" ~ hotend ~ \" hotend. This machine is set as \" ~ product.hotend ~ \". Re-slice, or change the hotend in Printer Config.\" %}\n        {% endif %}\n    {% endif %}\n    # nozzle: the diameter of [extruder] is authoritative\n    {% if not ns.reason and params.NOZZLE is defined %}\n        {% set ns.checked = true %}\n        {% set nozzle = printer.configfile.settings.extruder.nozzle_diameter|float %}\n        {% if (params.NOZZLE|float - nozzle)|abs > 0.01 %}\n            {% set ns.reason = \"File sliced for \" ~ params.NOZZLE ~ \" nozzle. This machine is set as \" ~ nozzle ~ \". Re-slice, or change the nozzle in Printer Config.\" %}\n        {% endif %}\n    {% endif %}\n    {% if ns.reason %}\n        # short message, no \"Error evaluating ...\" wrapper: cancel the SD print cleanly\n        # (CANCEL_PRINT_DEFAULT = Klipper's own cancel, renamed by the CANCEL_PRINT macro\n        # of this trunk: no motion, nothing has heated yet)\n        RESPOND TYPE=error MSG=\"{ns.reason}\"\n        M117 Wrong slicer profile\n        CANCEL_PRINT_DEFAULT\n    {% elif not ns.checked %}\n        RESPOND TYPE=echo MSG=\"PRINT_START: the file carries no profile data (old start g-code), slicer profile not checked\"\n    {% endif %}\n    {% if not ns.reason %}\n        # machine state: the T macros and the YMS insert_gcode take their printing branch,\n        # PRINT_END / CANCEL_PRINT / _YUMI_PRINT_ERROR put it back\n        SAVE_VARIABLE VARIABLE=printing_start VALUE=True\n        # power-loss recovery (Yumi_PLR, plr.cfg): clear the previous record, remember this file\n        SAVE_VARIABLE VARIABLE=was_interrupted VALUE=True\n        {% if \"gcode_shell_command clear_plr\" in printer.configfile.settings %}\n            RUN_SHELL_COMMAND CMD=clear_plr\n        {% endif %}\n        {% if \"gcode_macro save_last_file\" in printer %}\n            save_last_file\n        {% endif %}\n    {% endif %}\n    # the motherboard fan is a controller_fan: automatic whenever motors or heaters are active\n    G92 E0\n\n[gcode_macro PRINT_END]\ndescription: The slicer end g-code is exactly this line. Off the part, pop tool, tip-shaping unload until the head switch releases (nozzle still hot), then heaters and fans off, state and PLR cleared, motors off. The filament never stays in the head between two prints\ngcode:\n    M400\n    _YUMI_LEAVE_PART_AND_UNLOAD\n    M220 S100\n    M221 S100\n    ALL_FAN_OFF\n    TURN_OFF_HEATERS\n    SAVE_VARIABLE VARIABLE=was_interrupted VALUE=False\n    SAVE_VARIABLE VARIABLE=printing_start VALUE=False\n    # power-loss recovery (Yumi_PLR, plr.cfg) has nothing to resume any more\n    {% if \"gcode_macro clear_last_file\" in printer %}\n        clear_last_file\n    {% endif %}\n    {% if \"gcode_shell_command clear_plr\" in printer.configfile.settings %}\n        RUN_SHELL_COMMAND CMD=clear_plr\n    {% endif %}\n    M84\n    # every refresh_every prints: propose the reference scan + mesh on the screen, never by itself\n    _YUMI_MESH_REFRESH_PROMPT\n\n[gcode_macro ALL_FAN_OFF]\ndescription: Turn off all fans\ngcode:\n    M107\n    SET_FAN_SPEED FAN=Aux_Fan SPEED=0\n\n[gcode_macro M600]\ndescription: Filament change (pause)\ngcode:\n    PAUSE\n\n[gcode_macro M84]\ndescription: Disable motors with position reset\nrename_existing: M84.1\ngcode:\n    SET_STEPPER_ENABLE STEPPER=stepper_x enable=0\n    SET_STEPPER_ENABLE STEPPER=stepper_y enable=0\n    SET_STEPPER_ENABLE STEPPER=stepper_z enable=0\n    SET_STEPPER_ENABLE STEPPER=extruder enable=0\n    SET_KINEMATIC_POSITION"
+        },
+        {
+          "id": "single_tool",
+          "condition": "yms_count == 0",
+          "gcode": "[gcode_macro T0]\ndescription: Single extruder: the slicer's tool selection loads the filament to the head (sensor) instead of being an unknown command\ngcode:\n    YUMI_LOAD_TO_HEAD"
         },
         {
           "id": "filament",
@@ -138,7 +747,7 @@
         {
           "id": "fan_override",
           "condition": "always",
-          "gcode": "[gcode_macro M106]\nrename_existing: M106.1\ngcode:\n    {% set S = params.S|default(255)|int %}\n    {% if params.P is defined %}\n        {% set P = params.P|int %}\n        {% if P == 2 %}\n            SET_FAN_SPEED FAN=Aux_Fan SPEED={S / 255.0}\n        {% elif P == 3 %}\n            SET_FAN_SPEED FAN=Motherboard_Fan SPEED={S / 255.0}\n        {% else %}\n            M106.1 S{S}\n        {% endif %}\n    {% else %}\n        M106.1 S{S}\n    {% endif %}\n\n[gcode_macro M107]\nrename_existing: M107.1\ngcode:\n    {% if params.P is defined %}\n        {% set P = params.P|int %}\n        {% if P == 2 %}\n            SET_FAN_SPEED FAN=Aux_Fan SPEED=0\n        {% elif P == 3 %}\n            SET_FAN_SPEED FAN=Motherboard_Fan SPEED=0\n        {% else %}\n            M107.1\n        {% endif %}\n    {% else %}\n        M107.1\n    {% endif %}"
+          "gcode": "[gcode_macro M106]\nrename_existing: M106.1\ngcode:\n    {% set S = params.S|default(255)|int %}\n    {% if params.P is defined %}\n        {% set P = params.P|int %}\n        {% if P == 2 %}\n            SET_FAN_SPEED FAN=Aux_Fan SPEED={S / 255.0}\n        {% elif P == 3 %}\n            # P3 = motherboard fan: a controller_fan, automatic (motors/heaters active) — nothing to set\n        {% else %}\n            M106.1 S{S}\n        {% endif %}\n    {% else %}\n        M106.1 S{S}\n    {% endif %}\n\n[gcode_macro M107]\nrename_existing: M107.1\ngcode:\n    {% if params.P is defined %}\n        {% set P = params.P|int %}\n        {% if P == 2 %}\n            SET_FAN_SPEED FAN=Aux_Fan SPEED=0\n        {% elif P == 3 %}\n            # P3 = motherboard fan: a controller_fan, automatic — nothing to set\n        {% else %}\n            M107.1\n        {% endif %}\n    {% else %}\n        M107.1\n    {% endif %}"
         },
         {
           "id": "marlin_compat",
@@ -153,7 +762,12 @@
         {
           "id": "bed_detection",
           "condition": "always",
-          "gcode": "[gcode_macro BED_DETECTION]\ndescription: Detect bed presence via 2-point probe\ngcode:\n    {% set ref_offset_x = 8.5 %}\n    {% set ref_offset_y = 22 %}\n    {% set bed_probe_x_inset = 14 %}\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}\n    {% if x_max >= 245 and x_max <= 275 %}\n        {% set bed_size = 235 %}\n    {% elif x_max >= 345 and x_max <= 375 %}\n        {% set bed_size = 335 %}\n    {% elif x_max >= 445 and x_max <= 475 %}\n        {% set bed_size = 435 %}\n    {% else %}\n        {% set bed_size = 235 %}\n    {% endif %}\n    {% set ref_x = bed_size / 2 + ref_offset_x %}\n    {% set ref_y = bed_size - ref_offset_y %}\n    {% set probe_x = x_max - bed_probe_x_inset %}\n    {% set probe_y = ref_y %}\n    G28 X\n    G28 Y\n    SET_KINEMATIC_POSITION Z={z_max - 20}\n    G90\n    G1 X{ref_x} Y{ref_y} F12000\n    PROBE\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z10 F500\n    G1 X{probe_x} Y{probe_y} F12000\n    PROBE\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z10 F500\n    G1 X{x_max} F9000\n\n[gcode_macro PROBE_CALIBRATE]\nrename_existing: BASE_PROBE_CALIBRATE\ngcode:\n    {% set mesh_min = printer.configfile.settings.bed_mesh.mesh_min %}\n    {% set mesh_max = printer.configfile.settings.bed_mesh.mesh_max %}\n    {% set bed_cx = (mesh_min[0]|float + mesh_max[0]|float) / 2 %}\n    {% set bed_cy = (mesh_min[1]|float + mesh_max[1]|float) / 2 %}\n    BED_DETECTION\n    G1 X{bed_cx} Y{bed_cy} F12000\n    BASE_PROBE_CALIBRATE\n\n[gcode_macro SCREWS_TILT_CALCULATE]\nrename_existing: BASE_SCREWS_TILT_CALCULATE\ngcode:\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% if x_max >= 245 and x_max <= 275 %}\n        {% set bed_size = 235 %}\n    {% elif x_max >= 345 and x_max <= 375 %}\n        {% set bed_size = 335 %}\n    {% elif x_max >= 445 and x_max <= 475 %}\n        {% set bed_size = 435 %}\n    {% else %}\n        {% set bed_size = 235 %}\n    {% endif %}\n    {% set y_park = printer.configfile.settings.stepper_y.position_max|float %}\n    M140 S50\n    BED_DETECTION\n    BASE_SCREWS_TILT_CALCULATE\n    G1 Z20 F500\n    G1 X{bed_size / 2} Y{y_park - 2} F6000\n    M140 S0\n\n[gcode_macro BED_MESH_CALIBRATE]\nrename_existing: BASE_BED_MESH_CALIBRATE\ndescription: Bed mesh with preheat and auto homing\ngcode:\n    {% set profile_name = params.PROFILE|default('default')|string %}\n    BED_DETECTION\n    G1 Z100\n    M190 S65\n    G4 P60000\n    BASE_BED_MESH_CALIBRATE PROFILE={profile_name}\n    BED_MESH_PROFILE SAVE={profile_name}\n    SAVE_CONFIG\n\n[gcode_macro BED_DETECT_SYNC]\ndescription: Detection bed BLOQUANTE, 100% autonome (1 macro, zero delayed_gcode). Home XY reel -> PROBE languette metal -> Z=0. La ligne suivante du start g-code n'execute QU'APRES. Stop net si plateau absent ou non calibre.\ngcode:\n    # ---------- Geometrie ----------\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}\n    # ---------- Position languette metal (issue du scan BED_SCAN_ZERO) ----------\n    {% set sv = printer.save_variables.variables %}\n    {% if 'bed_detect_x' not in sv or 'bed_detect_y' not in sv %}\n        { action_raise_error(\"BED_DETECT_SYNC : pas de calibration metal. Lance BED_SCAN_ZERO une fois.\") }\n    {% endif %}\n    {% set mx = sv.bed_detect_x|float %}\n    {% set my = sv.bed_detect_y|float %}\n    # ---------- Home XY REEL (jamais homed_axes : SET_KINEMATIC_POSITION le falsifie) ----------\n    G28 X\n    G28 Y\n    # ---------- Reference Z fictive haute + clearance (sort du champ inductif) ----------\n    SET_KINEMATIC_POSITION Z={z_max - 20}\n    G90\n    G1 Z{z_max - 12} F600\n    # ---------- Va sur le metal, PROBE bloquant -> Z=0 ----------\n    G1 X{mx} Y{my} F12000\n    M400\n    M117 Detection bed...\n    PROBE\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z10 F500\n    M400\n    RESPOND MSG=\"BED_DETECT_SYNC OK : bed present, Z=0 (X{'%.1f'|format(mx)} Y{'%.1f'|format(my)})\""
+          "gcode": "[gcode_macro BED_DETECTION]\ndescription: Bed presence + Z frame on the metal reference plate. Never scanned yet -> BED_SCAN_ZERO first (synchronous), then probes the saved point.\ngcode:\n    {% set sv = printer.save_variables.variables %}\n    {% if 'bed_detect_x' not in sv or 'bed_detect_y' not in sv %}\n        RESPOND MSG=\"BED_DETECTION: metal reference not calibrated yet -> BED_SCAN_ZERO\"\n        BED_SCAN_ZERO\n    {% endif %}\n    # rendered AFTER the scan: reads the freshly saved reference\n    _BED_DETECT_AT_REF\n\n[gcode_macro _BED_DETECT_AT_REF]\ndescription: Phase 1 metal plate (saved point) -> Z=0 ; phase 2 right end of the plate -> bed present\ngcode:\n    {% set sv = printer.save_variables.variables %}\n    {% set mx = sv.bed_detect_x|float %}\n    {% set my = sv.bed_detect_y|float %}\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set z_max = printer.configfile.settings.stepper_z.position_max|float %}\n    {% set bed_probe_x_inset = 14 %}\n    {% if 'xy' not in printer.toolhead.homed_axes %}\n        G28 X\n        G28 Y\n    {% endif %}\n    # fake high Z so the probe can descend, lift first (never \"triggered prior to movement\")\n    SET_KINEMATIC_POSITION Z={z_max - 20}\n    G90\n    G1 Z{z_max - 12} F600\n    G1 X{mx} Y{my} F12000\n    PROBE\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z10 F500\n    G1 X{x_max - bed_probe_x_inset} Y{my} F12000\n    PROBE\n    SET_KINEMATIC_POSITION Z=0\n    G1 Z10 F500\n    G1 X{x_max} F9000\n\n[gcode_macro PROBE_CALIBRATE]\nrename_existing: BASE_PROBE_CALIBRATE\ngcode:\n    {% set mesh_min = printer.configfile.settings.bed_mesh.mesh_min %}\n    {% set mesh_max = printer.configfile.settings.bed_mesh.mesh_max %}\n    {% set bed_cx = (mesh_min[0]|float + mesh_max[0]|float) / 2 %}\n    {% set bed_cy = (mesh_min[1]|float + mesh_max[1]|float) / 2 %}\n    BED_DETECTION\n    G1 X{bed_cx} Y{bed_cy} F12000\n    BASE_PROBE_CALIBRATE\n\n[gcode_macro SCREWS_TILT_CALCULATE]\nrename_existing: BASE_SCREWS_TILT_CALCULATE\ngcode:\n    {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n    {% set bed_size = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|float %}\n    {% set y_park = printer.configfile.settings.stepper_y.position_max|float %}\n    M140 S50\n    BED_DETECTION\n    BASE_SCREWS_TILT_CALCULATE\n    G1 Z20 F500\n    G1 X{bed_size / 2} Y{y_park - 2} F6000\n    M140 S0\n\n[gcode_macro BED_MESH_CALIBRATE]\nrename_existing: BASE_BED_MESH_CALIBRATE\ndescription: Bed mesh with bed detection; persisted in printer.cfg without restarting Klipper (safe inside a start g-code)\ngcode:\n    {% set profile_name = params.PROFILE|default('default')|string %}\n    # inside a print the bed is already at the print temperature: keep it, no soak;\n    # standalone: heat to 65, soak, and switch the bed off afterwards\n    {% set bed_target = printer.heater_bed.target|float %}\n    {% set standalone = bed_target <= 0 %}\n    BED_DETECTION\n    G1 Z100\n    M190 S{65 if standalone else bed_target}\n    {% if standalone %}\n        G4 P60000\n    {% endif %}\n    # BED_MESH_CALIBRATE PROFILE= already saves the profile in memory (a SAVE= on 'default'\n    # only answers \"Profile 'default' is reserved\")\n    BASE_BED_MESH_CALIBRATE PROFILE={profile_name}\n    # scripts/save_mesh.py rewrites the #*# [bed_mesh] block like SAVE_CONFIG would, without the restart\n    RUN_SHELL_COMMAND CMD=save_mesh\n    # a fresh mesh: the print counter of BED_MESH_PROFILE's periodic refresh starts again\n    SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=0\n    {% if standalone %}\n        M140 S0\n    {% endif %}\n\n[gcode_macro BED_DETECT_SYNC]\ndescription: Kept for existing start g-codes: same as BED_DETECTION (synchronous, scans the reference first if needed)\ngcode:\n    BED_DETECTION"
+        },
+        {
+          "id": "bed_mesh_persist",
+          "condition": "always",
+          "gcode": "[gcode_shell_command save_mesh]\n# yumi-config scripts/save_mesh.py, symlinked into printer_data/config/scripts by install.sh\n# (MESH_SCRIPTS_DIR): persists the bed_mesh profiles in the #*# block of printer.cfg exactly\n# as SAVE_CONFIG does, but without restarting Klipper\ncommand: sh -c \"python3 ~/printer_data/config/scripts/save_mesh.py\"\ntimeout: 30\nverbose: True\n\n[gcode_macro BED_MESH_PROFILE]\nrename_existing: BASE_BED_MESH_PROFILE\ndescription: LOAD of a missing profile builds it instead of aborting the print, and counts the prints on the current mesh (prints_since_mesh). The periodic refresh is never run from here: at refresh_every prints PRINT_END proposes it on the screen (_YUMI_MESH_REFRESH_PROMPT), the operator validates\nvariable_refresh_every: 20\ngcode:\n    {% set load = params.LOAD|default('')|string %}\n    {% set sv = printer.save_variables.variables %}\n    {% set prints = sv.prints_since_mesh|default(0)|int %}\n    # only a LOAD from a running print counts: the welcome loads the mesh at every Klipper\n    # start too (15 restarts in a bench day had pushed the counter to 20)\n    {% set in_print = printer.print_stats.state == \"printing\" %}\n    {% if load and load not in printer.bed_mesh.profiles %}\n        # a machine that was never meshed: the sliced file's start g-code asks for a mesh\n        # that is not there. Build it now (persisted, no restart), then put the nozzle zero\n        # back where the start g-code had just set it (BED_DETECTION moved the Z frame to\n        # the inductive probe) — the print goes on with the fresh mesh active.\n        RESPOND MSG=\"bed_mesh: no profile [{load}] yet, calibrating it now\"\n        BED_MESH_CALIBRATE PROFILE={load}\n        Z_TAP\n        SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=1\n    {% else %}\n        BASE_BED_MESH_PROFILE {rawparams}\n        {% if load and in_print %}\n            SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE={prints + 1}\n        {% endif %}\n    {% endif %}\n\n[gcode_macro YUMI_MESH_REFRESH]\ndescription: Reference plate scan (BED_SCAN_ZERO) then bed mesh, standalone: BED_MESH_CALIBRATE heats the bed to 65, soaks, saves without a restart and switches the bed off. Run from the screen prompt (or by hand); it never starts by itself\ngcode:\n    RESPOND TYPE=command MSG=\"action:prompt_end\"\n    M117 Bed mesh refresh\n    BED_SCAN_ZERO\n    BED_MESH_CALIBRATE\n    M117 Bed mesh refreshed\n\n[gcode_macro _YUMI_PROMPT_END]\ndescription: Closes the screen prompt (the \"Later\" button)\ngcode:\n    RESPOND TYPE=command MSG=\"action:prompt_end\"\n\n[gcode_macro _YUMI_MESH_REFRESH_PROMPT]\ndescription: Screen dialog (KlipperScreen and Mainsail understand action:prompt) when refresh_every prints were made on the current mesh: the operator validates or postpones; nothing moves without a tap. Called by PRINT_END\ngcode:\n    {% set prints = printer.save_variables.variables.prints_since_mesh|default(0)|int %}\n    {% set every = printer[\"gcode_macro BED_MESH_PROFILE\"].refresh_every|int %}\n    {% if every > 0 and prints >= every %}\n        RESPOND TYPE=command MSG=\"action:prompt_begin Bed mesh refresh\"\n        RESPOND TYPE=command MSG=\"action:prompt_text {prints} prints since the last bed mesh. Scan the reference plate and rebuild the mesh now? A few minutes, bed heated to 65 C.\"\n        RESPOND TYPE=command MSG=\"action:prompt_footer_button Later|_YUMI_PROMPT_END\"\n        RESPOND TYPE=command MSG=\"action:prompt_footer_button Refresh now|YUMI_MESH_REFRESH|primary\"\n        RESPOND TYPE=command MSG=\"action:prompt_show\"\n    {% endif %}"
         },
         {
           "id": "cat_filament",
@@ -163,7 +777,7 @@
         {
           "id": "wipe_nozzle",
           "condition": "always",
-          "gcode": "[gcode_macro WIPE_NOZZLE]\ndescription: Wipe nozzle on brush\ngcode:\n        {% if printer.extruder.temperature < 125 %}\n            M109 S130\n        {% endif %}\n        {% set x_max = printer.configfile.settings.stepper_x.position_max|float %}\n        {% if x_max >= 245 and x_max <= 275 %}\n            {% set bed_size = 235 %}\n        {% elif x_max >= 345 and x_max <= 375 %}\n            {% set bed_size = 335 %}\n        {% elif x_max >= 445 and x_max <= 475 %}\n            {% set bed_size = 435 %}\n        {% else %}\n            {% set bed_size = 235 %}\n        {% endif %}\n        {% set brush_x_min = bed_size / 2 + 18.5 %}\n        {% set brush_x_max = bed_size / 2 + 45.5 %}\n        {% set brush_y_min = bed_size + 6 %}\n        {% set brush_y_max = bed_size + 11 %}\n        {% set brush_z = 2.5 %}\n        {% set wipe_passes = 4 %}\n        {% set wipe_speed = 6000 %}\n        {% if printer.toolhead.homed_axes != \"xyz\" %}\n            G28\n        {% endif %}\n        G90\n        G1 Z10 F300\n        G1 X{brush_x_min} Y{brush_y_min} F6000\n        G1 Z{brush_z} F300\n        {% for pass in range(wipe_passes) %}\n            G1 X{brush_x_min} Y{brush_y_min} F{wipe_speed}\n            G1 X{brush_x_max} Y{brush_y_max} F{wipe_speed}\n            G1 X{brush_x_min} Y{brush_y_max} F{wipe_speed}\n            G1 X{brush_x_max} Y{brush_y_min} F{wipe_speed}\n        {% endfor %}\n        G1 Z10 F300\n        RESPOND MSG=\"Nozzle wiped\""
+          "gcode": "[gcode_macro WIPE_NOZZLE]\ndescription: Wipe nozzle on brush\ngcode:\n        {% if printer.extruder.temperature < 125 %}\n            M109 S130\n        {% endif %}\n        {% set bed_size = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|float %}\n        {% set brush_x_min = bed_size / 2 + 18.5 %}\n        {% set brush_x_max = bed_size / 2 + 45.5 %}\n        {% set brush_y_min = bed_size + 6 %}\n        {% set brush_y_max = bed_size + 11 %}\n        {% set brush_z = 2.5 %}\n        {% set wipe_passes = 4 %}\n        {% set wipe_speed = 6000 %}\n        {% if printer.toolhead.homed_axes != \"xyz\" %}\n            G28\n        {% endif %}\n        G90\n        G1 Z10 F300\n        G1 X{brush_x_min} Y{brush_y_min} F6000\n        G1 Z{brush_z} F300\n        {% for pass in range(wipe_passes) %}\n            G1 X{brush_x_min} Y{brush_y_min} F{wipe_speed}\n            G1 X{brush_x_max} Y{brush_y_max} F{wipe_speed}\n            G1 X{brush_x_min} Y{brush_y_max} F{wipe_speed}\n            G1 X{brush_x_max} Y{brush_y_min} F{wipe_speed}\n        {% endfor %}\n        G1 Z10 F300\n        RESPOND MSG=\"Nozzle wiped\""
         },
         {
           "id": "motion_sensor_init",
@@ -176,14 +790,19 @@
           "gcode": "[gcode_macro SET_HEATER_TEMPERATURE]\nrename_existing: SET_HEATER_TEMPERATURE_ORIG\ngcode:\n    {% set heater = params.HEATER|default(\"\") %}\n    {% set target = params.TARGET|default(0)|float %}\n    {% if heater in [\"YMS-3-PRO\", \"YMS-4-PRO\", \"YMS-5-PRO\", \"YMS-8-PRO\", \"YMS-9-PRO\", \"YMS-10-PRO\"] and target > 110 %}\n        RESPOND TYPE=error MSG=\"ERROR: { heater } temperature limited to 110C\"\n        SET_HEATER_TEMPERATURE_ORIG HEATER={heater} TARGET=110\n    {% else %}\n        SET_HEATER_TEMPERATURE_ORIG HEATER={heater} TARGET={target}\n    {% endif %}"
         },
         {
-          "id": "yms_cut_filament",
-          "condition": "yms_count > 0",
-          "gcode": "[gcode_macro CUT_FILAMENT]\ndescription: Cut filament with speed profile\ngcode:\n    G1 X8 F42000\n    G1 X-8 F300\n    G1 X8 F42000"
+          "id": "cut_filament",
+          "condition": "always",
+          "gcode": "[gcode_macro _YUMI_CUTTER]\ndescription: Filament cutter geometry, single source for CUT_FILAMENT, the same on every size: the blade lever is pressed against the frame at the far left of X. The cut ends at the configured X minimum (stepper_x position_min, negative); the head first stops approach_offset mm before it, then pushes slowly to the minimum and comes back\nvariable_approach_offset: 20\nvariable_approach_speed: 42000\nvariable_cut_speed: 300\nvariable_release_speed: 6000\ngcode:\n    # settings only. Nicolas 07/09: \"ton point de coupe fini, c'est ton X le plus loin possible,\n    # le X negatif configure dans printer.cfg, et apres tu fais le calcul de decalage pour\n    # t'arreter un peu avant\" -> position_min -10 : stop at X10, cut to X-10\n\n[gcode_macro CUT_FILAMENT]\ndescription: Cut the filament with the head's cutter: travel to approach_offset mm before the configured X minimum, slow push to that minimum (the lever, far left), back. Positions from _YUMI_CUTTER and the X axis limit of the config, identical on every size. X and Y must be homed; the caller places Y and Z beforehand (QC: Y middle, nozzle clear of the bed). Skipped entirely when the saved variable cut_filament_bypass is 1 (Printer Config panel, YUMI_SETUP CUTTER=0, SET_CUT_FILAMENT_BYPASS): the slicer G-code keeps calling it, the printer decides, live\ngcode:\n    {% if printer.save_variables.variables.cut_filament_bypass|default(0)|int == 1 %}\n        RESPOND MSG=\"CUT_FILAMENT: bypassed (cut_filament_bypass=1), no cut\"\n    {% else %}\n        {% set c = printer[\"gcode_macro _YUMI_CUTTER\"] %}\n        {% set cut_x = printer.configfile.settings.stepper_x.position_min|float %}\n        {% set approach_x = cut_x + c.approach_offset|float %}\n        # real homing only: toolhead.homed_axes is faked at boot (plr.cfg KINEMATIC_POSITION) and by\n        # SET_KINEMATIC_POSITION; the sensorless module knows which axes it really homed\n        {% set real = printer[\"yumi_sensorless_homing\"].homed|default(\"\") %}\n        {% if \"x\" not in real or \"y\" not in real %}\n            { action_raise_error(\"CUT_FILAMENT: X and Y not really homed (G28 first)\") }\n        {% endif %}\n        SAVE_GCODE_STATE NAME=yumi_cut\n        G90\n        G1 X{approach_x} F{c.approach_speed}\n        G1 X{cut_x} F{c.cut_speed}\n        G1 X{approach_x} F{c.release_speed}\n        RESTORE_GCODE_STATE NAME=yumi_cut\n        RESPOND MSG=\"CUT_FILAMENT: cut at X{cut_x} (stroke from X{approach_x}, {(c.cut_speed / 60)|round(1)} mm/s)\"\n    {% endif %}\n\n[gcode_macro SET_CUT_FILAMENT_BYPASS]\ndescription: SET_CUT_FILAMENT_BYPASS ENABLE=1 skips every CUT_FILAMENT call (ENABLE=0 restores the cut). Saved in variables.cfg (cut_filament_bypass), so it survives restarts and applies to the running print at the next change; also driven by the Printer Config panel and YUMI_SETUP CUTTER=\ngcode:\n    {% set enable = params.ENABLE|default(1)|int %}\n    SAVE_VARIABLE VARIABLE=cut_filament_bypass VALUE={1 if enable else 0}\n    RESPOND MSG=\"filament cutter {'BYPASSED: CUT_FILAMENT does nothing' if enable else 'enabled'}\""
         },
         {
           "id": "yms_purge",
           "condition": "yms_count > 0",
-          "gcode": "[gcode_macro SET_EXTRA_FLUSH]\ndescription: Set purge parameters\ngcode:\n    {% if 'LENGTH' in params %}\n        {% set new_length = params.LENGTH|float %}\n        SAVE_VARIABLE VARIABLE=extra_purge_length VALUE={new_length}\n        { action_respond_info(\"Purge length set to %.1fmm\" % new_length) }\n    {% endif %}\n    {% if 'SPEED' in params %}\n        {% set new_speed = params.SPEED|float %}\n        SAVE_VARIABLE VARIABLE=extra_purge_speed VALUE={new_speed}\n        { action_respond_info(\"Purge speed set to %.1fmm/s\" % new_speed) }\n    {% endif %}\n\n[gcode_macro EXTRA_FLUSH]\ndescription: Extrude extra filament\ngcode:\n    {% set svv = printer.save_variables.variables %}\n    {% set length = svv.extra_purge_length|default(0)|float %}\n    {% set speed = svv.extra_purge_speed|default(5)|float %}\n    {% if printer.extruder.can_extrude|lower == 'true' %}\n        G92 E0\n        G1 E{length} F{speed * 60}\n        { action_respond_info(\"Purge: %.1fmm @ %.1fmm/s\" % (length, speed)) }\n    {% else %}\n        { action_respond_error(\"ERROR: Temperature too low!\") }\n    {% endif %}\n\n[gcode_macro INIT_FLUSH_VARS]\ndescription: Initialize purge variables\ngcode:\n    {% if 'extra_purge_length' not in printer.save_variables.variables %}\n        SAVE_VARIABLE VARIABLE=extra_purge_length VALUE=0.0\n    {% endif %}\n    {% if 'extra_purge_speed' not in printer.save_variables.variables %}\n        SAVE_VARIABLE VARIABLE=extra_purge_speed VALUE=5.0\n    {% endif %}\n\n[delayed_gcode INIT_YMS]\ninitial_duration: 0.01\ngcode:\n    RESPOND TYPE=error MSG=\"INIT YMS\"\n    M117 INIT YMS\n    INIT_PURGE_VARS\n    T0"
+          "gcode": "[gcode_macro SET_EXTRA_FLUSH]\ndescription: Set purge parameters\ngcode:\n    {% if 'LENGTH' in params %}\n        {% set new_length = params.LENGTH|float %}\n        SAVE_VARIABLE VARIABLE=extra_purge_length VALUE={new_length}\n        { action_respond_info(\"Purge length set to %.1fmm\" % new_length) }\n    {% endif %}\n    {% if 'SPEED' in params %}\n        {% set new_speed = params.SPEED|float %}\n        SAVE_VARIABLE VARIABLE=extra_purge_speed VALUE={new_speed}\n        { action_respond_info(\"Purge speed set to %.1fmm/s\" % new_speed) }\n    {% endif %}\n\n[gcode_macro EXTRA_FLUSH]\ndescription: Extrude extra filament\ngcode:\n    {% set svv = printer.save_variables.variables %}\n    {% set length = svv.extra_purge_length|default(0)|float %}\n    {% set speed = svv.extra_purge_speed|default(5)|float %}\n    {% if printer.extruder.can_extrude|lower == 'true' %}\n        G92 E0\n        G1 E{length} F{speed * 60}\n        { action_respond_info(\"Purge: %.1fmm @ %.1fmm/s\" % (length, speed)) }\n    {% else %}\n        { action_respond_error(\"ERROR: Temperature too low!\") }\n    {% endif %}\n\n[gcode_macro INIT_FLUSH_VARS]\ndescription: Initialize purge variables\ngcode:\n    {% if 'extra_purge_length' not in printer.save_variables.variables %}\n        SAVE_VARIABLE VARIABLE=extra_purge_length VALUE=0.0\n    {% endif %}\n    {% if 'extra_purge_speed' not in printer.save_variables.variables %}\n        SAVE_VARIABLE VARIABLE=extra_purge_speed VALUE=5.0\n    {% endif %}\n\n[delayed_gcode INIT_YMS]\ninitial_duration: 0.01\ngcode:\n    # a boot is never inside a print: whatever a stopped print left in printing_start, T0 takes\n    # its idle branch (re-arm every YMS sensor) — a load to the head at power-on fed 2500 mm\n    # into nothing on the bench (06/09). PLR's resume re-activates the tool itself.\n    SAVE_VARIABLE VARIABLE=printing_start VALUE=False\n    M117 INIT YMS\n    INIT_FLUSH_VARS\n    T0"
+        },
+        {
+          "id": "yms_tool_change",
+          "condition": "yms_count > 0",
+          "gcode": "[gcode_macro _YUMI_CHANGE]\ndescription: Colour change geometry and purge settings, single source for YUMI_TOOL_CHANGE. Values of the slicer block validated on the fleet; to confirm on the bench (Nicolas): popoff_dx, z_clearance, purge Y (current Y)\nvariable_z_clearance: 3\nvariable_popoff_dx: 11\nvariable_prime_len: 20\nvariable_prime_speed: 200\nvariable_flush_min: 15\nvariable_flush_speed: 300\nvariable_fan_ms: 3000\ngcode:\n    # settings only\n\n[gcode_macro YUMI_TOOL_CHANGE]\ndescription: BENCH TEST of a colour change on a ChromaX12 (Nicolas, 06/09: in production the change is 100% scripted in the OrcaSlicer G-code, the machine only provides T<n>, YUMI_UNLOAD_CHECK and EXTRA_FLUSH). TOOL=<n> next feeder (0-based, = T<n>), TEMP=<new filament temperature>, FLUSH=<mm to purge, floored at _YUMI_CHANGE.flush_min>. Leaves the part, pop tool at the current Y, tip-shaping unload of the current filament until the head switch releases, T<n> (load to the switch, then to the nozzle), prime, flush + EXTRA_FLUSH, fan burst, pop-off; the slicer's next travel goes back to the part\ngcode:\n    {% set tool = params.TOOL|int %}\n    {% set c = printer[\"gcode_macro _YUMI_CHANGE\"] %}\n    {% set pop = printer[\"gcode_macro _YUMI_POP_TOOL\"] %}\n    {% set tip = printer[\"gcode_macro _YUMI_TIP\"] %}\n    {% set bed = printer[\"gcode_macro _YUMI_MACHINE\"].bed_size|float %}\n    {% set z_max = printer.toolhead.axis_maximum.z|float %}\n    {% set cur_temp = printer.extruder.target|float %}\n    {% set temp = params.TEMP|default(cur_temp)|float %}\n    {% set unload_temp = [cur_temp, temp]|max %}\n    {% set flush = [params.FLUSH|default(c.flush_min)|float, c.flush_min|float]|max %}\n    {% set fan = (printer.fan.speed * 255)|round|int %}\n    {% set z = printer.gcode_move.position.z|float %}\n    SAVE_GCODE_STATE NAME=yumi_change\n    SET_VELOCITY_LIMIT ACCEL=20000 ACCEL_TO_DECEL=10000\n    M106 S0\n    M104 S{unload_temp}\n    # 1. leave the part: the tip sequence's first fast retract, then up and out to the pop tool\n    M83\n    G1 E-{tip.first_len} F{(tip.first_speed * 60)|int}\n    G90\n    G1 Z{[z + c.z_clearance, z_max]|min} F1200\n    G1 X{bed + pop.approach_dx} F{pop.approach_speed}\n    G1 X{bed + pop.pop_dx} F{pop.pop_speed}\n    # 2. off the part, at temperature: tip-shaping unload of the current filament, head switch released\n    M109 S{unload_temp}\n    YUMI_UNLOAD_TIP SKIP_FIRST=1\n    # 3. the next feeder: T<n> selects it, loads to the head switch, then head_to_nozzle\n    T{tool}\n    M104 S{temp}\n    # 4. prime and flush into the pop tool, solidify, snap the blob off\n    M83\n    G1 E{c.prime_len} F{c.prime_speed}\n    G1 E{flush} F{c.flush_speed}\n    EXTRA_FLUSH\n    M106 S255\n    G4 P{c.fan_ms}\n    G1 X{bed + c.popoff_dx} F{pop.approach_speed}\n    M106 S{fan}\n    RESTORE_GCODE_STATE NAME=yumi_change"
         },
         {
           "id": "yms_load",
@@ -192,143 +811,284 @@
         }
       ]
     },
-
     "C235": {
       "layer": "machine",
       "name": "YUMI C235",
       "parent": "SMART_MAKER_1X",
-      "children": ["DIRECT_DRIVE", "CHROMAX_X12"],
-
+      "children": [
+        "DIRECT_DRIVE",
+        "CHROMAX_X12"
+      ],
+      "_status": "valide sur le banc C235 (= qc/qc_printer_C235.cfg)",
       "bed_size": 235,
       "z_height": 270,
-      "kinematics": "cartesian",
-      "max_velocity": 700, "max_accel": 20000, "max_z_velocity": 25, "max_z_accel": 1000,
-      "stepper_x": { "position_endstop": 260, "position_min": -10, "position_max": 261, "homing_speed": 35, "run_current": 1.2, "hold_current": 1.1, "driver_sgthrs": 80, "motor": "BJ42D29-28V31" },
-      "stepper_y": { "position_endstop": -30, "position_min": -30, "position_max": 250, "homing_speed": 45, "run_current": 1.2, "hold_current": 1.2, "driver_sgthrs": 95, "motor": "BJ42D29-28V31" },
-      "stepper_z": { "position_max": 270, "position_min": -5, "homing_speed": 5, "second_homing_speed": 5, "run_current": 1.2, "hold_current": 1.2, "motor": "BJ42D07-06V02" },
-      "extruder": { "rotation_distance": 25, "gear_ratio": "50:17", "nozzle_diameter": 0.400, "sensor_type": "100K4190YUMI", "max_temp": 300, "min_extrude_temp": 0, "run_current": 1.20, "hold_current": 0.300, "motor": "BJ42D07-06V02", "pid_Kp": 26.213, "pid_Ki": 1.304, "pid_Kd": 131.721 },
-      "heater_bed": { "sensor_type": "EPCOS 100K B57560G104F", "max_temp": 130, "pid_Kp": 27.486, "pid_Ki": 0.306, "pid_Kd": 617.406 },
-      "probe": { "x_offset": -17, "y_offset": 30, "samples": 6, "samples_result": "average", "samples_tolerance": 0.08, "samples_tolerance_retries": 10 },
-      "probe_pressure": { "speed": 6.0, "lift_speed": 6, "z_calc_switch_x": 49.5, "z_calc_switch_y": 175.5, "compression_offset": 0.3, "max_probe_times": 50, "probe_delay": 2, "z_hop": 3, "samples": 5 },
-      "fans": { "motherboard_speed": 0.7, "motherboard_idle_timeout": 10 },
-      "bed_mesh": { "speed": 120, "horizontal_move_z": 10, "mesh_min": "10, 10", "mesh_max": "223, 225", "probe_count": "10, 10", "zero_reference_position": "100.5, 147.5", "adaptive_margin": 5 },
-      "screws_tilt": { "screw1": "49.5, 175.5", "screw1_name": "front left screw", "screw2": "224, 175.5", "screw2_name": "front right screw", "screw3": "224, 2", "screw3_name": "rear right screw", "screw4": "49.5, 2", "screw4_name": "rear left screw", "speed": 200, "screw_thread": "CCW-M3" }
+      "stepper_x": {
+        "position_endstop": 256,
+        "position_max": 256,
+        "_comments": {
+          "position_endstop": "256"
+        }
+      },
+      "stepper_y": {
+        "position_max": 246,
+        "_comments": {
+          "position_max": "252 #350"
+        }
+      },
+      "stepper_z": {
+        "position_max": 270
+      },
+      "bed_mesh": {
+        "mesh_min": "15, 12",
+        "mesh_max": "220, 220",
+        "zero_reference_position": "31, 212",
+        "_comments": {
+          "mesh_min": "10,10",
+          "mesh_max": "223, 225"
+        }
+      },
+      "screws_tilt": {
+        "screw1": "49.5, 175.5",
+        "screw2": "224, 175.5",
+        "screw3": "224, 2",
+        "screw4": "49.5, 2"
+      }
     },
-
     "C335": {
       "layer": "machine",
       "name": "YUMI C335",
       "parent": "SMART_MAKER_1X",
-      "children": ["DIRECT_DRIVE", "CHROMAX_X12"],
-
+      "children": [
+        "DIRECT_DRIVE",
+        "CHROMAX_X12"
+      ],
+      "_status": "geometrie issue de qc/qc_printer_C335.cfg — a valider sur machine",
       "bed_size": 335,
-      "z_height": 350,
-      "kinematics": "cartesian",
-      "max_velocity": 700, "max_accel": 20000, "max_z_velocity": 25, "max_z_accel": 1000,
-      "stepper_x": { "position_endstop": 360, "position_min": -10, "position_max": 361, "homing_speed": 35, "run_current": 1.2, "hold_current": 1.1, "driver_sgthrs": 80, "motor": "BJ42D29-28V31" },
-      "stepper_y": { "position_endstop": -30, "position_min": -30, "position_max": 350, "homing_speed": 45, "run_current": 1.2, "hold_current": 1.2, "driver_sgthrs": 95, "motor": "BJ42D29-28V31" },
-      "stepper_z": { "position_max": 350, "position_min": -5, "homing_speed": 5, "second_homing_speed": 5, "run_current": 1.2, "hold_current": 1.2, "motor": "BJ42D07-06V02" },
-      "extruder": { "rotation_distance": 25, "gear_ratio": "50:17", "nozzle_diameter": 0.400, "sensor_type": "100K4190YUMI", "max_temp": 300, "min_extrude_temp": 0, "run_current": 1.20, "hold_current": 0.300, "motor": "BJ42D07-06V02", "pid_Kp": 26.213, "pid_Ki": 1.304, "pid_Kd": 131.721 },
-      "heater_bed": { "sensor_type": "EPCOS 100K B57560G104F", "max_temp": 130, "pid_Kp": 0, "pid_Ki": 0, "pid_Kd": 0, "_TODO": "calibrate" },
-      "probe": { "x_offset": -17, "y_offset": 30, "samples": 6, "samples_result": "average", "samples_tolerance": 0.08, "samples_tolerance_retries": 10 },
-      "probe_pressure": { "speed": 6.0, "lift_speed": 6, "z_calc_switch_x": 49.5, "z_calc_switch_y": 175.5, "compression_offset": 0.3, "max_probe_times": 50, "probe_delay": 2, "z_hop": 3, "samples": 5 },
-      "fans": { "motherboard_speed": 0.7, "motherboard_idle_timeout": 10 },
-      "bed_mesh": { "speed": 120, "horizontal_move_z": 10, "mesh_min": "10, 10", "mesh_max": "323, 325", "probe_count": "10, 10", "zero_reference_position": "167.5, 167.5", "adaptive_margin": 5 },
-      "screws_tilt": { "screw1": "49.5, 275.5", "screw1_name": "front left screw", "screw2": "324, 275.5", "screw2_name": "front right screw", "screw3": "324, 2", "screw3_name": "rear right screw", "screw4": "49.5, 2", "screw4_name": "rear left screw", "speed": 200, "screw_thread": "CCW-M3" }
+      "z_height": 400,
+      "stepper_x": {
+        "position_endstop": 357,
+        "position_max": 357
+      },
+      "stepper_y": {
+        "position_max": 345
+      },
+      "stepper_z": {
+        "position_max": 400
+      },
+      "bed_mesh": {
+        "mesh_min": "15, 12",
+        "mesh_max": "320, 320",
+        "zero_reference_position": "66, 276"
+      },
+      "screws_tilt": {
+        "screw1": "84, 241",
+        "screw2": "285, 241",
+        "screw3": "285, 42",
+        "screw4": "84, 42"
+      }
     },
-
     "C435": {
       "layer": "machine",
       "name": "YUMI C435",
       "parent": "SMART_MAKER_1X",
-      "children": ["DIRECT_DRIVE", "CHROMAX_X12"],
-
+      "children": [
+        "DIRECT_DRIVE",
+        "CHROMAX_X12"
+      ],
+      "_status": "geometrie issue de qc/qc_printer_C435.cfg — a valider sur machine",
       "bed_size": 435,
-      "z_height": 400,
-      "kinematics": "cartesian",
-      "max_velocity": 700, "max_accel": 20000, "max_z_velocity": 25, "max_z_accel": 1000,
-      "stepper_x": { "position_endstop": 460, "position_min": -10, "position_max": 461, "homing_speed": 35, "run_current": 1.2, "hold_current": 1.1, "driver_sgthrs": 80, "motor": "BJ42D29-28V03" },
-      "stepper_y": { "position_endstop": -30, "position_min": -30, "position_max": 450, "homing_speed": 45, "run_current": 1.2, "hold_current": 1.2, "driver_sgthrs": 95, "motor": "BJ42D29-28V03" },
-      "stepper_z": { "position_max": 400, "position_min": -5, "homing_speed": 5, "second_homing_speed": 5, "run_current": 1.2, "hold_current": 1.2, "motor": "BJ42D07-06V02" },
-      "extruder": { "rotation_distance": 25, "gear_ratio": "50:17", "nozzle_diameter": 0.400, "sensor_type": "100K4190YUMI", "max_temp": 300, "min_extrude_temp": 0, "run_current": 1.20, "hold_current": 0.300, "motor": "BJ42D07-06V02", "pid_Kp": 26.213, "pid_Ki": 1.304, "pid_Kd": 131.721 },
-      "heater_bed": { "sensor_type": "EPCOS 100K B57560G104F", "max_temp": 130, "pid_Kp": 0, "pid_Ki": 0, "pid_Kd": 0, "_TODO": "calibrate" },
-      "probe": { "x_offset": -17, "y_offset": 30, "samples": 6, "samples_result": "average", "samples_tolerance": 0.08, "samples_tolerance_retries": 10 },
-      "probe_pressure": { "speed": 6.0, "lift_speed": 6, "z_calc_switch_x": 49.5, "z_calc_switch_y": 175.5, "compression_offset": 0.3, "max_probe_times": 50, "probe_delay": 2, "z_hop": 3, "samples": 5 },
-      "fans": { "motherboard_speed": 0.7, "motherboard_idle_timeout": 10 },
-      "bed_mesh": { "speed": 120, "horizontal_move_z": 10, "mesh_min": "10, 10", "mesh_max": "423, 425", "probe_count": "10, 10", "zero_reference_position": "217.5, 217.5", "adaptive_margin": 5 },
-      "screws_tilt": { "screw1": "49.5, 375.5", "screw1_name": "front left screw", "screw2": "424, 375.5", "screw2_name": "front right screw", "screw3": "424, 2", "screw3_name": "rear right screw", "screw4": "49.5, 2", "screw4_name": "rear left screw", "speed": 200, "screw_thread": "CCW-M3" }
+      "z_height": 500,
+      "stepper_x": {
+        "position_endstop": 467,
+        "position_max": 467,
+        "autotune": {
+          "motor": "BJ42D29-28V03"
+        }
+      },
+      "stepper_y": {
+        "position_endstop": -21,
+        "position_min": -21,
+        "position_max": 455,
+        "_comments": {
+          "position_endstop": "C435 (C235 = -30)",
+          "position_min": "C435 (C235 = -30)",
+          "position_max": "C435 (C235 = 246)"
+        },
+        "autotune": {
+          "motor": "BJ42D29-28V03"
+        }
+      },
+      "stepper_z": {
+        "position_max": 500
+      },
+      "bed_mesh": {
+        "mesh_min": "10, 10",
+        "mesh_max": "423, 425",
+        "zero_reference_position": "56, 334"
+      },
+      "screws_tilt": {
+        "screw1": "73, 305",
+        "screw2": "405, 305",
+        "screw3": "405, 80",
+        "screw4": "73, 80",
+        "screw5": "239, 192",
+        "screw5_name": "rear middle screw",
+        "_comments": {
+          "screw1": "C435 (C235 = 49.5,175.5)",
+          "screw2": "C435 (C235 = 224,175.5)",
+          "screw3": "C435 (C235 = 224,2)",
+          "screw4": "C435 (C235 = 49.5,2)",
+          "screw5": "C435 : 5e vis centrale (grand plateau)"
+        }
+      }
     },
-
     "DIRECT_DRIVE": {
       "layer": "hotend",
       "name": "Direct Drive",
-      "children": ["HIGH_FLOW", "LOW_WASTE"],
+      "slicer_label": "Direct Drive",
+      "children": [
+        "HIGH_FLOW",
+        "LOW_WASTE"
+      ],
       "terminates": false,
-      "incompatible_with": ["YMS_2_LITE", "YMS_7_PRO"],
+      "incompatible_with": [
+        "YMS_2_LITE",
+        "YMS_7_PRO"
+      ],
       "config": {
         "yms_count": 0,
         "has_smartbox": false,
-        "has_dryer": false
-      }
+        "has_dryer": false,
+        "extruder": {
+          "motor_slot": 0
+        }
+      },
+      "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens PB10 non inverse et ratio 50:17 = valeurs du QC C235 en tete DD."
     },
-
     "CHROMAX_X12": {
       "layer": "hotend",
       "name": "CHROMAX X12",
-      "children": ["HIGH_FLOW", "LOW_WASTE"],
-      "terminates": false,
-      "incompatible_with": [],
-      "config": {}
-    },
-
-    "HIGH_FLOW": {
-      "layer": "hotend_type",
-      "name": "High Flow",
-      "children": ["NOZZLE_02", "NOZZLE_04", "NOZZLE_06", "NOZZLE_08", "NOZZLE_10"],
+      "slicer_label": "ChromaX12",
+      "children": [
+        "HIGH_FLOW",
+        "LOW_WASTE"
+      ],
       "terminates": false,
       "incompatible_with": [],
       "config": {
-        "hotend_type": "high_flow"
+        "extruder": {
+          "_comment": "moteur FICTIF : la tete CHROMAX X12 est bowden (aucun moteur), ce sont les YMS extruder0..N qui poussent ; Klipper exige un [extruder], on le declare sur des pins libres de la carte",
+          "step_pin": "PA12",
+          "dir_pin": "PA11",
+          "enable_pin": "PA3"
+        }
+      },
+      "_doc": "Tete CHROMAX X12 : bowden, alimentee par les feeders YMS (extruder0..N sur les slots E, sens et ratio = defauts extruder_stepper du tronc : PB10 non inverse, MK12 50:17 — verifie sur le banc C235 06/09, comme le pad .3 et la cfg QC). Les pads usine .4/.5 et la C335 de juin avaient un YMS-1 BMG en sens inverse 57:11 : si cette generation de feeder revient, elle se declarera par une surcharge de slot (extruder_slot_overrides), pas dans ce defaut. [extruder] = moteur fictif sur pins libres (Klipper exige un [extruder])."
+    },
+    "HIGH_FLOW": {
+      "layer": "hotend_type",
+      "name": "High Flow",
+      "slicer_label": "High Flow",
+      "children": [
+        "NOZZLE_02",
+        "NOZZLE_04",
+        "NOZZLE_06",
+        "NOZZLE_08",
+        "NOZZLE_10"
+      ],
+      "terminates": false,
+      "incompatible_with": [],
+      "config": {
+        "hotend_type": "high_flow",
+        "extruder": {
+          "pid_Kp": 26.213,
+          "pid_Ki": 1.304,
+          "pid_Kd": 131.721
+        }
       }
     },
-
     "LOW_WASTE": {
       "layer": "hotend_type",
       "name": "Low Waste",
-      "children": ["NOZZLE_02", "NOZZLE_04", "NOZZLE_06", "NOZZLE_08", "NOZZLE_10"],
+      "slicer_label": "Low waste",
+      "children": [
+        "NOZZLE_02",
+        "NOZZLE_04",
+        "NOZZLE_06",
+        "NOZZLE_08",
+        "NOZZLE_10"
+      ],
       "terminates": false,
       "incompatible_with": [],
       "config": {
         "hotend_type": "low_waste",
-        "pid_Kp": 22.214,
-        "pid_Ki": 1.452,
-        "pid_Kd": 84.968
+        "extruder": {
+          "pid_Kp": 22.214,
+          "pid_Ki": 1.452,
+          "pid_Kd": 84.968
+        }
       }
     },
-
-    "NOZZLE_02": { "layer": "nozzle", "name": "Nozzle 0.2mm", "terminates": true, "config": { "nozzle_diameter": 0.2 } },
-    "NOZZLE_04": { "layer": "nozzle", "name": "Nozzle 0.4mm", "terminates": true, "config": { "nozzle_diameter": 0.4 } },
-    "NOZZLE_06": { "layer": "nozzle", "name": "Nozzle 0.6mm", "terminates": true, "config": { "nozzle_diameter": 0.6 } },
-    "NOZZLE_08": { "layer": "nozzle", "name": "Nozzle 0.8mm", "terminates": true, "config": { "nozzle_diameter": 0.8 } },
-    "NOZZLE_10": { "layer": "nozzle", "name": "Nozzle 1.0mm", "terminates": true, "config": { "nozzle_diameter": 1.0 } },
-
+    "NOZZLE_02": {
+      "layer": "nozzle",
+      "name": "Nozzle 0.2mm",
+      "terminates": true,
+      "config": {
+        "nozzle_diameter": 0.2
+      }
+    },
+    "NOZZLE_04": {
+      "layer": "nozzle",
+      "name": "Nozzle 0.4mm",
+      "terminates": true,
+      "config": {
+        "nozzle_diameter": 0.4
+      }
+    },
+    "NOZZLE_06": {
+      "layer": "nozzle",
+      "name": "Nozzle 0.6mm",
+      "terminates": true,
+      "config": {
+        "nozzle_diameter": 0.6
+      }
+    },
+    "NOZZLE_08": {
+      "layer": "nozzle",
+      "name": "Nozzle 0.8mm",
+      "terminates": true,
+      "config": {
+        "nozzle_diameter": 0.8
+      }
+    },
+    "NOZZLE_10": {
+      "layer": "nozzle",
+      "name": "Nozzle 1.0mm",
+      "terminates": true,
+      "config": {
+        "nozzle_diameter": 1.0
+      }
+    },
     "YMS_2_LITE": {
       "layer": "yms",
       "name": "2 YMS Lite",
       "terminates": true,
-      "incompatible_with": ["DIRECT_DRIVE"],
+      "incompatible_with": [
+        "DIRECT_DRIVE"
+      ],
       "config": {
         "yms_count": 2,
         "has_smartbox": false,
         "has_dryer": false
       }
     },
-
     "YMS_7_PRO": {
       "layer": "yms",
       "name": "7 YMS Pro",
       "terminates": true,
-      "incompatible_with": ["DIRECT_DRIVE"],
+      "incompatible_with": [
+        "DIRECT_DRIVE"
+      ],
       "config": {
         "yms_count": 7,
         "has_smartbox": true,
@@ -336,23 +1096,39 @@
         "dryer_position": "YMS-3"
       }
     },
-
     "SMARTPAD": {
       "layer": "board",
       "name": "SmartPad",
-      "children": ["C235", "C335", "C435"],
+      "children": [
+        "C235",
+        "C335",
+        "C435"
+      ],
       "_TODO": "pins to define — different board from Smart Maker 1.x",
-
-      "mcu": { "serial": "/dev/ttyACM0", "restart_method": "command" },
-      "features": { "adxl": true, "tmc_autotune": true, "probe_pressure": true, "plr": true, "timelapse": true, "obico": true }
+      "mcu": {
+        "serial": "/dev/ttyACM0",
+        "restart_method": "command"
+      },
+      "features": {
+        "adxl": true,
+        "tmc_autotune": true,
+        "probe_pressure": true,
+        "plr": true,
+        "timelapse": true,
+        "obico": true
+      }
     },
-
     "HYPER_DRIVE_UART": {
       "layer": "hotend",
       "name": "Hyper Drive (UART)",
-      "children": ["HIGH_FLOW", "LOW_WASTE"],
+      "children": [
+        "HIGH_FLOW",
+        "LOW_WASTE"
+      ],
       "terminates": false,
-      "incompatible_with": ["SMART_MAKER_1X"],
+      "incompatible_with": [
+        "SMART_MAKER_1X"
+      ],
       "mcu": {
         "name": "hyperdrive_uart",
         "serial": "/dev/ttyS2",
@@ -360,30 +1136,74 @@
         "connection": "UART"
       },
       "extruder_slots": [
-        { "index": 2, "label": "E2", "mcu": "hyperdrive_uart" },
-        { "index": 3, "label": "E3", "mcu": "hyperdrive_uart" },
-        { "index": 4, "label": "E4", "mcu": "hyperdrive_uart" },
-        { "index": 5, "label": "E5", "mcu": "hyperdrive_uart" },
-        { "index": 6, "label": "E6", "mcu": "hyperdrive_uart" }
+        {
+          "index": 2,
+          "label": "E2",
+          "mcu": "hyperdrive_uart"
+        },
+        {
+          "index": 3,
+          "label": "E3",
+          "mcu": "hyperdrive_uart"
+        },
+        {
+          "index": 4,
+          "label": "E4",
+          "mcu": "hyperdrive_uart"
+        },
+        {
+          "index": 5,
+          "label": "E5",
+          "mcu": "hyperdrive_uart"
+        },
+        {
+          "index": 6,
+          "label": "E6",
+          "mcu": "hyperdrive_uart"
+        }
       ],
       "yms_constraints": {
         "max_total": 5,
         "assignment_order": "sequential",
         "types": {
-          "YMS_PRO":  { "max": 3, "priority": 1, "compatible_slots": ["E2", "E3", "E4"] },
-          "YMS_LITE": { "max": 5, "priority": 2, "compatible_slots": ["E2", "E3", "E4", "E5", "E6"] }
+          "YMS_PRO": {
+            "max": 3,
+            "priority": 1,
+            "compatible_slots": [
+              "E2",
+              "E3",
+              "E4"
+            ]
+          },
+          "YMS_LITE": {
+            "max": 5,
+            "priority": 2,
+            "compatible_slots": [
+              "E2",
+              "E3",
+              "E4",
+              "E5",
+              "E6"
+            ]
+          }
         }
       },
       "config": {}
     },
-
     "HYPER_DRIVE_USB": {
       "layer": "hotend",
       "name": "Hyper Drive (USB)",
-      "children": ["HIGH_FLOW", "LOW_WASTE"],
+      "children": [
+        "HIGH_FLOW",
+        "LOW_WASTE"
+      ],
       "terminates": false,
-      "incompatible_with": ["SMART_MAKER_1X"],
-      "requires": ["HYPER_DRIVE_UART"],
+      "incompatible_with": [
+        "SMART_MAKER_1X"
+      ],
+      "requires": [
+        "HYPER_DRIVE_UART"
+      ],
       "mcu": {
         "name": "hyperdrive_usb0",
         "serial": "/dev/ttyUSB0",
@@ -391,63 +1211,326 @@
         "connection": "USB"
       },
       "extruder_slots": [
-        { "index": 7,  "label": "E7",  "mcu": "hyperdrive_usb0" },
-        { "index": 8,  "label": "E8",  "mcu": "hyperdrive_usb0" },
-        { "index": 9,  "label": "E9",  "mcu": "hyperdrive_usb0" },
-        { "index": 10, "label": "E10", "mcu": "hyperdrive_usb0" },
-        { "index": 11, "label": "E11", "mcu": "hyperdrive_usb0" }
+        {
+          "index": 7,
+          "label": "E7",
+          "mcu": "hyperdrive_usb0"
+        },
+        {
+          "index": 8,
+          "label": "E8",
+          "mcu": "hyperdrive_usb0"
+        },
+        {
+          "index": 9,
+          "label": "E9",
+          "mcu": "hyperdrive_usb0"
+        },
+        {
+          "index": 10,
+          "label": "E10",
+          "mcu": "hyperdrive_usb0"
+        },
+        {
+          "index": 11,
+          "label": "E11",
+          "mcu": "hyperdrive_usb0"
+        }
       ],
       "yms_constraints": {
         "max_total": 5,
         "assignment_order": "sequential",
         "types": {
-          "YMS_PRO":  { "max": 3, "priority": 1, "compatible_slots": ["E7", "E8", "E9"] },
-          "YMS_LITE": { "max": 5, "priority": 2, "compatible_slots": ["E7", "E8", "E9", "E10", "E11"] }
+          "YMS_PRO": {
+            "max": 3,
+            "priority": 1,
+            "compatible_slots": [
+              "E7",
+              "E8",
+              "E9"
+            ]
+          },
+          "YMS_LITE": {
+            "max": 5,
+            "priority": 2,
+            "compatible_slots": [
+              "E7",
+              "E8",
+              "E9",
+              "E10",
+              "E11"
+            ]
+          }
         }
       },
       "config": {}
     },
-
     "NEOPIXEL": {
       "layer": "accessory",
       "name": "NeoPixel LED",
       "terminates": true,
-      "requires_any": ["HYPER_DRIVE_UART", "HYPER_DRIVE_USB"],
-      "incompatible_with": ["SMART_MAKER_1X", "DIRECT_DRIVE", "CHROMAX_X12"],
+      "requires_any": [
+        "HYPER_DRIVE_UART",
+        "HYPER_DRIVE_USB"
+      ],
+      "incompatible_with": [
+        "SMART_MAKER_1X",
+        "DIRECT_DRIVE",
+        "CHROMAX_X12"
+      ],
       "config": {
         "has_neopixel": true
       },
       "_TODO": "pin and neopixel config to define per Hyper Drive MCU"
     }
   },
-
   "products": {
-
     "_comment_c235": "═══════════════════ C235 DIRECT DRIVE ═══════════════════",
-    "C235_DD_HF_04":      { "name": "YUMI C235 Direct Drive High Flow 0.4mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "HIGH_FLOW", "NOZZLE_04"] },
-    "C235_DD_HF_06":      { "name": "YUMI C235 Direct Drive High Flow 0.6mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "HIGH_FLOW", "NOZZLE_06"] },
-    "C235_DD_HF_08":      { "name": "YUMI C235 Direct Drive High Flow 0.8mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "HIGH_FLOW", "NOZZLE_08"] },
-    "C235_DD_LW_02":      { "name": "YUMI C235 Direct Drive Low Waste 0.2mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "LOW_WASTE", "NOZZLE_02"] },
-    "C235_DD_LW_04":      { "name": "YUMI C235 Direct Drive Low Waste 0.4mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "LOW_WASTE", "NOZZLE_04"] },
-    "C235_DD_LW_06":      { "name": "YUMI C235 Direct Drive Low Waste 0.6mm",          "chain": ["SMART_MAKER_1X", "C235", "DIRECT_DRIVE", "LOW_WASTE", "NOZZLE_06"] },
-
+    "C235_DD_HF_04": {
+      "name": "YUMI C235 Direct Drive High Flow 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "HIGH_FLOW",
+        "NOZZLE_04"
+      ]
+    },
+    "C235_DD_HF_06": {
+      "name": "YUMI C235 Direct Drive High Flow 0.6mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "HIGH_FLOW",
+        "NOZZLE_06"
+      ]
+    },
+    "C235_DD_HF_08": {
+      "name": "YUMI C235 Direct Drive High Flow 0.8mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "HIGH_FLOW",
+        "NOZZLE_08"
+      ]
+    },
+    "C235_DD_LW_02": {
+      "name": "YUMI C235 Direct Drive Low Waste 0.2mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "LOW_WASTE",
+        "NOZZLE_02"
+      ]
+    },
+    "C235_DD_LW_04": {
+      "name": "YUMI C235 Direct Drive Low Waste 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "LOW_WASTE",
+        "NOZZLE_04"
+      ]
+    },
+    "C235_DD_LW_06": {
+      "name": "YUMI C235 Direct Drive Low Waste 0.6mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "DIRECT_DRIVE",
+        "LOW_WASTE",
+        "NOZZLE_06"
+      ]
+    },
     "_comment_c235_chromax": "═══════════════════ C235 CHROMAX X12 ═══════════════════",
-    "C235_CX12_HF_04_2YMS":  { "name": "YUMI C235 CHROMAX X12 HF 0.4mm 2YMS Lite",    "chain": ["SMART_MAKER_1X", "C235", "CHROMAX_X12", "HIGH_FLOW", "NOZZLE_04", "YMS_2_LITE"] },
-    "C235_CX12_HF_04_7YMS":  { "name": "YUMI C235 CHROMAX X12 HF 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C235", "CHROMAX_X12", "HIGH_FLOW", "NOZZLE_04", "YMS_7_PRO"] },
-    "C235_CX12_HF_06_7YMS":  { "name": "YUMI C235 CHROMAX X12 HF 0.6mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C235", "CHROMAX_X12", "HIGH_FLOW", "NOZZLE_06", "YMS_7_PRO"] },
-    "C235_CX12_LW_04_2YMS":  { "name": "YUMI C235 CHROMAX X12 LW 0.4mm 2YMS Lite",    "chain": ["SMART_MAKER_1X", "C235", "CHROMAX_X12", "LOW_WASTE", "NOZZLE_04", "YMS_2_LITE"] },
-    "C235_CX12_LW_04_7YMS":  { "name": "YUMI C235 CHROMAX X12 LW 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C235", "CHROMAX_X12", "LOW_WASTE", "NOZZLE_04", "YMS_7_PRO"] },
-
+    "C235_CX12_HF_04_2YMS": {
+      "name": "YUMI C235 CHROMAX X12 HF 0.4mm 2YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C235_CX12_HF_04_7YMS": {
+      "name": "YUMI C235 CHROMAX X12 HF 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    },
+    "C235_CX12_HF_06_7YMS": {
+      "name": "YUMI C235 CHROMAX X12 HF 0.6mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_06",
+        "YMS_7_PRO"
+      ]
+    },
+    "C235_CX12_LW_04_2YMS": {
+      "name": "YUMI C235 CHROMAX X12 LW 0.4mm 2YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C235_CX12_LW_04_7YMS": {
+      "name": "YUMI C235 CHROMAX X12 LW 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C235",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    },
     "_comment_c335": "═══════════════════ C335 ═══════════════════",
-    "C335_DD_HF_04":      { "name": "YUMI C335 Direct Drive High Flow 0.4mm",          "chain": ["SMART_MAKER_1X", "C335", "DIRECT_DRIVE", "HIGH_FLOW", "NOZZLE_04"] },
-    "C335_DD_LW_04":      { "name": "YUMI C335 Direct Drive Low Waste 0.4mm",          "chain": ["SMART_MAKER_1X", "C335", "DIRECT_DRIVE", "LOW_WASTE", "NOZZLE_04"] },
-    "C335_CX12_HF_04_7YMS":  { "name": "YUMI C335 CHROMAX X12 HF 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C335", "CHROMAX_X12", "HIGH_FLOW", "NOZZLE_04", "YMS_7_PRO"] },
-    "C335_CX12_LW_04_7YMS":  { "name": "YUMI C335 CHROMAX X12 LW 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C335", "CHROMAX_X12", "LOW_WASTE", "NOZZLE_04", "YMS_7_PRO"] },
-
+    "C335_DD_HF_04": {
+      "name": "YUMI C335 Direct Drive High Flow 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "DIRECT_DRIVE",
+        "HIGH_FLOW",
+        "NOZZLE_04"
+      ]
+    },
+    "C335_DD_LW_04": {
+      "name": "YUMI C335 Direct Drive Low Waste 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "DIRECT_DRIVE",
+        "LOW_WASTE",
+        "NOZZLE_04"
+      ]
+    },
+    "C335_CX12_LW_04_2YMS": {
+      "name": "YUMI C335 CHROMAX X12 Low Waste 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C335_CX12_HF_04_2YMS": {
+      "name": "YUMI C335 CHROMAX X12 High Flow 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C335_CX12_HF_04_7YMS": {
+      "name": "YUMI C335 CHROMAX X12 HF 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    },
+    "C335_CX12_LW_04_7YMS": {
+      "name": "YUMI C335 CHROMAX X12 LW 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C335",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    },
     "_comment_c435": "═══════════════════ C435 ═══════════════════",
-    "C435_DD_HF_04":      { "name": "YUMI C435 Direct Drive High Flow 0.4mm",          "chain": ["SMART_MAKER_1X", "C435", "DIRECT_DRIVE", "HIGH_FLOW", "NOZZLE_04"] },
-    "C435_DD_LW_04":      { "name": "YUMI C435 Direct Drive Low Waste 0.4mm",          "chain": ["SMART_MAKER_1X", "C435", "DIRECT_DRIVE", "LOW_WASTE", "NOZZLE_04"] },
-    "C435_CX12_HF_04_7YMS":  { "name": "YUMI C435 CHROMAX X12 HF 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C435", "CHROMAX_X12", "HIGH_FLOW", "NOZZLE_04", "YMS_7_PRO"] },
-    "C435_CX12_LW_04_7YMS":  { "name": "YUMI C435 CHROMAX X12 LW 0.4mm 7YMS Pro",     "chain": ["SMART_MAKER_1X", "C435", "CHROMAX_X12", "LOW_WASTE", "NOZZLE_04", "YMS_7_PRO"] }
+    "C435_DD_HF_04": {
+      "name": "YUMI C435 Direct Drive High Flow 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "DIRECT_DRIVE",
+        "HIGH_FLOW",
+        "NOZZLE_04"
+      ]
+    },
+    "C435_DD_LW_04": {
+      "name": "YUMI C435 Direct Drive Low Waste 0.4mm",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "DIRECT_DRIVE",
+        "LOW_WASTE",
+        "NOZZLE_04"
+      ]
+    },
+    "C435_CX12_LW_04_2YMS": {
+      "name": "YUMI C435 CHROMAX X12 Low Waste 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C435_CX12_HF_04_2YMS": {
+      "name": "YUMI C435 CHROMAX X12 High Flow 0.4mm 2 YMS Lite",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_2_LITE"
+      ]
+    },
+    "C435_CX12_HF_04_7YMS": {
+      "name": "YUMI C435 CHROMAX X12 HF 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "HIGH_FLOW",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    },
+    "C435_CX12_LW_04_7YMS": {
+      "name": "YUMI C435 CHROMAX X12 LW 0.4mm 7YMS Pro",
+      "chain": [
+        "SMART_MAKER_1X",
+        "C435",
+        "CHROMAX_X12",
+        "LOW_WASTE",
+        "NOZZLE_04",
+        "YMS_7_PRO"
+      ]
+    }
   }
 }

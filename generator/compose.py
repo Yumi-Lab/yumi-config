@@ -19,9 +19,17 @@ The scanner is dumb and factual. Every decision lives here, driven by the
         unknown product         MINIMAL   [mcu] sections + kinematics none, Klipper connects
 
 Runs at every boot (yumi-autoconfig.service, before Klipper): the boards are compared with
-the ones recorded in .detected_hardware.json and, when the hardware has not changed, nothing
-is generated and printer.cfg is not touched — a cfg edited by hand stays as it is until a
-board is added, removed or replaced. --factory forces a fresh cfg whatever the state.
+the ones recorded in .detected_hardware.json and, when neither the hardware nor the recipe
+(catalog + generator, see recipe_hash) has changed, nothing is generated and printer.cfg is
+not touched. A change on the common trunk of the catalog reaches every machine at its next
+boot after the yumi-config update (SAVE_CONFIG kept, previous cfg backed up). --factory
+forces a fresh cfg whatever the state.
+
+The print head cannot be read from the boards (a direct drive and a CHROMAX X12 answer the
+same): it comes from the preferences file the wizard writes (detection.prefs_file: hotend,
+hotend_type, nozzle). When the main board's device is not a machine of the catalog, the
+wizard may also name the machine (prefs "machine"). A per-machine tuning goes in prefs
+"overrides" (deep-merged over the product: e.g. a calibrated backlash_coef on the feeders).
 
 Exit codes: 0 applied, 2 alert (no usable main board), 3 minimal cfg written, 4 nothing to do.
 
@@ -46,6 +54,30 @@ DEFAULT_CONFIG_DIR = Path.home() / "printer_data" / "config"
 
 EXIT_APPLIED, EXIT_ALERT, EXIT_MINIMAL, EXIT_UNCHANGED = 0, 2, 3, 4
 
+# What decides the content of printer.cfg besides the boards. Recorded with the state: when
+# one of these changes (yumi-config update), the cfg is regenerated at the next boot even if
+# the boards did not move — this is how a fix on the common trunk reaches every machine.
+RECIPE_FILES = ("YUMI-LAB_product-catalog.json", "generator.py", "compose.py")
+
+
+def overrides_hash(overrides):
+    """Fingerprint of the effective overrides (ports + local preferences): a per-machine tuning
+    written in the preferences must regenerate printer.cfg like a new recipe does."""
+    return hashlib.sha256(json.dumps(overrides or {}, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def recipe_hash():
+    h = hashlib.sha256()
+    for name in RECIPE_FILES:
+        h.update((HERE / name).read_bytes())
+    for fname in generator.DOCUMENTED_MODULES.values():   # their headers are quoted in printer.cfg
+        h.update((generator.EXTRAS_DIR / fname).read_bytes())
+    return h.hexdigest()[:16]
+
+
+def machine_ids(catalog):
+    return {k for k, v in catalog["components"].items() if isinstance(v, dict) and v.get("layer") == "machine"}
+
 
 def _yumi_detect_default_out():
     """The composition file is owned by yumi-detect.py: read its DEFAULT_OUT, never retype it."""
@@ -68,8 +100,7 @@ def load_json(path, default):
 def classify_boards(composition, catalog):
     """Split the detected boards into main board, smartbox and the rest."""
     rules = catalog["detection"]
-    machines = {k for k, v in catalog["components"].items()
-                if isinstance(v, dict) and v.get("layer") == "machine"}
+    machines = machine_ids(catalog)
     main, main_unknown, smartbox, others = None, None, None, []
     for b in composition.get("boards", []):
         # A HyperDrive is a Smart Maker board flashed as device=HYPERDRIVE_3P2L: the device
@@ -116,7 +147,22 @@ def select(composition, catalog, prefs=None):
     main, main_unknown, smartbox, others = classify_boards(composition, catalog)
     sel = {"main": main, "smartbox": smartbox, "others": others,
            "product": None, "chain": None, "overrides": None, "minimal": False, "alert": None,
+           "situation": "yumi" if main is not None else ("unknown" if composition.get("boards") else "none"),
            "reasons": []}
+
+    # The boards answer but none says which machine this is: the wizard may have named it.
+    chosen = prefs.get("machine")
+    candidate = main_unknown if main_unknown is not None else (others[0] if others else None)
+    if main is None and candidate is not None and chosen in machine_ids(catalog):
+        main = dict(candidate, device=chosen)
+        sel["main"] = main
+        sel["reasons"].append("board %s on %s names no known machine: %s chosen in the wizard"
+                              % (candidate.get("board") or "?", candidate.get("port"), chosen))
+        if candidate is main_unknown:
+            main_unknown = None
+        else:
+            others = others[1:]
+            sel["others"] = others
 
     if main is None:
         if main_unknown is not None:
@@ -133,7 +179,8 @@ def select(composition, catalog, prefs=None):
             sel["alert"] = "no MCU answered"
         return sel
 
-    board_comp = rules["main_boards"][main["board"]]
+    # The board component: from the descriptor for a Yumi board, else the machine's parent.
+    board_comp = rules["main_boards"].get(main.get("board")) or catalog["components"][main["device"]].get("parent")
     defaults = rules["defaults"]
     if smartbox is not None:
         hotend, yms = rules["with_smartbox"]["hotend"], rules["with_smartbox"]["yms"]
@@ -156,6 +203,13 @@ def select(composition, catalog, prefs=None):
     overrides = {"mcu": {"serial": main["port"]}}
     if smartbox is not None:
         overrides["smartbox"] = {"serial": smartbox["port"]}
+    # Local tuning of THIS machine (prefs "overrides", deep-merged over the catalog product):
+    # a calibrated value, or an option the trunk cannot carry yet because the fleet's
+    # firmware does not know it. Regenerated cfgs keep it; the catalog stays common.
+    local = prefs.get("overrides")
+    if isinstance(local, dict) and local:
+        overrides = generator.deep_merge(overrides, local)
+        sel["reasons"].append("local overrides from the preferences: %s" % ", ".join(sorted(local)))
     sel["product"] = product
     sel["overrides"] = overrides
     return sel
@@ -221,16 +275,31 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     sel = select(composition, catalog, prefs)
     summary = {"main": sel["main"], "smartbox": sel["smartbox"], "others": sel["others"],
                "product": sel["product"], "chain": sel["chain"], "reasons": sel["reasons"],
-               "mode": None, "alert": sel["alert"], "minimal": False}
+               "situation": sel["situation"], "mode": None, "alert": sel["alert"], "minimal": False,
+               "overrides": sel["overrides"]}
 
-    # Same boards on the same ports as last time -> the machine has not changed: leave
-    # printer.cfg alone (it may carry manual edits and calibrations), unless forced.
+    # Same boards on the same ports as last time, same catalog and generator -> nothing to
+    # do: leave printer.cfg alone (it may carry calibrations), unless forced. A new recipe
+    # (yumi-config update) regenerates it so the common trunk reaches every machine.
     recorded = state.get("composition")
-    if (not factory and not minimal and recorded is not None and current is not None
-            and hardware_fingerprint(recorded) == hardware_fingerprint(composition)):
+    same_boards = recorded is not None and hardware_fingerprint(recorded) == hardware_fingerprint(composition)
+    same_recipe = state.get("recipe") == recipe_hash()
+    # the wizard changes the head / hotend / nozzle without touching a board: a new product is a change
+    same_product = state.get("chain") == sel["chain"]
+    # so is a local override (preferences "overrides": bowden length, a sensor pin...)
+    same_overrides = state.get("overrides") == overrides_hash(sel["overrides"])
+    if (not factory and not minimal and current is not None and same_boards and same_recipe
+            and same_product and same_overrides):
         summary["mode"] = "unchanged"
         summary["reasons"].append("same boards as recorded on %s: printer.cfg left untouched" % state.get("ts"))
         return EXIT_UNCHANGED, summary, None
+    if same_boards and not same_recipe and state.get("recipe"):
+        summary["reasons"].append("catalog/generator changed since %s: printer.cfg regenerated" % state.get("ts"))
+    if same_boards and not same_product and state.get("chain"):
+        summary["reasons"].append("head/hotend/nozzle choice changed (%s -> %s): printer.cfg regenerated"
+                                  % (state.get("product"), sel["product"]))
+    if same_boards and same_product and not same_overrides and state.get("overrides"):
+        summary["reasons"].append("local overrides changed in the preferences: printer.cfg regenerated")
 
     if sel["alert"]:
         summary["mode"] = "alert"
@@ -283,6 +352,8 @@ def apply(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     if not dry_run:
         state = {"ts": ts, "main": summary["main"], "smartbox": summary["smartbox"],
                  "product": summary["product"], "chain": summary["chain"], "mode": summary["mode"],
+                 "situation": summary["situation"], "recipe": recipe_hash(),
+                 "overrides": overrides_hash(summary.get("overrides")),
                  "cfg_sha256": hashlib.sha256(cfg.encode()).hexdigest() if cfg else None,
                  "composition": composition}
         atomic_write(config_dir / rules["state_file"], json.dumps(state, ensure_ascii=False, indent=2) + "\n")

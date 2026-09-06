@@ -133,10 +133,7 @@ def fetch_profiles():
     with urllib.request.urlopen(url, timeout=10) as r:
         data = json.load(r)
     bm = data["result"]["status"]["bed_mesh"]
-    profiles = bm.get("profiles", {})
-    if not profiles:
-        raise RuntimeError("Aucun profil bed_mesh en memoire")
-    return profiles
+    return bm.get("profiles", {})
 
 
 def atomic_write(path, content):
@@ -162,6 +159,10 @@ def atomic_write(path, content):
 
 def main():
     profiles = fetch_profiles()
+    if not profiles:
+        # nothing in Klipper's memory: nothing to persist, and never touch the block
+        print("aucun profil bed_mesh en memoire — rien a persister.")
+        return 0
     with open(CFG_PATH, "r") as f:
         text = f.read()
     new_text = replace_bed_mesh(text, profiles)
