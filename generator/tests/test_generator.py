@@ -312,6 +312,33 @@ class SensorlessHoming(unittest.TestCase):
             self.assertEqual(float(sec.get("run_sgthrs_%s" % axis, 0)), 0.0, "run_sgthrs_%s must stay 0" % axis)
 
 
+class Cutter(unittest.TestCase):
+    """CUT_FILAMENT: one macro for every size. The cut ends at the configured X minimum (the
+    lever, far left, a negative X); the head stops approach_offset mm before, pushes slowly to
+    the minimum, comes back. Nothing hard-coded (Nicolas, 07/09)."""
+
+    def test_geometry_from_config_on_every_size_and_head(self):
+        for product in ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS"):
+            cfg = generator.generate(product, catalog=CATALOG)
+            m = macros(cfg)
+            cut = m["gcode_macro CUT_FILAMENT"]
+            geo = m["gcode_macro _YUMI_CUTTER"]
+            self.assertIn("{% set cut_x = printer.configfile.settings.stepper_x.position_min|float %}", cut, product)
+            self.assertIn("{% set approach_x = cut_x + c.approach_offset|float %}", cut)
+            self.assertIn("G1 X{approach_x} F{c.approach_speed}", cut)
+            self.assertIn("G1 X{cut_x} F{c.cut_speed}", cut)
+            self.assertLess(cut.index("F{c.approach_speed}"), cut.index("F{c.cut_speed}"), "approach first, then the slow push")
+            self.assertIn('"xy" not in printer.toolhead.homed_axes', cut)
+            self.assertFalse(re.search(r"G1 X-?\d", cut), "no hard-coded X in the cutter macro")
+            x_min = float(parse(cfg)["stepper_x"]["position_min"])
+            self.assertLess(x_min, 0, "%s: the cut point is the negative X minimum" % product)
+            offset = float(re.search(r"variable_approach_offset: ([0-9.]+)", geo).group(1))
+            self.assertEqual(x_min + offset, 10.0, "position_min -10 + offset = X10, where the head stops before the push")
+            speeds = {k: float(v) for k, v in re.findall(r"variable_(approach_speed|cut_speed|release_speed): ([0-9.]+)", geo)}
+            self.assertLess(speeds["cut_speed"], speeds["release_speed"])
+            self.assertLessEqual(speeds["cut_speed"], 600, "the cut is a slow push")
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read
