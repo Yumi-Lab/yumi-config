@@ -11,8 +11,9 @@
 #
 #   YUMI_LOAD_TO_HEAD  [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
 #       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
-#       most (error otherwise), then `head_to_nozzle` mm more to bring the tip to the nozzle
-#       (hot end above min_temp for that part only).
+#       most (error otherwise), then stop: what follows (prime to the nozzle, purge) is the
+#       slicer's G-code. HEAD_TO_NOZZLE= can add mm after the trigger (hot end above min_temp
+#       for that part), 0 by default and by decision.
 #   YUMI_UNLOAD_CHECK  [MAX_EXTRA=] [STEP=]
 #       after a tip-shaping unload: the switch must have released; if it still sees filament,
 #       pull `step` mm at a time until it releases (MAX_EXTRA mm at most, error otherwise).
@@ -29,7 +30,8 @@
 #   speed             mm/s of the load steps (default 16.7, the QC feed rate)
 #   step              mm fed between two readings of the switch = maximum overshoot (default 20)
 #   max_load          mm fed at most before "no filament at the head" is raised (default 800)
-#   head_to_nozzle    mm from the switch to the nozzle, fed after the trigger (default 0)
+#   head_to_nozzle    mm fed after the trigger, towards the nozzle. 0 by decision: the load stops at the
+#                     switch and the slicer's G-code drives the rest (prime, purge), tunable in Orca
 #   nozzle_speed      mm/s of that last stretch into the melt zone (default 5)
 #   max_unload_extra  mm pulled at most by YUMI_UNLOAD_CHECK while the switch still sees filament (default 200)
 #   blind_load        mm fed when the sensor is bypassed; 0 = the unload total of _YUMI_TIP (default 0)

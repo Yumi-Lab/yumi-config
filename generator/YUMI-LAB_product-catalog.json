@@ -557,7 +557,7 @@
           "speed": "vitesse des pas de charge (mm/s) = F1000 du QC",
           "step": "mm entre deux lectures du capteur = depassement maximal apres detection",
           "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
-          "head_to_nozzle": "mm a pousser apres detection pour amener le bout a la buse — A MESURER, 0 = on s'arrete au capteur",
+          "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
           "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)"
         }
