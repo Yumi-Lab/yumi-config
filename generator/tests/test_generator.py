@@ -235,6 +235,10 @@ class BedMesh(unittest.TestCase):
                         "the rescan belongs to the refresh branch only")
         self.assertEqual(prof.count("BED_SCAN_ZERO"), 1)
         self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE={prints + 1}", prof)
+        # the welcome loads the mesh at every Klipper start: neither counted nor a reason to rebuild
+        self.assertIn('printer.print_stats.state == "printing"', prof)
+        self.assertIn("load and in_print and every > 0", prof)
+        self.assertIn("{% if load and in_print %}", prof)
         self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=0", m["gcode_macro BED_MESH_CALIBRATE"])
 
 
