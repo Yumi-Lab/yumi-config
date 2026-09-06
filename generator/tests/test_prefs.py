@@ -43,6 +43,12 @@ class Situations(unittest.TestCase):
         self.assertEqual([o[0] for o in sel["machine"]["options"]], ["C235", "C335", "C435"])
         self.assertIn("names no known machine", prefs.describe(CATALOG, state)[0])
 
+    def test_heads_incompatible_with_the_board_are_not_offered(self):
+        state = {"situation": "yumi", "main": MAIN, "smartbox": None}
+        heads = [o[0] for o in prefs.selection(CATALOG, state, {})["hotend"]["options"]]
+        self.assertEqual(heads, ["DIRECT_DRIVE", "CHROMAX_X12"])
+        self.assertNotIn("HYPER_DRIVE_UART", heads)
+
     def test_options_come_from_the_catalog_layers(self):
         self.assertEqual([o[0] for o in prefs.layer_options(CATALOG, "hotend")],
                          [cid for cid, c in CATALOG["components"].items() if c.get("layer") == "hotend"])

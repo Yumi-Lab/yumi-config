@@ -54,10 +54,23 @@ def layer_label(catalog, layer):
     return layer
 
 
-def layer_options(catalog, layer):
-    """[(component id, label)] of a selection layer, in catalog order."""
+def layer_options(catalog, layer, board=None):
+    """[(component id, label)] of a selection layer, in catalog order; a component declared
+    incompatible with the machine's board (e.g. a HyperDrive head on a Smart Maker) is not offered."""
     return [(cid, c.get("name", cid)) for cid, c in catalog["components"].items()
-            if isinstance(c, dict) and c.get("layer") == layer]
+            if isinstance(c, dict) and c.get("layer") == layer
+            and not (board and board in c.get("incompatible_with", []))]
+
+
+def board_of(catalog, state):
+    """The board component of the machine in the state: from the main board's descriptor, else
+    from the machine the wizard named."""
+    main = state.get("main") or {}
+    rules = catalog["detection"]
+    board = rules["main_boards"].get(main.get("board"))
+    if not board and main.get("device") in catalog["components"]:
+        board = catalog["components"][main["device"]].get("parent")
+    return board
 
 
 def situation(state):
@@ -74,6 +87,7 @@ def selection(catalog, state, prefs):
     rules = catalog["detection"]
     defaults = rules["defaults"]
     forced_head = state.get("smartbox") is not None
+    board = board_of(catalog, state)
     out = {}
     if situation(state) == SITUATION_UNKNOWN:
         out[MACHINE_LAYER] = {"value": prefs.get(MACHINE_LAYER), "forced": False,
@@ -83,7 +97,7 @@ def selection(catalog, state, prefs):
         forced = forced_head and layer == "hotend"
         if forced:
             value = rules["with_smartbox"]["hotend"]
-        out[layer] = {"value": value, "forced": forced, "options": layer_options(catalog, layer)}
+        out[layer] = {"value": value, "forced": forced, "options": layer_options(catalog, layer, board)}
     return out
 
 
