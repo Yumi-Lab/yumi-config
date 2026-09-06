@@ -245,11 +245,13 @@ class SlicerProfileGuard(unittest.TestCase):
     def test_print_start_checks_the_bed_size_from_the_slicer(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
         self.assertIn("params.BED_X", m)
-        self.assertIn("action_raise_error", m)
-        self.assertIn("Re-slice", m)
+        self.assertIn('MSG="File sliced for {what}. Please re-slice with the {machine.model} profile."', m)
+        self.assertIn("CANCEL_PRINT_DEFAULT", m)
         self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', m)
-        # the check comes before the actions of the macro
-        self.assertLess(m.index("action_raise_error"), m.index("M106 S140 P3"))
+        # the check comes before the actions of the macro, and the cancel is Klipper's own (no motion)
+        self.assertLess(m.index("CANCEL_PRINT_DEFAULT"), m.index("M106 S140 P3"))
+        cancel = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro CANCEL_PRINT"]
+        self.assertIn("rename_existing: CANCEL_PRINT_DEFAULT", cancel)
 
 
 class Comments(unittest.TestCase):
