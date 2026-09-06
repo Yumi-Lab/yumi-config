@@ -67,6 +67,15 @@ restarting Klipper**, then `Z_TAP` puts the nozzle zero back — and the print g
 fresh mesh. Standalone, `BED_MESH_CALIBRATE` heats to 65 °C, soaks, saves and switches the bed
 off; no `SAVE_CONFIG` restart any more. The startup report only loads a mesh that exists.
 
+`BED_DETECTION` probes the metal reference plate behind the bed (nozzle wiper) for its Z frame.
+Its position is measured, never guessed: when `bed_detect_x/y` are not in `variables.cfg` yet,
+`BED_SCAN_ZERO` (Klipper extra `klipper/klippy/extras/yumi_bed_scan.py`, settings in
+`[yumi_bed_scan]` from the catalog) homes, sweeps a serpentine grid with the inductive probe
+plane by plane at low acceleration, keeps the union of the triggered points over the planes
+after first contact and saves the centre of their bounding box — synchronously, so the whole
+`LOAD` → detection → scan → mesh → tap chain runs inside a start g-code without racing the print.
+Bench C235: 25 points on planes 0.4/0.3/0.2, plate centre (121.5, 209) in nozzle coordinates.
+
 ### Wizard — KlipperScreen "Printer Config" (`cfg_wizard.py`, logic in `prefs.py`)
 
 From the last scan: a **Yumi machine** is recognised → choose the print head, hotend type and
