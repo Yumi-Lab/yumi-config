@@ -663,7 +663,7 @@ def render_yms_tool_macros(p):
         lines.append(f"    SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE=\"\"")
     lines.append("    RESPOND MSG=\"ACTIVATION YMS-1\"")
     lines.append("    SAVE_VARIABLE VARIABLE=active_tool VALUE=1")
-    lines.append("    YUMI_LOAD_TO_HEAD")
+    lines.append("    YUMI_LOAD_TO_HEAD {rawparams}")
     lines.append("  {% else %}")
     lines.append("    RESPOND MSG=\"YMS INITIALISATION STARTING\"")
     lines.append("    G92 E0")
@@ -694,7 +694,7 @@ def render_yms_tool_macros(p):
             q = "extruder" if i == t else '""'
             lines.append(f"      SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE={q}")
         lines.append(f"  RESPOND MSG=\"ACTIVATION YMS-{yms_num}\"")
-        lines.append("      YUMI_LOAD_TO_HEAD")
+        lines.append("      YUMI_LOAD_TO_HEAD {rawparams}")
         lines.append("  {% else %}")
         prev = t - 1
         for i in range(yms_count):

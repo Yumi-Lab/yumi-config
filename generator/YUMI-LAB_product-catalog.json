@@ -727,7 +727,7 @@
         {
           "id": "single_tool",
           "condition": "yms_count == 0",
-          "gcode": "[gcode_macro T0]\ndescription: Single extruder: the slicer's tool selection loads the filament to the head (sensor) instead of being an unknown command\ngcode:\n    YUMI_LOAD_TO_HEAD"
+          "gcode": "[gcode_macro T0]\ndescription: Single extruder: the slicer's tool selection loads the filament to the head (sensor) instead of being an unknown command\ngcode:\n    YUMI_LOAD_TO_HEAD {rawparams}"
         },
         {
           "id": "filament",

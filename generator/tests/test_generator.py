@@ -352,6 +352,22 @@ class Cutter(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
 
+class LoadParameters(unittest.TestCase):
+    """T<n> forwards its parameters to YUMI_LOAD_TO_HEAD: the slicer writes `T1 PRELOAD=100` when
+    it knows how far the filament was pulled back, one move instead of five steps."""
+
+    def test_t_macros_forward_rawparams(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        m = macros(cfg)
+        for t in range(7):
+            body = m["gcode_macro T%d" % t]
+            self.assertIn("YUMI_LOAD_TO_HEAD {rawparams}", body, "T%d" % t)
+        dd = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        self.assertIn("YUMI_LOAD_TO_HEAD {rawparams}", dd["gcode_macro T0"])
+        header = generator.module_doc("yumi_filament_head")
+        self.assertIn("PRELOAD=", header)
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read

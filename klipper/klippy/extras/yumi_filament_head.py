@@ -9,11 +9,14 @@
 # switch) was tried first and failed 4/4 on the bench while the stepped feed detected at the
 # first attempt; the overshoot past the switch is at most one `step`.
 #
-#   YUMI_LOAD_TO_HEAD  [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
+#   YUMI_LOAD_TO_HEAD  [PRELOAD=] [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
 #       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
 #       most (error otherwise), then stop: what follows (prime to the nozzle, purge) is the
-#       slicer's G-code. HEAD_TO_NOZZLE= can add mm after the trigger (hot end above min_temp
-#       for that part), 0 by default and by decision.
+#       slicer's G-code. PRELOAD= feeds that many mm first in ONE move without reading the
+#       switch — when the distance is known (a colour change pulled the filament back by a known
+#       length), the steps only cover the uncertainty. STEP= sets the step (default `step`).
+#       HEAD_TO_NOZZLE= can add mm after the trigger (hot end above min_temp for that part),
+#       0 by default and by decision. T<n> forwards its parameters: `T1 PRELOAD=100`.
 #   YUMI_UNLOAD_CHECK  [MAX_EXTRA=] [STEP=]
 #       after a tip-shaping unload: the switch must have released; if it still sees filament,
 #       pull `step` mm at a time until it releases (MAX_EXTRA mm at most, error otherwise).
@@ -129,10 +132,11 @@ class YumiFilamentHead:
 
     # ── commands ───────────────────────────────────────────────────────
     def cmd_LOAD(self, gcmd):
-        """Feed filament in one move until the head sensor sees it, then head_to_nozzle mm more"""
+        """Feed filament step by step until the head sensor sees it (PRELOAD= known mm first, in one move)"""
         speed = gcmd.get_float('SPEED', self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
         step = gcmd.get_float('STEP', self.step, above=0.)
+        preload = gcmd.get_float('PRELOAD', 0., minval=0.)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         if self.bypass:
             blind = self._blind_load_len()
@@ -145,14 +149,21 @@ class YumiFilamentHead:
             gcmd.respond_info("filament already at the head")
             fed = 0.
         else:
-            try:
-                fed = self._stepped_feed(+1, max_load, step, speed, True)
-            except self.printer.command_error as e:
-                if "No trigger" in str(e):
-                    raise gcmd.error("No filament at the head after %.0f mm: check the spool and the feeder "
-                                     "(SET_HEAD_SENSOR_BYPASS ENABLE=1 if the sensor is broken)" % max_load)
-                raise
-            gcmd.respond_info("filament reached the head after %.0f mm" % fed)
+            fed = 0.
+            if preload > 0:
+                # the known part of the way, one move, no reading: the steps below cover the rest
+                self._move_e(min(preload, max_load), speed)
+                fed = min(preload, max_load)
+            if not self._present():
+                try:
+                    fed += self._stepped_feed(+1, max_load - fed, step, speed, True)
+                except self.printer.command_error as e:
+                    if "No trigger" in str(e):
+                        raise gcmd.error("No filament at the head after %.0f mm: check the spool and the feeder "
+                                         "(SET_HEAD_SENSOR_BYPASS ENABLE=1 if the sensor is broken)" % max_load)
+                    raise
+            gcmd.respond_info("filament reached the head after %.0f mm%s"
+                              % (fed, (" (preload %.0f)" % preload) if preload > 0 else ""))
         if to_nozzle > 0:
             temp = self._hotend_temp()
             if temp is not None and temp < self.min_temp:
