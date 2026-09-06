@@ -328,7 +328,9 @@ class Cutter(unittest.TestCase):
             self.assertIn("G1 X{approach_x} F{c.approach_speed}", cut)
             self.assertIn("G1 X{cut_x} F{c.cut_speed}", cut)
             self.assertLess(cut.index("F{c.approach_speed}"), cut.index("F{c.cut_speed}"), "approach first, then the slow push")
-            self.assertIn('"xy" not in printer.toolhead.homed_axes', cut)
+            self.assertIn('printer["yumi_sensorless_homing"].homed', cut, "real homing, not homed_axes")
+            code = "\n".join(l for l in cut.split("gcode:", 1)[1].splitlines() if not l.strip().startswith("#"))
+            self.assertNotIn("homed_axes", code, "toolhead.homed_axes is faked at boot by plr.cfg: never trust it for a move")
             self.assertFalse(re.search(r"G1 X-?\d", cut), "no hard-coded X in the cutter macro")
             x_min = float(parse(cfg)["stepper_x"]["position_min"])
             self.assertLess(x_min, 0, "%s: the cut point is the negative X minimum" % product)
@@ -345,7 +347,7 @@ class Cutter(unittest.TestCase):
         cut = m["gcode_macro CUT_FILAMENT"].split("gcode:", 1)[1]
         self.assertIn("cut_filament_bypass|default(0)|int == 1", cut)
         self.assertLess(cut.index("cut_filament_bypass"), cut.index("G1 X"), "checked before any motion")
-        self.assertLess(cut.index("cut_filament_bypass"), cut.index("homed_axes"), "a bypassed cut needs no homing")
+        self.assertLess(cut.index("cut_filament_bypass"), cut.index("yumi_sensorless_homing"), "a bypassed cut needs no homing")
         setter = m["gcode_macro SET_CUT_FILAMENT_BYPASS"]
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
@@ -496,8 +498,8 @@ class CancelSequence(unittest.TestCase):
         self.assertLess(first, lift)
         self.assertLess(lift, park)
         self.assertLess(park, unload)
-        self.assertIn('"xyz" in printer.toolhead.homed_axes', body)
-        self.assertLess(body.index("homed_axes"), lift)
+        self.assertIn('printer["yumi_sensorless_homing"].homed', body, "moves gated by a real XY homing")
+        self.assertLess(body.index("yumi_sensorless_homing"), lift)
         self.assertIn("M83", body)
         # both callers: unload while hot, heaters off afterwards, state back to idle
         for name in ("gcode_macro CANCEL_PRINT", "gcode_macro PRINT_END"):

@@ -229,9 +229,25 @@ def apply_settings(catalog, config_dir, settings):
     return changed
 
 
+BUSY_PRINT_STATES = ("printing", "paused")
+
+
+def print_state():
+    """print_stats.state through Moonraker ('printing', 'paused', 'standby', ...), None if unknown."""
+    try:
+        with urllib.request.urlopen("%s/printer/objects/query?print_stats=state" % autoconfig.MOONRAKER, timeout=5) as r:
+            return json.load(r)["result"]["status"]["print_stats"]["state"]
+    except Exception:
+        return None
+
+
 def restart_klipper():
     """Ask Moonraker to restart the Klipper service: its ExecStartPre (autoconfig --boot)
-    regenerates printer.cfg from the boards and the preferences before Klipper starts."""
+    regenerates printer.cfg from the boards and the preferences before Klipper starts.
+    Refused while a print runs or is paused (a restart kills it; bench, 2026-09-06 23:26)."""
+    state = print_state()
+    if state in BUSY_PRINT_STATES:
+        raise RuntimeError("Klipper not restarted: a print is %s" % state)
     req = urllib.request.Request("%s/machine/services/restart?service=klipper" % autoconfig.MOONRAKER, method="POST")
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r).get("result") == "ok"
@@ -239,7 +255,11 @@ def restart_klipper():
 
 def run_autoconfig(extra_args=(), timeout=420):
     """Scan the boards and install the matching printer.cfg (autoconfig.py: Klipper stopped
-    and started through Moonraker). Returns (exit code, compose summary or None, log)."""
+    and started through Moonraker). Returns (exit code, compose summary or None, log).
+    Refused while a print runs or is paused."""
+    state = print_state()
+    if state in BUSY_PRINT_STATES:
+        return 3, None, "not now: a print is %s (Klipper would be stopped)" % state
     cmd = [sys.executable, str(HERE / "autoconfig.py"), *extra_args]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     summary = None
@@ -288,7 +308,13 @@ def main():
         return 2
     out = {"changed": changed, "prefs": load_prefs(catalog, a.config_dir)}
     if a.apply:
-        out["klipper_restart"] = restart_klipper()
+        try:
+            out["klipper_restart"] = restart_klipper()
+        except RuntimeError as e:
+            out["klipper_restart"] = False
+            out["error"] = str(e)
+            print(json.dumps(out))
+            return 3
     print(json.dumps(out))
     return 0
 

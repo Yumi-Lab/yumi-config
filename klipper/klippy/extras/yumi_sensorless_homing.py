@@ -61,6 +61,9 @@
 #   fine_current_x, fine_current_y, fine_sgthrs_x, fine_sgthrs_y   obsoletes, ignores
 # Command: YUMI_SENSORLESS_HOME AXIS=X|Y [SAMPLES=] [WARMUP=] [TOLERANCE=]
 #   [MAX_TAPS=] [SPEED=] [SKIP_BASE=1]  -- a appeler depuis le homing_override.
+# Etat (printer.yumi_sensorless_homing): homed = axes vraiment homes par ce module ("xy"),
+#   effaces a l'abort et a la coupure des moteurs ; c'est la preuve de homing a tester dans les
+#   macros a mouvement, jamais toolhead.homed_axes (truque par SET_KINEMATIC_POSITION, plr.cfg au boot).
 import logging
 
 AXIS_INDEX = {'X': 0, 'Y': 1, 'Z': 2}
@@ -69,6 +72,15 @@ AXIS_INDEX = {'X': 0, 'Y': 1, 'Z': 2}
 class YumiSensorless:
     def __init__(self, config):
         self.printer = config.get_printer()
+        # Axes vraiment homes par CE module (contact prouve, zero pose en butee) : la seule
+        # preuve de homing fiable de la machine. toolhead.homed_axes ne l'est pas : le
+        # KINEMATIC_POSITION de plr.cfg au boot et les SET_KINEMATIC_POSITION des taps
+        # declarent xyz homes sur un referentiel faux. Efface a l'abort, a l'unhome et a la
+        # coupure des moteurs (M18/M84, idle_timeout). Lu par les macros a mouvement :
+        # printer.yumi_sensorless_homing.homed (ex. "xy").
+        self.homed = set()
+        self.printer.register_event_handler("stepper_enable:motor_off",
+                                            self._handle_motor_off)
         self.samples = config.getint('samples', 5, minval=2)
         # Taps de chauffe ignores avant de mesurer : le 1er contact "tasse"
         # systematiquement (jeu mecanique), il fausse le spread.
@@ -161,7 +173,14 @@ class YumiSensorless:
         self.printer.lookup_object('gcode').run_script_from_command(
             "SET_KINEMATIC_POSITION %s=%.4f" % (axis, value))
 
+    def _handle_motor_off(self, print_time):
+        self.homed.clear()
+
+    def get_status(self, eventtime):
+        return {"homed": "".join(a for a in "xyz" if a in self.homed)}
+
     def _unhome(self, ai):
+        self.homed.discard("xyz"[ai])
         # Retire le statut "homed" de l'axe avant un abort : les _set_kin des
         # taps ont marque l'axe homed sur un referentiel possiblement FAUX.
         # API Python directe. Ne JAMAIS passer par la commande
@@ -575,6 +594,7 @@ class YumiSensorless:
         rs = self.run_sgthrs[axis]
         if rs > 0:
             self._set_sgthrs(st, rs, gcmd)
+        self.homed.add(axis.lower())
         gcmd.respond_info(
             "YUMI_SENSORLESS_HOME %s %s: %d taps valides (%d rejetes) -> "
             "moyenne=%.4f spread=%.4fmm (tol=%.4f). Zero pose en butee=%.4f"

@@ -137,6 +137,31 @@ class Setup(unittest.TestCase):
                 prefs.apply_settings(CATALOG, d, {"COLOR": "red"})
 
 
+class NeverDuringAPrint(unittest.TestCase):
+    """A Klipper restart kills the running print (bench 2026-09-06 23:26): the generator's
+    restart paths (YUMI_SETUP --apply, panel Apply/Scan) refuse while printing or paused."""
+
+    def test_restart_refused_while_printing(self):
+        from unittest import mock
+        with mock.patch.object(prefs, "print_state", return_value="printing"), \
+                mock.patch("urllib.request.urlopen") as uo:
+            with self.assertRaises(RuntimeError):
+                prefs.restart_klipper()
+            uo.assert_not_called()
+        with mock.patch.object(prefs, "print_state", return_value="paused"):
+            code, summary, log = prefs.run_autoconfig()
+            self.assertEqual((code, summary), (3, None))
+            self.assertIn("paused", log)
+
+    def test_restart_allowed_when_idle(self):
+        import io
+        from unittest import mock
+        with mock.patch.object(prefs, "print_state", return_value="standby"), \
+                mock.patch("urllib.request.urlopen") as uo:
+            uo.return_value.__enter__.return_value = io.BytesIO(b'{"result": "ok"}')
+            self.assertTrue(prefs.restart_klipper())
+
+
 class Results(unittest.TestCase):
     def test_written(self):
         lines = prefs.result_lines(compose.EXIT_APPLIED, {"product": "C235_DD_LW_04", "mode": "preserve",
