@@ -235,6 +235,30 @@ class BedMesh(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=prints_since_mesh VALUE=0", m["gcode_macro BED_MESH_CALIBRATE"])
 
 
+class StoppedPrint(unittest.TestCase):
+    """A print stopped by an error must not leave the machine believing it still prints, and a
+    boot must never feed filament to the head (bench 06/09: INIT_YMS's T0 ran the printing
+    branch after an aborted print and pushed 2500 mm into nothing)."""
+
+    def test_error_resets_the_print_state_without_moving(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        sections = parse(cfg)
+        self.assertEqual(sections["virtual_sdcard"].get("on_error_gcode"), "_YUMI_PRINT_ERROR")
+        m = macros(cfg)["gcode_macro _YUMI_PRINT_ERROR"]
+        self.assertIn("SAVE_VARIABLE VARIABLE=printing_start VALUE=False", m)
+        self.assertIn("TURN_OFF_HEATERS", m)
+        self.assertFalse(re.search(r"^\s*G[01] ", m, re.M), "no motion in an error handler")
+
+    def test_boot_init_never_loads_to_the_head(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        init = cfg.split("[delayed_gcode INIT_YMS]", 1)[1].split("\n[", 1)[0]
+        commands = [l.strip() for l in init.splitlines() if l.startswith(" ") and not l.strip().startswith("#")]
+        self.assertLess(commands.index("SAVE_VARIABLE VARIABLE=printing_start VALUE=False"), commands.index("T0"))
+        defined = set(re.findall(r"^\[gcode_macro ([A-Za-z0-9_]+)\]", cfg, re.M))
+        for cmd in [c for c in commands if re.fullmatch(r"[A-Z][A-Z0-9_]+", c)]:
+            self.assertIn(cmd, defined, "%s called at boot is not a macro of this cfg" % cmd)
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read
