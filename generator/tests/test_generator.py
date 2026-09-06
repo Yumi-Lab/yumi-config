@@ -185,7 +185,7 @@ class MachineMacro(unittest.TestCase):
 
     def test_size_dependent_macros_read_the_single_macro(self):
         cfg = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
-        for name in ("gcode_macro BED_DETECTION", "gcode_macro SCREWS_TILT_CALCULATE",
+        for name in ("gcode_macro SCREWS_TILT_CALCULATE",
                      "gcode_macro CANCEL_PRINT", "gcode_macro WIPE_NOZZLE", "gcode_macro _YUMI_WELCOME"):
             self.assertIn('printer["gcode_macro _YUMI_MACHINE"]', cfg[name], name)
         self.assertIn("_YUMI_MACHINE", cfg["delayed_gcode welcome"])
@@ -219,6 +219,24 @@ class BedMesh(unittest.TestCase):
         self.assertFalse([l for l in commands if "SAVE_CONFIG" in l], "SAVE_CONFIG would restart Klipper mid-print")
         # startup stays passive: the welcome only loads a mesh that exists
         self.assertIn('"default" in printer.bed_mesh.profiles', m["gcode_macro _YUMI_WELCOME"])
+
+
+class BedDetection(unittest.TestCase):
+    """The metal reference is measured (BED_SCAN_ZERO), never guessed from the bed size."""
+
+    def test_scan_first_when_not_calibrated(self):
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        m = macros(cfg)
+        det = m["gcode_macro BED_DETECTION"]
+        self.assertIn("'bed_detect_x' not in sv", det)
+        self.assertIn("BED_SCAN_ZERO", det)
+        self.assertIn("_BED_DETECT_AT_REF", det)
+        self.assertNotIn("ref_offset", det)
+        self.assertIn("sv.bed_detect_x|float", m["gcode_macro _BED_DETECT_AT_REF"])
+        self.assertEqual(m["gcode_macro BED_DETECT_SYNC"].splitlines()[-1].strip(), "BED_DETECTION")
+        sec = parse(cfg)["yumi_bed_scan"]
+        for key in ("center_dx", "center_dy", "range_x", "range_y", "z_clear", "z_step", "z_floor", "planes", "accel"):
+            self.assertIn(key, sec)
 
 
 class Comments(unittest.TestCase):

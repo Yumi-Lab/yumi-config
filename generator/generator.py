@@ -499,6 +499,11 @@ def render_probe(p):
     return emit("probe", p.get('probe', {}), PROBE_ORDER)
 
 
+def render_bed_scan(p):
+    """[yumi_bed_scan]: the inductive scan of the metal reference plate (BED_SCAN_ZERO)."""
+    return emit("yumi_bed_scan", p.get('bed_scan'))
+
+
 def render_bed_mesh(p):
     return emit("bed_mesh", p.get('bed_mesh', {}), BED_MESH_ORDER)
 
@@ -699,6 +704,7 @@ def generate(product_id, overrides=None, catalog=None):
         render_fans(p),
         render_temp_sensors(p),
         render_probe(p),
+        render_bed_scan(p),
         render_bed_mesh(p),
         render_screws_tilt(p),
         render_machine_macro(catalog, p["_board"]),

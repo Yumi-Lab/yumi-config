@@ -230,6 +230,7 @@ YUMI_EXTRAS=(
   "yumi_z_tap.py"
   "yumi_sensorless_homing.py"
   "probe_pressure.py"
+  "yumi_bed_scan.py"
   "gcode_shell_command.py"
   "mcu_uid.py"
 )
