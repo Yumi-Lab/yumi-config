@@ -270,6 +270,8 @@ class StoppedPrint(unittest.TestCase):
     def test_boot_init_never_loads_to_the_head(self):
         cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
         init = cfg.split("[delayed_gcode INIT_YMS]", 1)[1].split("\n[", 1)[0]
+        delay = float(re.search(r"initial_duration: ([0-9.]+)", init).group(1))
+        self.assertGreaterEqual(delay, 10, "INIT_YMS must run after the TMC autotune (UART collision on M18 at boot)")
         commands = [l.strip() for l in init.splitlines() if l.startswith(" ") and not l.strip().startswith("#")]
         self.assertLess(commands.index("SAVE_VARIABLE VARIABLE=printing_start VALUE=False"), commands.index("T0"))
         defined = set(re.findall(r"^\[gcode_macro ([A-Za-z0-9_]+)\]", cfg, re.M))
