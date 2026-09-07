@@ -363,9 +363,11 @@ class LoadParameters(unittest.TestCase):
         m = macros(cfg)
         for t in range(7):
             body = m["gcode_macro T%d" % t]
-            self.assertIn("YUMI_LOAD_TO_HEAD {rawparams}", body, "T%d" % t)
+            self.assertIn("YUMI_LOAD_TO_HEAD SENSOR=YMS-%d {rawparams}" % (t + 1), body,
+                          "T%d must name the YMS it loads from, so an empty YMS is caught early" % t)
         dd = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
-        self.assertIn("YUMI_LOAD_TO_HEAD {rawparams}", dd["gcode_macro T0"])
+        self.assertIn("YUMI_LOAD_TO_HEAD SENSOR=filament_sensor {rawparams}", dd["gcode_macro T0"],
+                      "direct drive: the head's own runout sensor is the feeder to watch")
         header = generator.module_doc("yumi_filament_head")
         self.assertIn("PRELOAD=", header)
 

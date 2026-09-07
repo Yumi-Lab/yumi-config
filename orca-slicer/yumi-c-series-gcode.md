@@ -133,7 +133,9 @@ profile guard passed; the same lines in the start block below are redundant and 
 with the next block revision. The colour-change block stays **100 % scripted in Orca** (Nicolas, 2026-09-06 evening: profile
 updates reach the fleet more easily than machine macros). The slicer only calls the primitives that
 need machine knowledge: `T[next_extruder]` (feeder select, load to the head switch, **and stops
-there**: the prime from the switch to the nozzle and the purge are the block's, tunable in Orca),
+there**: the prime from the switch to the nozzle and the purge are the block's, tunable in Orca;
+it fails the print with an explicit error when that YMS's motion sensor sees nothing coming — empty
+YMS — or when the head switch never triggers),
 `YUMI_UNLOAD_CHECK` (pull until the head switch releases) and `EXTRA_FLUSH`
 (operator's extra purge from the panel). `YUMI_TOOL_CHANGE` on the trunk is a bench test macro,
 not a production path.

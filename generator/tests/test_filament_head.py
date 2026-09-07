@@ -41,6 +41,9 @@ class Gcmd:
         self.params = {k.upper(): v for k, v in params.items()}
         self.messages = []
 
+    def get(self, name, default=None, **kw):
+        return self.params.get(name, default)
+
     def get_float(self, name, default=None, **kw):
         v = self.params.get(name, default)
         return None if v is None else float(v)
@@ -60,10 +63,32 @@ class CommandError(Exception):
     pass
 
 
+class Feeder:
+    """A YMS motion sensor as Klipper publishes it: filament_detected stays True while the encoder
+    ticks (the YMS has filament), and drops once the extruder travelled detection_length mm
+    without a tick. Starts True, like a sensor left armed by MOTION_SENSOR_INIT."""
+    def __init__(self, has_filament, detection_length=50.):
+        self.has_filament = has_filament
+        self.detection_length = detection_length
+        self.detected = True
+        self.last_tick = 0.
+
+    def moved_to(self, e_pos):
+        if self.has_filament:
+            self.last_tick = e_pos
+            self.detected = True
+        elif e_pos - self.last_tick >= self.detection_length:
+            self.detected = False
+
+    def get_status(self, eventtime):
+        return {"filament_detected": self.detected, "enabled": True}
+
+
 class Printer:
     """Toolhead whose E position is what the switch reacts to: filament seen at E >= switch_at."""
     def __init__(self, switch_at=47.):
         self.switch_at = switch_at
+        self.feeders = {}
         self.pos = [0., 0., 0., 0.]
         self.moves = []
         self.scripts = []
@@ -87,7 +112,12 @@ class Printer:
             if v is not None:
                 self.pos[i] = v
         self.moves.append((round(self.pos[3], 3), speed))
+        for f in self.feeders.values():
+            f.moved_to(self.pos[3])
         self.button_callback(0., 1 if self.pos[3] >= self.switch_at else 0)
+
+    def lookup_objects(self):
+        return list(self.objects.items()) + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
 
     def lookup_object(self, name, default=KeyError):
         if name in self.objects:
@@ -169,6 +199,74 @@ class LoadToHead(unittest.TestCase):
         h.cmd_LOAD(g)
         self.assertIn("BYPASSED", g.messages[0])
         self.assertEqual(p.moves, [], "no _YUMI_TIP macro in the stub: blind length 0, nothing fed")
+
+
+class FeedingYms(unittest.TestCase):
+    """SENSOR= names the YMS that feeds: its encoder must tick, or the load gives up early —
+    Nicolas 07/09: 'tu vois bien que le motion sensor ne tourne pas, tu devrais détecter qu'il
+    n'y a pas de filament et t'arrêter' (a T3 on an empty YMS fed 2 x 2500 mm, 10 minutes)."""
+    def test_empty_yms_stops_after_the_check_length_not_max_load(self):
+        h, p = head(switch_at=10000.)
+        p.feeders["YMS-3"] = Feeder(has_filament=False, detection_length=50.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd(SENSOR="YMS-3", MAX=2500))
+        self.assertIn("No filament coming from YMS-3", str(cm.exception))
+        self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps, not 2500")
+
+    def test_yms_with_filament_loads_to_the_head_as_before(self):
+        h, p = head(switch_at=147.)
+        p.feeders["YMS-3"] = Feeder(has_filament=True)
+        g = Gcmd(SENSOR="YMS-3")
+        h.cmd_LOAD(g)
+        self.assertEqual(p.pos[3], 150.)
+        self.assertIn("reached the head after 150 mm", g.messages[-1])
+
+    def test_without_sensor_only_the_head_switch_is_watched(self):
+        h, p = head(switch_at=10000.)
+        p.feeders["YMS-3"] = Feeder(has_filament=False)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd(MAX=200))
+        self.assertIn("No filament at the head after 200 mm", str(cm.exception))
+        self.assertEqual(p.pos[3], 200.)
+
+    def test_unknown_sensor_name_is_an_error_not_a_silent_skip(self):
+        h, p = head(switch_at=47.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd(SENSOR="YMS-9"))
+        self.assertIn("SENSOR=YMS-9", str(cm.exception))
+        self.assertEqual(p.moves, [])
+
+    def test_feeder_check_option_overrides_the_derived_length(self):
+        h, p = head(switch_at=10000., feeder_check=30)
+        p.feeders["YMS-2"] = Feeder(has_filament=False, detection_length=7.)
+        with self.assertRaises(CommandError):
+            h.cmd_LOAD(Gcmd(SENSOR="YMS-2"))
+        self.assertEqual(p.pos[3], 30.)
+
+    def test_preload_on_an_empty_yms_stops_right_after_the_preload(self):
+        h, p = head(switch_at=10000.)
+        p.feeders["YMS-3"] = Feeder(has_filament=False, detection_length=50.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd(SENSOR="YMS-3", PRELOAD=100))
+        self.assertIn("No filament coming from YMS-3", str(cm.exception))
+        self.assertEqual(p.pos[3], 100., "the known part is fed in one move, then the verdict")
+
+    def test_bypassed_head_sensor_still_catches_an_empty_yms(self):
+        h, p = head(switch_at=10000., blind_load=200)
+        h.bypass = True
+        p.feeders["YMS-3"] = Feeder(has_filament=False, detection_length=50.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd(SENSOR="YMS-3"))
+        self.assertIn("No filament coming from YMS-3", str(cm.exception))
+        self.assertEqual(p.pos[3], 60.)
+
+    def test_bypassed_head_sensor_feeds_the_blind_length_when_the_yms_ticks(self):
+        h, p = head(switch_at=10000., blind_load=200)
+        h.bypass = True
+        p.feeders["YMS-3"] = Feeder(has_filament=True)
+        h.cmd_LOAD(Gcmd(SENSOR="YMS-3"))
+        self.assertEqual(p.pos[3], 200.)
+        self.assertEqual(h.loaded_mm, 200.)
 
 
 class UnloadCheck(unittest.TestCase):

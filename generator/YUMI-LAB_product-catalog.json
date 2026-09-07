@@ -546,7 +546,7 @@
         "pin": "^!PA8",
         "speed": 16.7,
         "step": 5,
-        "max_load": 2500,
+        "max_load": 2500, "feeder_check": 0,
         "head_to_nozzle": 0,
         "nozzle_speed": 5,
         "max_unload_extra": 200,
@@ -556,7 +556,7 @@
           "pin": "^ = tirage interne : sans lui la ligne du capteur flotte (lectures differentes d'un redemarrage a l'autre au banc)",
           "speed": "vitesse des pas de charge (mm/s) = F1000 du QC",
           "step": "mm entre deux lectures du capteur = depassement maximal apres detection ; 5 = quasi continu (0,3 s par pas a 16,7 mm/s) ; un STEP= sur l'appel (YUMI_LOAD_TO_HEAD ou T<n>) allonge le pas pour cet appel seulement, rien n'est memorise",
-          "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
+          "feeder_check": "mm de charge apres lesquels le capteur de mouvement du YMS actif (SENSOR= passe par T<n>) doit voir du filament, sinon arret 'No filament coming from YMS-n' ; 0 = detection_length du capteur + deux pas (un T3 lance par erreur sur un YMS vide a pousse 2 x 2500 mm, 10 min, le 07/09)", "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
           "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
           "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)"
@@ -727,7 +727,7 @@
         {
           "id": "single_tool",
           "condition": "yms_count == 0",
-          "gcode": "[gcode_macro T0]\ndescription: Single extruder: the slicer's tool selection loads the filament to the head (sensor) instead of being an unknown command\ngcode:\n    YUMI_LOAD_TO_HEAD {rawparams}"
+          "gcode": "[gcode_macro T0]\ndescription: Single extruder: the slicer's tool selection loads the filament to the head (sensor) instead of being an unknown command; SENSOR= = the head's runout sensor, so an empty spool stops the load early\ngcode:\n    YUMI_LOAD_TO_HEAD SENSOR=filament_sensor {rawparams}"
         },
         {
           "id": "filament",

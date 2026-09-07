@@ -12,7 +12,7 @@
 # (`newpos = newpos[:3] + commanded_pos[3:]`), so an extruder "homing" is a zero-length move —
 # the 4/4 "No trigger after full movement" of 2026-09-06 never moved a millimetre of filament.
 #
-#   YUMI_LOAD_TO_HEAD  [PRELOAD=] [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
+#   YUMI_LOAD_TO_HEAD  [SENSOR=] [PRELOAD=] [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
 #       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
 #       most (error otherwise), then stop: what follows (prime to the nozzle, purge) is the
 #       slicer's G-code. PRELOAD= feeds that many mm first in ONE move without reading the
@@ -20,6 +20,12 @@
 #       length), the steps only cover the uncertainty. STEP= of the call sets a longer step for
 #       that call only (Nicolas: declared = different, not declared = the default; nothing
 #       stored); default = the `step` option of the config.
+#       SENSOR= names the motion sensor of the YMS that feeds (YMS-3): while feeding, that
+#       encoder must tick; once the feed has covered `feeder_check` mm and the sensor still
+#       reports no filament, the load stops with "No filament coming from YMS-3" — an empty YMS
+#       fails in seconds instead of feeding max_load mm of nothing (a T3 launched by mistake on
+#       an empty YMS fed 2 x 2500 mm, 10 minutes, on 07/09). The generated T<n> pass it; without
+#       SENSOR= only the head switch is watched.
 #       HEAD_TO_NOZZLE= can add mm after the trigger (hot end above min_temp for that part),
 #       0 by default and by decision. T<n> forwards its parameters: `T1 PRELOAD=100`.
 #   YUMI_UNLOAD_CHECK  [MAX_EXTRA=] [STEP=]
@@ -40,6 +46,9 @@
 #                     the default when the call carries no STEP=
 #   settle            s left after each step for the switch state to reach the host (default 0.02)
 #   max_load          mm fed at most before "no filament at the head" is raised (default 800)
+#   feeder_check      mm of feed after which the SENSOR= motion sensor must report filament, else the
+#                     load aborts; 0 (default) = that sensor's detection_length plus two steps, i.e.
+#                     the earliest point where "no tick" is a verdict and not a lag
 #   head_to_nozzle    mm fed after the trigger, towards the nozzle. 0 by decision: the load stops at the
 #                     switch and the slicer's G-code drives the rest (prime, purge), tunable in Orca
 #   nozzle_speed      mm/s of that last stretch into the melt zone (default 5)
@@ -63,6 +72,7 @@ class YumiFilamentHead:
         self.step = config.getfloat('step', 5., above=0.)                   # mm between two readings
         self.settle = config.getfloat('settle', 0.02, minval=0.)            # s, switch state latency
         self.max_load = config.getfloat('max_load', 800., above=0.)
+        self.feeder_check = config.getfloat('feeder_check', 0., minval=0.)   # mm, 0 = from the sensor
         self.head_to_nozzle = config.getfloat('head_to_nozzle', 0., minval=0.)
         self.nozzle_speed = config.getfloat('nozzle_speed', 5., above=0.)    # mm/s, into the melt zone
         self.max_unload_extra = config.getfloat('max_unload_extra', 200., minval=0.)
@@ -99,12 +109,41 @@ class YumiFilamentHead:
     def get_status(self, eventtime):
         return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass}
 
+    # ── the feeding YMS ────────────────────────────────────────────────
+    def _feeder(self, gcmd, step):
+        """(name, sensor object, check length) for SENSOR= of the call, None without it. The
+        sensor is any filament motion sensor section carrying that name (stock
+        filament_motion_sensor or the smart one): both publish filament_detected, which their
+        own timer drops once the extruder travelled detection_length mm without a tick."""
+        name = gcmd.get('SENSOR', None)
+        if not name:
+            return None
+        for obj_name, obj in self.printer.lookup_objects():
+            if obj_name.endswith(" " + name) and hasattr(obj, 'get_status') \
+                    and 'filament_detected' in obj.get_status(self.printer.get_reactor().monotonic()):
+                check = self.feeder_check
+                if check <= 0:
+                    check = getattr(obj, 'detection_length', 50.) + 2 * step
+                return (name, obj, check)
+        raise gcmd.error("SENSOR=%s: no filament motion sensor of that name" % name)
+
+    def _feeder_present(self, feeder):
+        return bool(feeder[1].get_status(self.printer.get_reactor().monotonic()).get('filament_detected'))
+
+    def _check_feeder(self, feeder, fed):
+        """Past the check length, a feeder whose encoder never ticked has nothing to give."""
+        if feeder is not None and fed >= feeder[2] and not self._feeder_present(feeder):
+            raise self.printer.command_error(
+                "No filament coming from %s: its motion sensor saw nothing over %.0f mm of feed "
+                "(empty spool, or filament not inserted in that YMS)" % (feeder[0], fed))
+
     # ── moves ──────────────────────────────────────────────────────────
-    def _stepped_feed(self, direction, max_mm, step, speed, want_present):
+    def _stepped_feed(self, direction, max_mm, step, speed, want_present, feeder=None):
         """Feed `step` mm at a time (direction +1 load / -1 unload), queued straight into the
-        toolhead, reading the switch after each step, until it reports `want_present`. Returns
-        the signed distance fed; raises "No trigger" past max_mm. The g-code layer is resynced
-        at the end so the slicer's E bookkeeping continues from the real position."""
+        toolhead, reading the switch after each step, until it reports `want_present` (None =
+        feed the whole distance). Returns the signed distance fed; raises "No trigger" past
+        max_mm, "No filament coming from" when the feeding YMS never ticks. The g-code layer is
+        resynced at the end so the slicer's E bookkeeping continues from the real position."""
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.wait_moves()
         fed = 0.
@@ -114,8 +153,12 @@ class YumiFilamentHead:
                 pos = toolhead.get_position()
                 toolhead.manual_move([None, None, None, pos[3] + direction * chunk], speed)
                 fed += chunk
-                if self._present() == want_present:
+                present = self._present()
+                if want_present is not None and present == want_present:
                     return direction * fed
+                self._check_feeder(feeder, fed)
+            if want_present is None:
+                return direction * fed
             raise self.printer.command_error("No trigger on head_sensor after %.0f mm" % max_mm)
         finally:
             self.printer.lookup_object('gcode_move').reset_last_position()
@@ -163,13 +206,15 @@ class YumiFilamentHead:
         step = self.load_step(gcmd)
         preload = gcmd.get_float('PRELOAD', 0., minval=0.)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
+        feeder = self._feeder(gcmd, step)
         if self.bypass:
             blind = self._blind_load_len()
             gcmd.respond_info("head sensor BYPASSED: blind load of %.0f mm, not checked "
                               "(SET_HEAD_SENSOR_BYPASS ENABLE=0 to restore the check)" % blind)
+            fed = 0.
             if blind > 0:
-                self._move_e(blind, speed)
-            fed = blind
+                # stepped only so that an empty feeder is still caught; the switch is never read
+                fed = self._stepped_feed(+1, blind, step, speed, None, feeder)
         elif self._present():
             gcmd.respond_info("filament already at the head")
             fed = 0.
@@ -179,9 +224,10 @@ class YumiFilamentHead:
                 # the known part of the way, one move, no reading: the steps below cover the rest
                 self._move_e(min(preload, max_load), speed)
                 fed = min(preload, max_load)
+                self._check_feeder(feeder, fed)
             if not self._present():
                 try:
-                    fed += self._stepped_feed(+1, max_load - fed, step, speed, True)
+                    fed += self._stepped_feed(+1, max_load - fed, step, speed, True, feeder)
                 except self.printer.command_error as e:
                     if "No trigger" in str(e):
                         raise gcmd.error("No filament at the head after %.0f mm: check the spool and the feeder "
