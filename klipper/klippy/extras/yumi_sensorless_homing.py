@@ -173,7 +173,10 @@ class YumiSensorless:
         self.printer.lookup_object('gcode').run_script_from_command(
             "SET_KINEMATIC_POSITION %s=%.4f" % (axis, value))
 
-    def _handle_motor_off(self, print_time):
+    def _handle_motor_off(self, *args):
+        # stepper_enable sends "stepper_enable:motor_off" with NO argument in this Klipper
+        # (older versions passed print_time): a fixed signature raised a TypeError on every M18,
+        # Klipper went to shutdown and systemd looped it — bench, 2026-09-07 12:00.
         self.homed.clear()
 
     def get_status(self, eventtime):

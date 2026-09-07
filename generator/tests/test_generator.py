@@ -370,6 +370,29 @@ class LoadParameters(unittest.TestCase):
         self.assertIn("PRELOAD=", header)
 
 
+class EventHandlerSignatures(unittest.TestCase):
+    """Klipper event handlers of our modules must accept whatever the event sends: motor_off
+    comes with no argument in this Klipper, older ones passed print_time. A fixed signature
+    turned every M18 into an internal error and Klipper into a restart loop (bench, 07/09)."""
+
+    def test_motor_off_handlers_accept_no_argument(self):
+        import ast
+        for fname in generator.DOCUMENTED_MODULES.values():
+            src = (generator.EXTRAS_DIR / fname).read_text(encoding="utf-8")
+            tree = ast.parse(src)
+            handlers = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "register_event_handler" \
+                        and node.args and isinstance(node.args[0], ast.Constant) \
+                        and node.args[0].value == "stepper_enable:motor_off":
+                    handlers.add(node.args[1].attr)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in handlers:
+                    positional = [a.arg for a in node.args.args if a.arg != "self"]
+                    required = positional[:len(positional) - len(node.args.defaults)]
+                    self.assertEqual(required, [], "%s.%s must be callable with no argument" % (fname, node.name))
+
+
 class ModuleDocs(unittest.TestCase):
     """Every Klipper module of this repo documents itself in printer.cfg: its header — what it
     does, every option, every command, the status fields — is emitted above its section, read
