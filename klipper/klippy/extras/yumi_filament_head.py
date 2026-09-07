@@ -17,17 +17,14 @@
 #       most (error otherwise), then stop: what follows (prime to the nozzle, purge) is the
 #       slicer's G-code. PRELOAD= feeds that many mm first in ONE move without reading the
 #       switch — when the distance is known (a colour change pulled the filament back by a known
-#       length), the steps only cover the uncertainty. The step is, in order: STEP= of the
-#       call, else the saved variable `step_variable` (load_step, set live with SET_LOAD_STEP or
-#       from variables.cfg), else the `step` option of the config (20).
+#       length), the steps only cover the uncertainty. STEP= of the call sets a longer step for
+#       that call only (Nicolas: declared = different, not declared = the default; nothing
+#       stored); default = the `step` option of the config.
 #       HEAD_TO_NOZZLE= can add mm after the trigger (hot end above min_temp for that part),
 #       0 by default and by decision. T<n> forwards its parameters: `T1 PRELOAD=100`.
 #   YUMI_UNLOAD_CHECK  [MAX_EXTRA=] [STEP=]
 #       after a tip-shaping unload: the switch must have released; if it still sees filament,
 #       pull `step` mm at a time until it releases (MAX_EXTRA mm at most, error otherwise).
-#   SET_LOAD_STEP STEP=<mm>
-#       the machine's own load step, persisted in save_variables (load_step) without touching the
-#       G-code; STEP=0 goes back to the config default.
 #   SET_HEAD_SENSOR_BYPASS ENABLE=0|1
 #       a broken sensor must not stop production: bypassed, the LOAD STILL RUNS — blind, over
 #       `blind_load` mm (0 = the tip-shaping unload total read from the _YUMI_TIP macro) plus
@@ -40,9 +37,8 @@
 #   pin               the head switch (^!PA8: pull-up, the line floats otherwise; ! = filament pulls it low)
 #   speed             mm/s of the load steps (default 16.7, the QC feed rate)
 #   step              mm fed between two readings of the switch = maximum overshoot (default 5),
-#                     the default when neither STEP= nor the saved variable is set
+#                     the default when the call carries no STEP=
 #   settle            s left after each step for the switch state to reach the host (default 0.02)
-#   step_variable     save_variables key of the machine's own step (default load_step, 0 = unset)
 #   max_load          mm fed at most before "no filament at the head" is raised (default 800)
 #   head_to_nozzle    mm fed after the trigger, towards the nozzle. 0 by decision: the load stops at the
 #                     switch and the slicer's G-code drives the rest (prime, purge), tunable in Orca
@@ -73,13 +69,11 @@ class YumiFilamentHead:
         self.blind_load = config.getfloat('blind_load', 0., minval=0.)
         self.min_temp = config.getfloat('min_temp', 170., minval=0.)
         self.bypass_variable = config.get('bypass_variable', 'head_sensor_bypass')
-        self.step_variable = config.get('step_variable', 'load_step')
         self.bypass = False
         self.loaded_mm = 0.
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         for name, func in (("YUMI_LOAD_TO_HEAD", self.cmd_LOAD), ("YUMI_UNLOAD_CHECK", self.cmd_UNLOAD_CHECK),
-                           ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY),
-                           ("SET_LOAD_STEP", self.cmd_SET_LOAD_STEP)):
+                           ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY)):
             self.gcode.register_command(name, func, desc=func.__doc__)
 
     # ── state ──────────────────────────────────────────────────────────
@@ -146,25 +140,13 @@ class YumiFilamentHead:
         v = tip.variables
         return sum(float(v.get(k, 0)) for k in ('first_len', 'cut_len', 'slow_len', 'pull_len'))
 
-    def _saved_step(self):
-        """The machine's own load step from save_variables, or None when unset / 0 / invalid."""
-        sv = self.printer.lookup_object('save_variables', None)
-        if sv is None:
-            return None
-        try:
-            value = float(sv.allVariables.get(self.step_variable, 0) or 0)
-        except (TypeError, ValueError):
-            return None
-        return value if value > 0 else None
-
     def load_step(self, gcmd=None):
-        """STEP= of the call, else the saved variable, else the config default."""
+        """STEP= of the call for this call only, else the config default."""
         if gcmd is not None:
             explicit = gcmd.get_float('STEP', None, above=0.)
             if explicit is not None:
                 return explicit
-        saved = self._saved_step()
-        return saved if saved is not None else self.step
+        return self.step
 
     def _hotend_temp(self):
         try:
@@ -243,15 +225,6 @@ class YumiFilamentHead:
         if self.printer.lookup_object('save_variables', None) is not None:
             self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=%d" % (self.bypass_variable, enable))
         gcmd.respond_info("head sensor %s" % ("BYPASSED — loads run blind, no checks" if self.bypass else "checks enabled"))
-
-    def cmd_SET_LOAD_STEP(self, gcmd):
-        """SET_LOAD_STEP STEP=<mm>: the machine's own load step, persisted (0 = back to the config default)"""
-        value = gcmd.get_float('STEP', minval=0.)
-        if self.printer.lookup_object('save_variables', None) is None:
-            raise gcmd.error("SET_LOAD_STEP needs [save_variables]")
-        self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=%s" % (self.step_variable, value))
-        gcmd.respond_info("load step: %s" % ("%.1f mm (saved)" % value if value > 0
-                                             else "config default %.1f mm" % self.step))
 
     def cmd_QUERY(self, gcmd):
         """State of the head sensor"""

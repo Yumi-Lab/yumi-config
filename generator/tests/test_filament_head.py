@@ -137,21 +137,15 @@ class LoadToHead(unittest.TestCase):
         h.cmd_LOAD(Gcmd(PRELOAD=40))
         self.assertEqual([m[0] for m in p.moves], [40., 45., 50.])
 
-    def test_step_precedence_param_then_saved_variable_then_config(self):
+    def test_step_is_the_call_parameter_or_the_default(self):
+        """Declared on the call = a longer step for that call; not declared = the config default.
+        Nothing is stored (Nicolas, 07/09)."""
         h, p = head(switch_at=47.)
         self.assertEqual(h.load_step(Gcmd()), 5.)
-        p.variables["load_step"] = 7
-        self.assertEqual(h.load_step(Gcmd()), 7.)
-        self.assertEqual(h.load_step(Gcmd(STEP=10)), 10.)
-        p.variables["load_step"] = 0
-        self.assertEqual(h.load_step(Gcmd()), 5., "0 = back to the config default")
-
-    def test_set_load_step_persists_through_save_variable(self):
-        h, p = head()
-        g = Gcmd(STEP=8)
-        h.cmd_SET_LOAD_STEP(g)
-        self.assertIn("SAVE_VARIABLE VARIABLE=load_step VALUE=8.0", p.scripts)
-        self.assertIn("8.0 mm", g.messages[-1])
+        self.assertEqual(h.load_step(Gcmd(STEP=20)), 20.)
+        self.assertEqual(h.load_step(Gcmd()), 5., "the parameter does not stick")
+        p.variables["load_step"] = 40
+        self.assertEqual(h.load_step(Gcmd()), 5., "no saved variable is ever read")
 
     def test_already_at_the_head_does_not_move(self):
         h, p = head(switch_at=0.)
