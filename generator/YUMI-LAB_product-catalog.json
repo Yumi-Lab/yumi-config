@@ -545,7 +545,7 @@
         "_comment": "capteur d'arrivee du filament dans la tete, lu par le module yumi_filament_head : YUMI_LOAD_TO_HEAD = avance par pas de `step` mm avec lecture du capteur entre chaque pas (procedure QC ; le homing continu a echoue 4/4 au banc 06/09), YUMI_UNLOAD_CHECK verifie le retrait ; SET_HEAD_SENSOR_BYPASS ENABLE=1 si casse",
         "pin": "^!PA8",
         "speed": 16.7,
-        "step": 20,
+        "step": 5,
         "max_load": 2500,
         "head_to_nozzle": 0,
         "nozzle_speed": 5,
@@ -555,7 +555,7 @@
         "_comments": {
           "pin": "^ = tirage interne : sans lui la ligne du capteur flotte (lectures differentes d'un redemarrage a l'autre au banc)",
           "speed": "vitesse des pas de charge (mm/s) = F1000 du QC",
-          "step": "mm entre deux lectures du capteur = depassement maximal apres detection",
+          "step": "mm entre deux lectures du capteur = depassement maximal apres detection ; 5 = quasi continu (0,3 s par pas a 16,7 mm/s), reglable en direct par la variable load_step (SET_LOAD_STEP)",
           "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
           "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
