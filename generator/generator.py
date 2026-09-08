@@ -636,6 +636,7 @@ def render_yms_tool_macros(p):
 
     lines = []
     all_ext = [f"extruder{i}" for i in range(yms_count)]
+    has_head = bool(p.get('filament_head'))
 
     # TOFF
     lines.append("[gcode_macro TOFF]")
@@ -663,8 +664,11 @@ def render_yms_tool_macros(p):
         lines.append(f"    SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE=\"\"")
     lines.append("    RESPOND MSG=\"ACTIVATION YMS-1\"")
     lines.append("    SAVE_VARIABLE VARIABLE=active_tool VALUE=1")
-    # SENSOR= : the head load watches this YMS's encoder and gives up early when it never ticks
-    lines.append("    YUMI_LOAD_TO_HEAD SENSOR=YMS-1 {rawparams}")
+    # SENSOR= : the head load watches this YMS's encoder and gives up early when it never ticks.
+    # No head sensor on this machine (older head, or the per-machine override
+    # {"filament_head": null}): T<n> selects and syncs as before the module, nothing loads.
+    if has_head:
+        lines.append("    YUMI_LOAD_TO_HEAD SENSOR=YMS-1 {rawparams}")
     lines.append("  {% else %}")
     lines.append("    RESPOND MSG=\"YMS INITIALISATION STARTING\"")
     lines.append("    G92 E0")
@@ -695,7 +699,8 @@ def render_yms_tool_macros(p):
             q = "extruder" if i == t else '""'
             lines.append(f"      SYNC_EXTRUDER_MOTION EXTRUDER={name} MOTION_QUEUE={q}")
         lines.append(f"  RESPOND MSG=\"ACTIVATION YMS-{yms_num}\"")
-        lines.append(f"      YUMI_LOAD_TO_HEAD SENSOR=YMS-{yms_num} {{rawparams}}")
+        if has_head:
+            lines.append(f"      YUMI_LOAD_TO_HEAD SENSOR=YMS-{yms_num} {{rawparams}}")
         lines.append("  {% else %}")
         prev = t - 1
         for i in range(yms_count):

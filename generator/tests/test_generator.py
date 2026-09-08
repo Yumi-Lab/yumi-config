@@ -354,6 +354,27 @@ class Cutter(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
 
+class NoHeadSensor(unittest.TestCase):
+    """A machine without the head sensor — an older head, or the per-machine override
+    {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link
+    fault: no [yumi_filament_head] section, the pin is never configured, T<n> select and sync
+    exactly as before the module and nothing loads."""
+
+    def test_override_none_removes_the_module_and_the_load(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", {"filament_head": None}, catalog=CATALOG)
+        self.assertNotIn("[yumi_filament_head]", cfg)
+        self.assertNotIn("YUMI_LOAD_TO_HEAD", cfg)
+        self.assertNotIn("PA8", cfg)
+        m = macros(cfg)
+        self.assertIn("ACTIVATION YMS-3", m["gcode_macro T2"])
+        self.assertIn("SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder", m["gcode_macro T2"])
+
+    def test_default_product_keeps_the_load(self):
+        cfg = generator.generate("C235_CX12_LW_04_7YMS", catalog=CATALOG)
+        self.assertIn("[yumi_filament_head]", cfg)
+        self.assertIn("YUMI_LOAD_TO_HEAD SENSOR=YMS-3 {rawparams}", macros(cfg)["gcode_macro T2"])
+
+
 class LoadParameters(unittest.TestCase):
     """T<n> forwards its parameters to YUMI_LOAD_TO_HEAD: the slicer writes `T1 PRELOAD=100` when
     it knows how far the filament was pulled back, one move instead of five steps."""
