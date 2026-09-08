@@ -363,10 +363,16 @@ class NoHeadSensor(unittest.TestCase):
     def test_override_none_removes_the_module_and_the_load(self):
         cfg = generator.generate("C235_CX12_LW_04_7YMS", {"filament_head": None}, catalog=CATALOG)
         self.assertNotIn("[yumi_filament_head]", cfg)
-        self.assertNotIn("YUMI_LOAD_TO_HEAD", cfg)
         self.assertNotIn("PA8", cfg)
         m = macros(cfg)
+        self.assertNotIn("YUMI_LOAD_TO_HEAD", m["gcode_macro T2"])
         self.assertIn("ACTIVATION YMS-3", m["gcode_macro T2"])
+        # every other call of the module (tip-shaping unload check, bench tip test, direct-drive
+        # T0) is guarded at run time on the same line: no unknown command without the section
+        for name, body in m.items():
+            for line in body.splitlines():
+                if re.match(r"\s*(\{%[^%]*%\}\s*)?(YUMI_LOAD_TO_HEAD|YUMI_UNLOAD_CHECK)\b", line):
+                    self.assertIn("'yumi_filament_head' in printer", line, "%s: %s" % (name, line.strip()))
         self.assertIn("SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder", m["gcode_macro T2"])
 
     def test_default_product_keeps_the_load(self):
