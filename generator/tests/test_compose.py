@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -38,8 +39,9 @@ SAVE_BLOCK = ("#*# <---------------------- SAVE_CONFIG ---------------------->\n
 
 class Select(unittest.TestCase):
     def test_main_only_uses_defaults(self):
+        # no smartbox, no wizard choice: ChromaX12 + 2 YMS Lite, the same default as the slicer profiles
         sel = compose.select(C235, CATALOG)
-        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
         self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
         self.assertFalse(sel["minimal"])
         self.assertIsNone(sel["alert"])
@@ -53,10 +55,14 @@ class Select(unittest.TestCase):
         sel = compose.select(C235, CATALOG, {"hotend": "CHROMAX_X12", "hotend_type": "HIGH_FLOW"})
         self.assertEqual(sel["product"], "C235_CX12_HF_04_2YMS")
 
+    def test_prefs_direct_drive_is_an_explicit_choice(self):
+        sel = compose.select(C235, CATALOG, {"hotend": "DIRECT_DRIVE"})
+        self.assertEqual(sel["product"], "C235_DD_LW_04")
+
     def test_usb_main_board_port_is_injected(self):
         comp = {"boards": [board("/dev/serial/by-id/usb-Klipper_stm32f401xc_1234-if00", "C435", "cccccc")]}
         sel = compose.select(comp, CATALOG)
-        self.assertEqual(sel["product"], "C435_DD_LW_04")
+        self.assertEqual(sel["product"], "C435_CX12_LW_04_2YMS")
         cfg = generator.generate(sel["product"], sel["overrides"])
         self.assertIn("serial: /dev/serial/by-id/usb-Klipper_stm32f401xc_1234-if00", cfg)
 
@@ -188,6 +194,118 @@ class Build(unittest.TestCase):
         self.assertEqual(code, compose.EXIT_APPLIED)
         self.assertEqual((self.dir / "printer.cfg").read_text(), "old")
         self.assertFalse((self.dir / CATALOG["detection"]["state_file"]).exists())
+
+    def test_new_recipe_regenerates_and_keeps_calibrations(self):
+        """A catalog/generator update (yumi-config) reaches the machine at its next boot."""
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        cfg = (self.dir / "printer.cfg").read_text()
+        (self.dir / "printer.cfg").write_text(cfg.rstrip("\n") + "\n#*# [probe]\n#*# z_offset = 1.234\n")
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        # a new catalog/generator that renders the same cfg has nothing to write...
+        with mock.patch.object(compose, "recipe_hash", return_value="same-output"):
+            code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        # ...one that changes the common trunk rewrites the cfg, calibrations kept
+        real_generate = compose.generator.generate
+        with mock.patch.object(compose, "recipe_hash", return_value="new-recipe"), \
+                mock.patch.object(compose.generator, "generate",
+                                  side_effect=lambda *a, **k: "# trunk v2\n" + real_generate(*a, **k)):
+            code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertEqual(summary["mode"], "preserve")
+        new = (self.dir / "printer.cfg").read_text()
+        self.assertTrue(new.startswith("# trunk v2"))
+        self.assertIn("z_offset = 1.234", new)
+        self.assertTrue(any("regenerated" in r for r in summary["reasons"]))
+        state = json.loads((self.dir / CATALOG["detection"]["state_file"]).read_text())
+        self.assertEqual(state["recipe"], "new-recipe")
+
+    def test_local_override_regenerates(self):
+        """A per-machine tuning written in the preferences (bowden length, a sensor pin) is a
+        change of printer.cfg: same boards, same recipe, same product, but a new cfg. Bench
+        06/09: an overridden head-sensor pin was silently left out for two restarts."""
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        code, summary = compose.apply(C235, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_UNCHANGED)
+        prefs = {"overrides": {"filament_head": {"pin": "^!PC15"}}}
+        code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        self.assertTrue(any("overrides changed" in r for r in summary["reasons"]))
+        self.assertIn("pin: ^!PC15", (self.dir / "printer.cfg").read_text())
+        code, summary = compose.apply(C235, CATALOG, self.dir, prefs)
+        self.assertEqual(code, compose.EXIT_UNCHANGED, "the same override again is not a change")
+
+
+class WizardHead(unittest.TestCase):
+    """Choosing another head in the wizard regenerates the cfg even though no board changed."""
+
+    def test_head_change_regenerates_and_keeps_calibrations(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "CHROMAX_X12"})
+            self.assertEqual(summary["product"], "C235_CX12_LW_04_2YMS")
+            cfg = (d / "printer.cfg").read_text()
+            (d / "printer.cfg").write_text(cfg.rstrip("\n") + "\n#*# [probe]\n#*# z_offset = 1.234\n")
+            # same choice again: untouched
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "CHROMAX_X12"})
+            self.assertEqual(code, compose.EXIT_UNCHANGED)
+            # the operator mounts a direct drive and says so in the wizard
+            code, summary = compose.apply(C235, CATALOG, d, prefs={"hotend": "DIRECT_DRIVE"})
+            self.assertEqual(code, compose.EXIT_APPLIED)
+            self.assertEqual(summary["product"], "C235_DD_LW_04")
+            self.assertEqual(summary["mode"], "preserve")
+            self.assertTrue(any("choice changed" in r for r in summary["reasons"]))
+            new = (d / "printer.cfg").read_text()
+            self.assertIn("z_offset = 1.234", new)
+            self.assertIn('variable_head: "Direct Drive"', new)
+
+
+class LocalOverrides(unittest.TestCase):
+    """prefs "overrides" tune one machine without touching the catalog."""
+
+    def test_overrides_reach_the_generated_cfg(self):
+        prefs = {"overrides": {"extruder_stepper": {"bowden_length": 400, "backlash_coef": 1.08}}}
+        sel = compose.select(C235, CATALOG, prefs)
+        self.assertEqual(sel["overrides"]["extruder_stepper"]["backlash_coef"], 1.08)
+        self.assertEqual(sel["overrides"]["mcu"], {"mcu": {"serial": "/dev/ttyS1"}}["mcu"])
+        cfg = generator.generate(sel["product"], sel["overrides"])
+        self.assertIn("bowden_length: 400", cfg)
+        self.assertIn("backlash_coef: 1.08", cfg)
+        self.assertTrue(any("local overrides" in r for r in sel["reasons"]))
+
+    def test_no_overrides_changes_nothing(self):
+        self.assertEqual(compose.select(C235, CATALOG, {})["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+
+
+class WizardMachine(unittest.TestCase):
+    """The boards name no machine: the wizard does (prefs "machine")."""
+
+    def test_unknown_device_takes_the_chosen_machine(self):
+        comp = {"boards": [board("/dev/ttyS1", "C999", "dddddd")]}
+        sel = compose.select(comp, CATALOG, {"machine": "C335"})
+        self.assertEqual(sel["situation"], "unknown")
+        self.assertFalse(sel["minimal"])
+        self.assertEqual(sel["product"], "C335_CX12_LW_04_2YMS")
+        self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+
+    def test_foreign_board_takes_the_chosen_machine_through_its_parent_board(self):
+        b = dict(board("/dev/ttyACM0", None, "eeeeee"), board="MKS_ROBIN_NANO")
+        sel = compose.select({"boards": [b]}, CATALOG, {"machine": "C235"})
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
+        self.assertEqual(sel["chain"][0], "SMART_MAKER_1X")
+
+    def test_detected_machine_wins_over_the_preference(self):
+        sel = compose.select(C235, CATALOG, {"machine": "C435"})
+        self.assertEqual(sel["situation"], "yumi")
+        self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
+
+    def test_unknown_machine_not_in_catalog_stays_minimal(self):
+        comp = {"boards": [board("/dev/ttyS1", "C999", "dddddd")]}
+        sel = compose.select(comp, CATALOG, {"machine": "D12_300"})
+        self.assertTrue(sel["minimal"])
 
 
 if __name__ == "__main__":
