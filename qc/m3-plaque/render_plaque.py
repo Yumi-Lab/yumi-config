@@ -51,7 +51,8 @@ def default_template():
         {'t': 'text', 'c': 'Model: {model}', 'x': 4, 'y': 40.5, 'sz': 3.6},
         {'t': 'serial', 'c': 'S/N: {serial}', 'x': 4, 'y': 46, 'sz': 3.2, 'fitw': 47, 'mono': True},
         {'t': 'qr', 'c': '{qr}', 'x': 53, 'y': 39, 'sz': 17},
-        {'t': 'text', 'c': 'Input: 220–240 V~, 50/60 Hz, {amps} A', 'x': 4, 'y': 58, 'sz': 2.9, 'weight': 'normal'},
+        # {voltage} vient de la tension gravée au MCU (print_plaque.MAINS_RATINGS) : jamais codée en dur ici.
+        {'t': 'text', 'c': 'Rated Input: {voltage}, 50/60 Hz, {amps} A', 'x': 4, 'y': 58, 'sz': 2.9, 'weight': 'normal'},
         {'t': 'text', 'c': 'Made in China', 'x': 4, 'y': 62.5, 'sz': 3.2},
         {'t': 'line', 'x': 4, 'y': 67, 'w': 67, 'thick': 0.3},
     ]

@@ -244,6 +244,25 @@ QC_TESTS_YMS12 = [
 ]
 
 
+# Retour de QC_PRINT_PLAQUE (print_plaque.py lancé par RUN_SHELL_COMMAND verbose, hors venv :
+# les deux chaînes sont le CONTRAT entre les deux process, print_plaque.py les émet) à montrer à
+# l'opérateur : le pad REFUSE une plaque fausse (QC pas PASS, tension/puissance absentes du
+# firmware, gabarit qui code une autre tension en dur -- bug 110 V du 12/09/2026). Sans popup le
+# seul symptôme serait « rien ne sort ». -> (niveau popup KlipperScreen 1=info/3=erreur, texte).
+PLAQUE_REFUSED = "QC:PLAQUE:REFUS"
+PLAQUE_PRINTED = "Plaque imprimée"
+
+
+def plaque_feedback(msg):
+    text = str(msg or "")
+    if PLAQUE_REFUSED in text:
+        reason = text.split("--", 1)[1].strip() if "--" in text else text.strip()
+        return 3, "标签未打印 / Plaque refusée : " + reason
+    if PLAQUE_PRINTED in text:
+        return 1, "标签已打印 / Plaque imprimée"
+    return None
+
+
 def tests_for_model(model):
     """Séquence de tests pour le modèle choisi au panel : banc YMS (YMS12)
     ou protocole machine C-series (défaut)."""

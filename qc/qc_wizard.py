@@ -78,7 +78,7 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
-    from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS
+    from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from ks_includes.qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -106,7 +106,7 @@ except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-    from qc_engine import QCEngine, QCState, QCResult, QC_TESTS
+    from qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -1911,13 +1911,19 @@ class Panel(ScreenPanel):
     def process_update(self, action, data):
         """Process printer state updates from KlipperScreen."""
         if action == "notify_gcode_response":
-            if isinstance(data, str):
-                self.engine.process_gcode_response(data)
-            elif isinstance(data, list):
-                for msg in data:
-                    if isinstance(msg, str):
-                        self.engine.process_gcode_response(msg)
+            msgs = [data] if isinstance(data, str) else (data if isinstance(data, list) else [])
+            for msg in msgs:
+                if isinstance(msg, str):
+                    self.engine.process_gcode_response(msg)
+                    self._on_plaque_feedback(msg)
         return False
+
+    def _on_plaque_feedback(self, msg):
+        """Refus ou succès de QC_PRINT_PLAQUE -> popup, en direct seulement (pas au
+        rejeu du gcode_store par _replay_response : un vieux refus n'est pas une news)."""
+        fb = plaque_feedback(msg)
+        if fb:
+            self._screen.show_popup_message(fb[1], level=fb[0])
 
     # ─── HELPERS ───────────────────────────────────────────────
 
