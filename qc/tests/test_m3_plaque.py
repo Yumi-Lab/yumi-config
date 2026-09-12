@@ -163,5 +163,35 @@ class TestVoltageRouting(unittest.TestCase):
         self.assertGreater(max(band.getdata()), 0)
 
 
+class TestPlaqueFeedback(unittest.TestCase):
+    """Le refus du pad doit remonter à l'opérateur (popup), pas seulement « rien ne sort »."""
+
+    def test_refusal_becomes_an_error_popup_with_the_reason(self):
+        from qc import qc_engine
+        msg = ("QC:PLAQUE:REFUS uid=X -- le gabarit code la tension en dur (« Rated Input: "
+               "220–240 V~ ») au lieu de {voltage} -- machine 100–120 V~")
+        level, text = qc_engine.plaque_feedback(msg)
+        self.assertEqual(level, 3)
+        self.assertIn("Plaque refusée", text)
+        self.assertIn("{voltage}", text)
+        self.assertNotIn("uid=X", text)
+
+    def test_success_becomes_an_info_popup(self):
+        from qc import qc_engine
+        level, text = qc_engine.plaque_feedback("✅ Plaque imprimée.")
+        self.assertEqual(level, 1)
+        self.assertIn("Plaque imprimée", text)
+
+    def test_other_lines_are_ignored(self):
+        from qc import qc_engine
+        for msg in ("QC:PLAQUE:START", "QC:PLAQUE:DONE", "Identité plaque : {}", "", None):
+            self.assertIsNone(qc_engine.plaque_feedback(msg))
+
+    def test_contract_strings_match_print_plaque(self):
+        from qc import qc_engine
+        self.assertEqual(print_plaque.REFUSED, qc_engine.PLAQUE_REFUSED)
+        self.assertEqual(print_plaque.PRINTED, qc_engine.PLAQUE_PRINTED)
+
+
 if __name__ == "__main__":
     unittest.main()
