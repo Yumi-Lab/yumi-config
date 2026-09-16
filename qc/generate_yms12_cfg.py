@@ -214,12 +214,13 @@ max_temp: 110
 # voire jamais atteint dans le timeout ("on n'a pas toujours le temps de
 # chauffer a 85"). Decouple du heater : coupe explicitement PENDANT la
 # chauffe (QC_HEAT_START, re-coupe par QC_HEAT_WAIT) et rallume SEULEMENT
-# apres le verdict (_qc_heat_all_step) -- 16/09 (Nicolas) : "quand on lance le
-# QC on coupe les ventilos, uniquement pour le QC, comme ca l'air chaud ne se
-# barre pas". Jusqu'au 16/09 QC_LOAD_ALL les rallumait juste apres
-# QC_HEAT_START, donc ils soufflaient pendant tout le chargement + le stress.
-# Le passage a 1.0 en fin de chauffe sert de verification visuelle qu'ils
-# tournent (et refroidit les boitiers pour la manipulation).
+# apres le verdict (_qc_heat_all_step). Regle Nicolas (16/09) : quand on
+# BRANCHE un YMS sur le banc son ventilo doit tourner tout de suite -- c'est
+# LE controle qu'il fonctionne -- donc a fond en permanence hors chauffe
+# (_qc_heat_fans_boot au demarrage de Klipper) ; coupe UNIQUEMENT pendant la
+# chauffe du QC pour ne pas evacuer la chaleur et accelerer la montee.
+# Jusqu'au 16/09 QC_LOAD_ALL les rallumait juste apres QC_HEAT_START, donc
+# ils soufflaient pendant tout le chargement + le stress.
 [fan_generic YMS-%(y)d-fan]
 pin: %(m)s:%(fan)s
 max_power: 1
@@ -256,9 +257,18 @@ def heat_fans_on_macro():
         "    SET_FAN_SPEED FAN=YMS-%d-fan SPEED=1.0\n" % y for y in positions)
     return """\
 [gcode_macro _QC_HEAT_FANS_ON]
-description: QC banc — YMS Pro : (re)allume les 6 ventilateurs de plateau chauffant (YMS-%s), decouples du heater -- verification visuelle qu'ils tournent en dehors de la chauffe elle-meme (QC_HEAT_START les coupe, _qc_heat_all_step les rallume).
+description: QC banc — YMS Pro : (re)allume les 6 ventilateurs de plateau chauffant (YMS-%s), decouples du heater -- ils tournent en permanence HORS chauffe QC (des le demarrage de Klipper via _qc_heat_fans_boot : brancher un YMS = son ventilo part, c'est le controle qu'il fonctionne) ; seuls QC_HEAT_START/QC_HEAT_WAIT les coupent, _qc_heat_all_step les rallume apres le verdict.
 gcode:
-%s""" % ("/".join(str(y) for y in positions), on_lines)
+%s
+# Ventilos a fond des le demarrage de Klipper (16/09, Nicolas) : quand on branche
+# un YMS sur le banc, son ventilo doit tourner tout de suite -- c'est LE controle
+# qu'il fonctionne. Ils ne sont coupes que pendant la chauffe du QC (QC_HEAT_START
+# -> verdict de _qc_heat_all_step), pour ne pas evacuer la chaleur.
+[delayed_gcode _qc_heat_fans_boot]
+initial_duration: 2.0
+gcode:
+    _QC_HEAT_FANS_ON
+""" % ("/".join(str(y) for y in positions), on_lines)
 
 
 def autotune_sections():
