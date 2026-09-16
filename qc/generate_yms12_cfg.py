@@ -372,6 +372,10 @@ def main():
     # Banc = motion seulement, jamais de chauffe : une thermistance debranchee
     # (tete manipulee en permanence sur le banc) ne doit pas bloquer le feed.
     cfg = replace(cfg, "min_extrude_temp: 0\n", "min_extrude_temp: -100\n", 1)
+    # Sonde du plateau du banc HS (lit -40 a -58 C) et jamais chauffee ici : plancher
+    # a -120 C pour qu'un "ADC out of range" ne mette plus le banc en shutdown
+    # (Nicolas, 16/09 : "autoriser la temperature negative sur le plateau").
+    cfg = replace(cfg, "min_temp: -100\nmax_temp: 130\n", "min_temp: -120\nmax_temp: 130\n", 1)
 
     # Le pad du banc chauffe (usine, ete, KlipperScreen) : le capteur host a
     # 100C declenche des shutdowns en pleine sequence (vecu : 100.3C -> faux

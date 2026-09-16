@@ -259,6 +259,14 @@ LOAD_DIST_MM = 80
 # n'ont jamais cette option, quel que soit le modèle sélectionné.
 HEAT_CAPABLE_POSITIONS = (3, 4, 5, 8, 9, 10)
 HEAT_TARGET_C = 85
+# Attente de chauffe : la macro QC_HEAT_WAIT tranche a HEAT_WAIT_TIMEOUT_S (passe
+# explicitement en TIMEOUT=, une seule source ici) ; le wizard lui laisse 120 s de
+# plus. 16/09 : avec 30 s de marge, un verdict rendu a 360 s a ete traite par le
+# wizard 61 s plus tard (rejeu des reponses en idle GTK, ecran qui sortait de
+# veille, rapports en cours) -- le wizard avait deja clos le test a 390 s et les
+# lignes de verdict sont tombees dans le vide -> boitiers PASS par defaut.
+HEAT_WAIT_TIMEOUT_S = 360
+HEAT_WAIT_TEST_TIMEOUT_S = HEAT_WAIT_TIMEOUT_S + 120
 
 
 def heat_positions_for_run(disabled_positions=None, model=None):
@@ -380,13 +388,34 @@ def build_yms_tests(disabled_positions=None, model=None):
                 "id": HEAT_ALL_TEST_ID,
                 "name": "全部并行加热测试 / Heat wait (parallel, %d°C)" % HEAT_TARGET_C,
                 "type": "automated",
-                "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
+                "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d TIMEOUT=%d" % (tools_arg, HEAT_TARGET_C, HEAT_WAIT_TIMEOUT_S),
                 # 330 -> 390 (28/08, +1 minute) : suit le timeout interne de
                 # la macro (300 -> 360, cf. generate_yms12_cfg.py
                 # _qc_heat_all_step) avec la meme marge de ~30s.
-                "timeout": 390,
+                "timeout": HEAT_WAIT_TEST_TIMEOUT_S,
             })
     return tests
+
+
+HEAT_OK, HEAT_FAIL, HEAT_MISSING = "ok", "fail", "missing"
+
+
+def heat_outcome(logs):
+    """Verdict de chauffe d'une position d'apres ses lignes capturees.
+
+    "ok" / "fail" = ligne finale de _qc_heat_all_step ("heat OK" / "heat
+    timeout") presente ; "missing" = aucune ligne de verdict (test coupe avant
+    la fin, reponses perdues, restart Klipper...). 16/09 : six boitiers a 35 C
+    sont sortis PASS parce que leurs lignes de verdict etaient arrivees apres
+    la cloture du test -- sans verdict il n'y a PAS de PASS.
+    """
+    for l in logs:
+        if "heat timeout" in l:
+            return HEAT_FAIL
+    for l in logs:
+        if "heat OK" in l:
+            return HEAT_OK
+    return HEAT_MISSING
 
 
 def build_retest_sequence(position, model=None):
@@ -439,9 +468,9 @@ def build_retest_sequence(position, model=None):
             "id": HEAT_ALL_TEST_ID,
             "name": "YMS-%d 加热测试 / heat wait (%d°C)" % (position, HEAT_TARGET_C),
             "type": "automated",
-            "macro": "QC_HEAT_WAIT TOOLS=%d TARGET=%d" % (position, HEAT_TARGET_C),
+            "macro": "QC_HEAT_WAIT TOOLS=%d TARGET=%d TIMEOUT=%d" % (position, HEAT_TARGET_C, HEAT_WAIT_TIMEOUT_S),
             # cf. build_yms_tests -- meme marge (+1 minute, 28/08).
-            "timeout": 390,
+            "timeout": HEAT_WAIT_TEST_TIMEOUT_S,
         })
     return tests
 

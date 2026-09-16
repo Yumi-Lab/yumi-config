@@ -36,6 +36,36 @@ SAVE_BLOCK = ("#*# <---------------------- SAVE_CONFIG ---------------------->\n
               "#*#\n#*# [probe]\n#*# z_offset = 1.234\n")
 
 
+class BenchPadIsNeverComposed(unittest.TestCase):
+    """16/09/2026 : au premier scan de boot sur le banc YMS .109, une seule carte vue ->
+    la cfg du banc (12 extrudeurs, 2 hyperdrives) remplacee par une C235 nue, Klipper a
+    terre. Le marqueur du banc (qc_bench_config.json, lu par qc/qc_yms.py) interdit toute
+    composition, meme forcee."""
+
+    def _bench_dir(self):
+        d = tempfile.TemporaryDirectory()
+        Path(d.name, "printer.cfg").write_text("[mcu hyperdrive_uart]\nserial: /dev/ttyS2\n", encoding="utf-8")
+        Path(d.name, compose.BENCH_MARKER).write_text('{"yms_version": "1.0"}', encoding="utf-8")
+        return d
+
+    def test_build_leaves_a_bench_untouched_even_when_forced(self):
+        with self._bench_dir() as d:
+            for kw in ({}, {"factory": True}, {"minimal": True}):
+                code, summary, cfg = compose.build(C235, CATALOG, d, **kw)
+                self.assertEqual(code, compose.EXIT_UNCHANGED, kw)
+                self.assertEqual(summary["mode"], "bench", kw)
+                self.assertIsNone(cfg, kw)
+            self.assertEqual(Path(d, "printer.cfg").read_text(encoding="utf-8"),
+                             "[mcu hyperdrive_uart]\nserial: /dev/ttyS2\n")
+
+    def test_without_marker_the_same_dir_is_composed(self):
+        with self._bench_dir() as d:
+            Path(d, compose.BENCH_MARKER).unlink()
+            code, summary, cfg = compose.build(C235, CATALOG, d, factory=True)
+            self.assertNotEqual(summary["mode"], "bench")
+            self.assertIsNotNone(cfg)
+
+
 class Select(unittest.TestCase):
     def test_main_only_uses_defaults(self):
         sel = compose.select(C235, CATALOG)

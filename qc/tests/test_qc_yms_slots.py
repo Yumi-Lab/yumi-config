@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from qc.qc_yms import (
+from qc.qc_yms import (HEAT_WAIT_TIMEOUT_S, 
     build_yms_tests,
     enabled_positions,
     load_disabled_positions,
@@ -73,7 +73,7 @@ class TestDisabledSlots(unittest.TestCase):
                          "QC_HEAT_START TOOLS=3,4,5,8,9,10 TARGET=85")
         self.assertEqual(tests[-1]["id"], "heat_wait")
         self.assertEqual(tests[-1]["macro"],
-                         "QC_HEAT_WAIT TOOLS=3,4,5,8,9,10 TARGET=85")
+                         "QC_HEAT_WAIT TOOLS=3,4,5,8,9,10 TARGET=85 TIMEOUT=%d" % HEAT_WAIT_TIMEOUT_S)
 
     def test_build_yms_tests_pro_restricts_load_and_stress_too(self):
         # v3 (23/08) : "quand on fait les YMS Pro, on ne fait que le
