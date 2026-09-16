@@ -262,7 +262,10 @@ def load_template(src):
 # FAIL. {bench_mark} = texte libre de qc_bench_config.json ("●" sur le 2e banc, "" sur le
 # 1er -> rien d'imprimé) : deux bancs partagent la même POS80L réseau, sans ce repère les
 # piles d'étiquettes ne sont plus attribuables. Un seul élément, référencé par les deux sections.
-BENCH_MARK_EL = {"t": "text", "x": 45.4, "y": 23.6, "sz": 4, "weight": "bold", "align": "center", "c": "{bench_mark}"}
+# y 24.6 / sz 3.6 (Nicolas, 16/09, sur étiquette réelle) : à y 23.6 le point touchait le numéro de
+# série (code PRO imprimé en entier, il court jusqu'à x≈45) ; 1 mm plus bas à sz 4 il touchait le
+# cadre du FAIL (bord intérieur 28.75) -> corps réduit à 3.6, encre 25.7–28.5 mm, dégagé des deux.
+BENCH_MARK_EL = {"t": "text", "x": 45.4, "y": 24.6, "sz": 3.6, "weight": "bold", "align": "center", "c": "{bench_mark}"}
 
 DEFAULTS = {
     "yms": {
