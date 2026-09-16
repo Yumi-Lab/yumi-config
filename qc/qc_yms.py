@@ -186,6 +186,12 @@ BENCH_CONFIG_DEFAULTS = {
     "yms_version": "1.0",
     "extruder_model": "",
     "spring_model": "",
+    # Repère visuel DU BANC sur l'étiquette (16/09/2026) : plusieurs bancs
+    # partagent la même POS80L réseau et sortent des étiquettes identiques,
+    # impossible de dire quelle pile vient de quel banc. Texte libre imprimé
+    # tel quel par le placeholder {bench_mark} du gabarit (ex. "●" sur le
+    # 2e banc, "" = rien sur le 1er). Remonté aussi dans le rapport.
+    "bench_mark": "",
 }
 
 
@@ -459,7 +465,8 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
                      test_log, engine_results, model="light",
                      bench_total=YMS_BENCH_TOTAL, bench_slots=YMS_BENCH_SLOTS,
                      started=None, now=None,
-                     extruder_model="", spring_model="", yms_version="1.0"):
+                     extruder_model="", spring_model="", yms_version="1.0",
+                     bench_mark=""):
     """Construit le rapport JSON d'un boîtier YMS (contrat FORMAT-YMS.md v1.4).
 
     Args:
@@ -477,6 +484,7 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
         bench_slots: mapping position -> slot physique.
         started: datetime de début du test.
         now: datetime de fin du test.
+        bench_mark: repère visuel du banc (cf. BENCH_CONFIG_DEFAULTS), "" si aucun.
 
     Returns:
         dict conforme au contrat v1.4.
@@ -518,6 +526,7 @@ def build_box_report(test_id, result, yms_id, session, pad_mac, technician,
         "extruder_model": extruder_model,
         "spring_model": spring_model,
         "yms_version": yms_version,
+        "bench_mark": bench_mark,
         "measures": extract_measures(logs, passed),
         "tests": [
             {
@@ -648,6 +657,10 @@ def _label_kind_section_data(report):
         "qc_model": display_model,
         "date": date,
         "qr": "%s%s" % (QC_REPORT_URL_BASE, code),
+        # Repère du banc (16/09) : "" quand le pad n'en a pas -> le gabarit
+        # peut porter {bench_mark} partout, il ne sort rien sur un banc sans
+        # repère et jamais le token brut.
+        "bench_mark": str(report.get("bench_mark") or ""),
     }
     if is_yms:
         # bench_position existe que le boîtier passe ou échoue -- le gabarit

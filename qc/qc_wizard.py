@@ -1292,6 +1292,7 @@ class Panel(ScreenPanel):
             extruder_model=(self._bench_config or {}).get("extruder_model", ""),
             spring_model=(self._bench_config or {}).get("spring_model", ""),
             yms_version=(self._bench_config or {}).get("yms_version", "1.0"),
+            bench_mark=(self._bench_config or {}).get("bench_mark", ""),
         )
 
     @staticmethod

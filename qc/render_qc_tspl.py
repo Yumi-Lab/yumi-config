@@ -258,6 +258,12 @@ def load_template(src):
 # ligne d'alimentation avec le symbole courant continu), FAIL corrigé le 22/08 ({qc_model}
 # au lieu de "PRO V1.0" en dur). MACHINE = conversion mm du TSPL en dur historique de
 # qc_yms.py::build_label_tspl (dots/8 = mm), pas encore repris à la main. ──
+# Repère du banc (16/09/2026) : point en bas à droite, sous la case position, sur PASS et
+# FAIL. {bench_mark} = texte libre de qc_bench_config.json ("●" sur le 2e banc, "" sur le
+# 1er -> rien d'imprimé) : deux bancs partagent la même POS80L réseau, sans ce repère les
+# piles d'étiquettes ne sont plus attribuables. Un seul élément, référencé par les deux sections.
+BENCH_MARK_EL = {"t": "text", "x": 45.4, "y": 23.6, "sz": 4, "weight": "bold", "align": "center", "c": "{bench_mark}"}
+
 DEFAULTS = {
     "yms": {
         "pass": [
@@ -277,6 +283,7 @@ DEFAULTS = {
             {"t": "text", "x": 17.96, "y": 11.48, "sz": 2.38, "weight": "bold", "c": "INPUT : 24V"},
             {"t": "logo", "logo": "dc", "x": 33.73, "y": 11.64, "w": 2.67, "h": 2.26},
             {"t": "text", "x": 36.49, "y": 11.36, "sz": 2.38, "weight": "bold", "c": "2A"},
+            BENCH_MARK_EL,
         ],
         "fail": [
             {"t": "frame", "x": 0.5, "y": 0.5, "w": 49, "h": 29, "thick": 0.75},
@@ -287,6 +294,7 @@ DEFAULTS = {
             {"t": "text", "x": 2.11, "y": 17.31, "sz": 2.66, "weight": "bold", "c": "{date}"},
             {"t": "text", "x": 1.67, "y": 21.81, "sz": 2.66, "weight": "bold", "c": "{code}"},
             {"t": "text", "x": 18.85, "y": 2.23, "sz": 3.7, "c": "{qc_model}"},
+            BENCH_MARK_EL,
         ],
     },
     "machine": {
@@ -353,6 +361,7 @@ if __name__ == "__main__":
         "code": "YMSPROV3-20260814A1B2C3D4E5", "qc_model": "YMS-PRO",
         "date": "2026-08-14 15:32", "qr": "https://qc.yumi-lab.com/report/YMSPROV3-20260814A1B2C3D4E5",
         "bench_position": "7", "fail_reason": "sensor_lost_feed", "failed_tests": [],
+        "bench_mark": "\u25cf",
     }
     out = render_qc_label("yms", "pass", sample)
     path = os.environ.get("OUT", "/tmp/qc_label_test.tspl")

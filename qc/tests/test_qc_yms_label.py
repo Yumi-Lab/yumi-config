@@ -142,5 +142,42 @@ class TestLabelFail(unittest.TestCase):
         self.assertNotEqual(tspl_pass, tspl_fail)
 
 
+@_NO_LIVE_TEMPLATE
+class TestBenchMark(unittest.TestCase):
+    """16/09/2026 : {bench_mark} = repere visuel du banc, en bas a droite sur PASS et
+    FAIL. Deux bancs partagent la meme POS80L reseau : sans repere, impossible de dire
+    quelle pile d'etiquettes vient de quel banc."""
+
+    def test_default_templates_carry_the_placeholder_on_pass_and_fail(self, _m):
+        for section in ("pass", "fail"):
+            cs = [e.get("c") for e in render_qc_tspl.DEFAULTS["yms"][section] if e.get("t") == "text"]
+            self.assertIn("{bench_mark}", cs, section)
+
+    def test_missing_mark_renders_nothing_not_the_raw_token(self, _m):
+        """Un rapport sans bench_mark (1er banc, ou rapport d'avant le champ) doit
+        substituer {bench_mark} par "" -- jamais imprimer le token brut."""
+        from qc.qc_yms import _label_kind_section_data
+        _, _, data = _label_kind_section_data({
+            "overall_result": "PASS", "printer_id": "YMSP-1", "qc_model": "YMS-PRO",
+            "date_end": "2026-09-16T10:00:00"})
+        self.assertEqual(data["bench_mark"], "")
+        _, _, data_none = _label_kind_section_data({
+            "overall_result": "PASS", "printer_id": "YMSP-1", "qc_model": "YMS-PRO",
+            "date_end": "2026-09-16T10:00:00", "bench_mark": None})
+        self.assertEqual(data_none["bench_mark"], "")
+
+    def test_mark_changes_pixels_on_pass_and_fail(self, _m):
+        base = {"printer_id": "YMSP-7K3MQ", "qc_model": "YMS-PRO",
+                "date_end": "2026-09-16T10:00:00", "bench_position": 7,
+                "measures": {"fail_reason": "sensor_mute"}}
+        for overall in ("PASS", "FAIL"):
+            plain = build_label_tspl(dict(base, overall_result=overall))
+            marked = build_label_tspl(dict(base, overall_result=overall, bench_mark="\u25cf"))
+            self.assertNotEqual(plain, marked, overall)
+            # et le meme rapport sans repere = strictement l'etiquette d'avant le champ
+            legacy = dict(base, overall_result=overall)
+            self.assertEqual(build_label_tspl(legacy), plain)
+
+
 if __name__ == "__main__":
     unittest.main()
