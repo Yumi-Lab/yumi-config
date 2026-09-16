@@ -92,6 +92,10 @@ try:
         load_disabled_positions,
         find_unready_heat_positions,
         heat_positions_for_run,
+        heat_outcome,
+        HEAT_FAIL,
+        HEAT_MISSING,
+        HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
         LOAD_ALL_TEST_ID,
@@ -120,6 +124,10 @@ except ImportError:
         load_disabled_positions,
         find_unready_heat_positions,
         heat_positions_for_run,
+        heat_outcome,
+        HEAT_FAIL,
+        HEAT_MISSING,
+        HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
         LOAD_ALL_TEST_ID,
@@ -874,7 +882,12 @@ class Panel(ScreenPanel):
             for g in entries:
                 if g.get("type") == "response" and g.get("time", 0) > last:
                     last = g["time"]
-                    GLib.idle_add(self._replay_response, g.get("message", ""))
+                    # PRIORITY_DEFAULT (16/09) : en PRIORITY_DEFAULT_IDLE le rejeu
+                    # attendait que GTK n'ait plus rien a faire -- sortie de veille de
+                    # l'ecran + rendu des rapports = 61 s de retard sur le verdict de
+                    # chauffe, arrive apres le timeout du test (boitiers PASS par defaut).
+                    GLib.idle_add(self._replay_response, g.get("message", ""),
+                                  priority=GLib.PRIORITY_DEFAULT)
 
     def _replay_response(self, msg):
         # process_gcode_response retourne True sur presque tous ses chemins ;
@@ -1348,6 +1361,7 @@ class Panel(ScreenPanel):
         1er lot (constaté en réel : YMS-1..12 de deux lots mélangés)."""
         with self._dispatch_lock:
             pending = []
+            heat_positions = heat_positions_for_run(self._disabled_positions, self._yms_model)
             for pos in range(1, YMS_BENCH_TOTAL + 1):
                 test_id = test_id_for_position(pos)
                 logs = self.engine._test_log.get(test_id, [])
@@ -1375,16 +1389,23 @@ class Panel(ScreenPanel):
                     stress_missing = not any(
                         re.search(r"stress \d+/\d+ speed=", l) or "stress OK" in l
                         for l in logs)
-                    heat_failed = any("heat timeout" in l for l in logs)
+                    heat = heat_outcome(logs)
+                    # Position cablee chauffe de ce lot (YMS Pro) : un verdict de
+                    # chauffe est OBLIGATOIRE -- "missing" = FAIL, jamais PASS par
+                    # defaut (16/09 : 6 boitiers a 35 C etiquetes PASS).
+                    heat_expected = pos in heat_positions
                     if stress_lost:
                         final = QCResult.FAIL
                         details = "Stress sweep (group): tracking lost"
                     elif stress_missing:
                         final = QCResult.FAIL
                         details = "Stress sweep (group): no data received"
-                    elif heat_failed:
+                    elif heat_expected and heat == HEAT_FAIL:
                         final = QCResult.FAIL
                         details = "Heat (group): target temperature not reached"
+                    elif heat_expected and heat == HEAT_MISSING:
+                        final = QCResult.FAIL
+                        details = "Heat (group): no heat verdict received"
                     else:
                         final = QCResult.PASS
                         details = ""
@@ -1797,6 +1818,19 @@ class Panel(ScreenPanel):
         """Re-tente le test courant après un FIRMWARE_RESTART (one-shot GLib)."""
         test = self.engine.get_current_test()
         if test and test["id"] == test_id and self.engine.state == QCState.RUNNING:
+            # Un FIRMWARE_RESTART remet les cibles des plateaux a 0 alors que le
+            # wizard a deja coche heat_start (ou l'a recale, Klipper etant en
+            # shutdown a ce moment-la) : sans rejouer QC_HEAT_START, le lot
+            # continue sur des plateaux froids et l'attente de chauffe est perdue
+            # d'avance (16/09, .108, lot 11:47). Idempotent : SET_HEATER_TEMPERATURE
+            # + SET_FAN_SPEED 0 sur les positions du lot.
+            if test["id"] != HEAT_START_TEST_ID:
+                for t in self.engine.tests:
+                    if t.get("id") == HEAT_START_TEST_ID and t.get("macro"):
+                        logger.warning("QC: rejoue %s apres FIRMWARE_RESTART (avant %s)",
+                                       t["macro"], test_id)
+                        self._screen._ws.klippy.gcode_script(t["macro"])
+                        break
             self._run_test(test)
         return False
 

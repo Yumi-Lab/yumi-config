@@ -45,6 +45,12 @@ SAVE_CONFIG_MARKER = generator.render_save_config().splitlines()[0]
 DEFAULT_CONFIG_DIR = Path.home() / "printer_data" / "config"
 
 EXIT_APPLIED, EXIT_ALERT, EXIT_MINIMAL, EXIT_UNCHANGED = 0, 2, 3, 4
+# A QC bench pad (YMS12 bench: qc/qc_yms.py reads this file for the per-bench settings)
+# runs a hand-maintained bench printer.cfg (12 extruders, 2 hyperdrives, 6 heated plates)
+# that no catalog describes. 16/09/2026: the first boot scan on bench .109 saw one board
+# and replaced the bench cfg with a plain C235 one -> Klipper down on the bench. Whatever
+# the flags, a bench pad is never composed.
+BENCH_MARKER = "qc_bench_config.json"
 
 
 def _yumi_detect_default_out():
@@ -217,6 +223,12 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
         current = (config_dir / "printer.cfg").read_text(encoding="utf-8")
     except OSError:
         pass
+
+    if (config_dir / BENCH_MARKER).exists():
+        summary = {"main": None, "smartbox": None, "others": [], "product": None, "chain": [],
+                   "reasons": ["QC bench pad (%s present): printer.cfg is never generated here" % BENCH_MARKER],
+                   "mode": "bench", "alert": None, "minimal": False}
+        return EXIT_UNCHANGED, summary, None
 
     sel = select(composition, catalog, prefs)
     summary = {"main": sel["main"], "smartbox": sel["smartbox"], "others": sel["others"],
