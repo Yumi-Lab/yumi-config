@@ -213,9 +213,13 @@ max_temp: 110
 # donc PENDANT TOUTE la chauffe et soufflait la chaleur, rendant 85C long
 # voire jamais atteint dans le timeout ("on n'a pas toujours le temps de
 # chauffer a 85"). Decouple du heater : coupe explicitement PENDANT la
-# chauffe (QC_HEAT_START) et rallume a la fin (_qc_heat_all_step) -- reste
-# allume le reste du temps (_QC_HEAT_FANS_ON, des QC_LOAD_ALL) pour une
-# verification visuelle qu'il tourne bien.
+# chauffe (QC_HEAT_START, re-coupe par QC_HEAT_WAIT) et rallume SEULEMENT
+# apres le verdict (_qc_heat_all_step) -- 16/09 (Nicolas) : "quand on lance le
+# QC on coupe les ventilos, uniquement pour le QC, comme ca l'air chaud ne se
+# barre pas". Jusqu'au 16/09 QC_LOAD_ALL les rallumait juste apres
+# QC_HEAT_START, donc ils soufflaient pendant tout le chargement + le stress.
+# Le passage a 1.0 en fin de chauffe sert de verification visuelle qu'ils
+# tournent (et refroidit les boitiers pour la manipulation).
 [fan_generic YMS-%(y)d-fan]
 pin: %(m)s:%(fan)s
 max_power: 1
@@ -236,6 +240,14 @@ def heat_positions():
     que HEAT_CAPABLE_POSITIONS cote qc_yms.py, calculees ici depuis la meme
     source (HYPERDRIVES x HEAT_SLOTS) plutot que dupliquees en dur."""
     return [first + i + 1 for _n, _s, first in HYPERDRIVES for i in range(len(HEAT_SLOTS))]
+
+
+def heat_peak_vars():
+    """Une variable peak_<N> (temperature max vue pendant QC_HEAT_WAIT) par
+    position chauffante -- meme convention par position que ok_<t>/pushed_<t>
+    de _QC_YMS_STATE. Remise a 0 par QC_HEAT_WAIT, tranchee par
+    _qc_heat_all_step."""
+    return "".join("variable_peak_%d: 0.0\n" % y for y in heat_positions())
 
 
 def heat_fans_on_macro():
@@ -638,7 +650,6 @@ gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     RESPOND MSG="QC:LOAD_ALL:START"
     _QC_BOARD_FAN_ON
-    _QC_HEAT_FANS_ON
     T0
     {% for t in tools %}
         SET_GCODE_VARIABLE MACRO=_QC_YMS_STATE VARIABLE=ok_{t} VALUE=0
@@ -807,17 +818,17 @@ gcode:
     {% set target = params.TARGET|default(85)|int %}
     RESPOND MSG="QC:HEAT_START:START"
     {% for t in tools %}
-        # Ventilo coupe PENDANT la chauffe (28/08) : un heater_fan soufflait
-        # la chaleur en continu des que le heater depassait 25C, rendant
-        # 85C long voire hors timeout -- fan_generic decouple, rallume par
-        # _qc_heat_all_step des que cette position atteint sa cible/timeout.
+        # Ventilo coupe PENDANT TOUTE la chauffe (28/08, durci 16/09) : un
+        # heater_fan soufflait la chaleur en continu des que le heater
+        # depassait 25C, rendant 85C long voire hors timeout -- fan_generic
+        # decouple, rallume par _qc_heat_all_step seulement apres le verdict.
         SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=0
         SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET={target}
     {% endfor %}
     RESPOND MSG="QC:HEAT_START:PASS"
 
 [gcode_macro QC_HEAT_WAIT]
-description: QC banc — YMS Pro : ATTEND que TOUS les TOOL= (chauffe déjà lancée via QC_HEAT_START) atteignent TARGET (tolérance 2C) ou TIMEOUT secondes (défaut 300, décompté depuis CET appel -- le temps déjà chauffé pendant load_all/stress_all est donc "gratuit"). Une position en timeout est marquée FAIL sans bloquer les autres. TOOLS=3,4,5,... TARGET=85 (optionnel, doit matcher QC_HEAT_START)
+description: QC banc — YMS Pro : ATTEND que TOUS les TOOL= (chauffe déjà lancée via QC_HEAT_START) atteignent TARGET (tolérance 2C, verdict sur le PIC atteint pendant l'attente) ou TIMEOUT secondes (défaut 360, décompté depuis CET appel -- le temps déjà chauffé pendant load_all/stress_all est donc "gratuit"). Une position en timeout est marquée FAIL sans bloquer les autres. TOOLS=3,4,5,... TARGET=85 (optionnel, doit matcher QC_HEAT_START)
 gcode:
     {% set tools = params.TOOLS.split(",")|map("int")|list %}
     {% set target = params.TARGET|default(85)|int %}
@@ -825,6 +836,13 @@ gcode:
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=tools VALUE="{tools}"
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=target VALUE={target}
     SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE=0
+    {% for t in tools %}
+        # Ceinture et bretelles (16/09) : ventilo coupe aussi ICI, pour que la
+        # chauffe ne depende pas de ce qui a tourne entre QC_HEAT_START et
+        # maintenant ; pic remis a zero pour ce lot.
+        SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=0
+        SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=peak_{t} VALUE=0
+    {% endfor %}
     # 300 -> 360 (28/08, +1 minute) : le ventilo coupe pendant la chauffe
     # (SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=0 dans QC_HEAT_START) laisse
     # deja plus de marge pour atteindre 85C, +1 minute en plus au cas ou.
@@ -837,6 +855,7 @@ variable_tools: []
 variable_target: 85
 variable_elapsed: 0
 variable_timeout: 300
+""" + heat_peak_vars() + """\
 gcode:
     # macro porte-etat, jamais appelee directement
 
@@ -847,11 +866,22 @@ gcode:
 # entre-temps -> OK, les autres -> FAIL) -- une position lente ne bloque
 # jamais les autres indefiniment.
 #
+# Verdict sur le PIC (16/09) : avant, la decision lisait la temperature
+# INSTANTANEE au tick final. Avec le PID actuel (Kp=Ki=Kd=50) la regulation
+# oscille de +-1.5C autour de 85 : un boitier qui etait a 85.6C dix secondes
+# plus tot etait echantillonne a 82.9C a t=300 et recale ("heat timeout",
+# vu 2x sur la position 10 le 16/09), ou refroidi par un voisin/une manip
+# apres avoir atteint la cible (85.3C a 280s -> 78.0C a 300s, position 9).
+# peak_<t> = temperature maximale vue pendant l'attente ; c'est elle qui
+# tranche et qui est ecrite dans les lignes "heat OK"/"heat timeout" (donc
+# dans measures.heat_reached_c). La courbe (heat_curve) garde les valeurs
+# brutes toutes les 10s.
+#
 # Point de mesure toutes les 10s (Nicolas 25/08) : une ligne par position,
 # taguee "QC E<n>_HEAD:" -> routee par qc_engine dans le buffer DEDIE de
 # cette position (cf. v5 25/08), donc jamais en concurrence avec les 5 autres
-# positions chauffantes. A TIMEOUT=300s par defaut : ~30 points + la ligne
-# finale = 31 lignes, large marge sous le plafond de 40/position. Sert a
+# positions chauffantes. A TIMEOUT=360s par defaut : ~36 points + la ligne
+# finale = 37 lignes, sous le plafond de 40/position. Sert a
 # reconstruire la courbe de chauffe cote rapport (extract_measures ->
 # measures.heat_curve).
 [delayed_gcode _qc_heat_all_step]
@@ -869,17 +899,22 @@ gcode:
     {% endif %}
     {% for t in tools %}
         {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
-        {% if h.temperature < target - 2 %}
+        {% set peak = [v["peak_" ~ t]|float, h.temperature]|max %}
+        {% if h.temperature > v["peak_" ~ t]|float %}
+            SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=peak_{t} VALUE={h.temperature}
+        {% endif %}
+        {% if peak < target - 2 %}
             {% set ns.alldone = false %}
         {% endif %}
     {% endfor %}
     {% if ns.alldone or elapsed >= v.timeout|int %}
         {% for t in tools %}
             {% set h = printer["heater_generic YMS-" ~ t ~ "-heater"] %}
-            {% if h.temperature < target - 2 %}
-                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: heat timeout, {"%.1f" % h.temperature}C after {elapsed}s (target {target}C)"
+            {% set peak = [v["peak_" ~ t]|float, h.temperature]|max %}
+            {% if peak < target - 2 %}
+                RESPOND TYPE=error MSG="QC E{t - 1}_HEAD: heat timeout, {"%.1f" % peak}C after {elapsed}s (target {target}C)"
             {% else %}
-                {action_respond_info("QC E%d_HEAD: heat OK, %.1fC reached (target %dC)" % (t - 1, h.temperature, target))}
+                {action_respond_info("QC E%d_HEAD: heat OK, %.1fC reached (target %dC)" % (t - 1, peak, target))}
             {% endif %}
             SET_HEATER_TEMPERATURE HEATER=YMS-{t}-heater TARGET=0
             SET_FAN_SPEED FAN=YMS-{t}-fan SPEED=1.0
