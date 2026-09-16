@@ -7,8 +7,9 @@ HEAT_POSITIONS = (3, 4, 5, 8, 9, 10)
 
 
 def _section(cfg, header):
-    """Texte d'une section [header] jusqu'au prochain en-tete de section."""
-    m = re.search(r"^\[%s\]\n(.*?)(?=^\[)" % re.escape(header), cfg, re.M | re.S)
+    """Texte d'une section [header] jusqu'au prochain en-tete de section (ou la fin
+    du fichier -- le delayed_gcode de demarrage des ventilos est la derniere section)."""
+    m = re.search(r"^\[%s\]\n(.*?)(?=^\[|\Z)" % re.escape(header), cfg, re.M | re.S)
     assert m, "section [%s] absente" % header
     return m.group(1)
 
