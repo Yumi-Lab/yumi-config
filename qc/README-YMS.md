@@ -53,9 +53,10 @@ La macro générique `QC_HEAD_FEED TOOL=n` (n=1..12) exécute pour chaque boîti
 Les positions câblées chauffe (3, 4, 5, 8, 9, 10) lancent leur plateau à 85 °C dès le
 début du lot (`QC_HEAT_START`, non bloquant), chargent et stressent pendant la montée,
 puis `QC_HEAT_WAIT` attend jusqu'à 360 s que chacune atteigne 83 °C. Les ventilateurs
-des plateaux (`fan_generic YMS-n-fan`) sont **coupés du début à la fin de la chauffe** et
-ne repartent qu'après le verdict (Nicolas, 16/09 : « on coupe les ventilos, uniquement
-pour le QC, comme ça l'air chaud ne se barre pas »). Le verdict se prend sur le **pic**
+des plateaux (`fan_generic YMS-n-fan`) tournent **en permanence hors chauffe**, à fond dès le
+démarrage de Klipper : brancher un YMS fait partir son ventilo, c'est le contrôle qu'il
+fonctionne. Ils sont **coupés uniquement pendant la chauffe du QC**, du lancement au verdict,
+pour ne pas évacuer la chaleur et accélérer la montée (Nicolas, 16/09), puis repartent à fond. Le verdict se prend sur le **pic**
 de température vu pendant l'attente (`peak_<n>`), pas sur l'échantillon du dernier tick :
 la régulation oscille de ±1,5 °C et un boîtier passé à 85,6 °C pouvait être recalé à
 82,9 °C dix secondes plus tard. `measures.heat_reached_c` = ce pic, `heat_curve` = les

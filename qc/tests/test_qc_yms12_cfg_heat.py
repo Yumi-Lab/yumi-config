@@ -30,6 +30,16 @@ class TestYms12HeatConfig(unittest.TestCase):
             self.assertIn("[fan_generic YMS-%d-fan]" % p, self.cfg)
             self.assertNotIn("[heater_fan YMS-%d-fan]" % p, self.cfg)
 
+    def test_fans_run_at_boot_for_the_plug_in_check(self):
+        # Regle Nicolas 16/09 : brancher un YMS = son ventilo tourne (controle
+        # fonctionnel) ; la coupure ne vaut que pendant la chauffe du QC.
+        boot = _section(self.cfg, "delayed_gcode _qc_heat_fans_boot")
+        self.assertIn("initial_duration:", boot)
+        self.assertIn("_QC_HEAT_FANS_ON", boot)
+        fans_on = _section(self.cfg, "gcode_macro _QC_HEAT_FANS_ON")
+        for p in HEAT_POSITIONS:
+            self.assertIn("SET_FAN_SPEED FAN=YMS-%d-fan SPEED=1.0" % p, fans_on)
+
     def test_load_all_does_not_switch_fans_back_on(self):
         # Jusqu'au 16/09 QC_LOAD_ALL rallumait les ventilos juste apres
         # QC_HEAT_START : ils soufflaient pendant tout le chargement + stress.
