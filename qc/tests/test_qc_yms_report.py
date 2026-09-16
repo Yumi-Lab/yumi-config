@@ -33,8 +33,12 @@ class TestBuildBoxReport(unittest.TestCase):
             "skipped_tests", "qc_model", "yumi_config", "machine_uid",
             "pad_mac", "bench_position", "bench_slot", "bench_session",
             "bench_total",
-            "extruder_model", "spring_model", "yms_version", "measures", "tests",
+            "extruder_model", "spring_model", "yms_version", "bench_mark",
+            "measures", "tests",
         })
+        # Sans repère de banc configuré : chaîne vide, jamais None (le gabarit
+        # substitue {bench_mark} par str(v) -> "None" imprimé sinon).
+        self.assertEqual(r["bench_mark"], "")
         self.assertEqual(r["bench_position"], 6)
         self.assertEqual(r["bench_slot"], "hyperdrive_uart:4")
         self.assertEqual(r["printer_id"], "YMSL-TST01-TST01")
@@ -86,6 +90,25 @@ class TestBuildBoxReport(unittest.TestCase):
         self.assertEqual(r["qc_model"], "YMS-PRO")
         self.assertEqual(r["yumi_config"], "device=YMS-PRO")
         self.assertEqual(r["printer_id"], "YMSP-TST01-TST01")
+
+
+
+class TestBuildBoxReportBenchMark(unittest.TestCase):
+    """16/09/2026 : repère visuel du banc (qc_bench_config.json -> rapport ->
+    placeholder {bench_mark} de l'étiquette). Deux bancs sur la même POS80L
+    réseau sortent des étiquettes identiques : le 2e porte un point."""
+
+    def _report(self, **kw):
+        return build_box_report(
+            test_id="e0_head", result="PASS", yms_id="YMSP-X", session="S",
+            pad_mac="AABBCCDDEEFF", technician="op", test_log={},
+            engine_results={}, **kw)
+
+    def test_bench_mark_propagated_verbatim(self):
+        self.assertEqual(self._report(bench_mark="●")["bench_mark"], "●")
+
+    def test_bench_mark_defaults_to_empty(self):
+        self.assertEqual(self._report()["bench_mark"], "")
 
 
 if __name__ == "__main__":

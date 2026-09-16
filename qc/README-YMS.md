@@ -78,6 +78,28 @@ positions (ex. `{"disabled": [2, 11]}`). Ces positions sont :
 - exclues de l'allocation (`count = 12 - len(disabled)`) ;
 - non associées à un code, donc aucun rapport/étiquette n'est émis.
 
+## Config par banc — `qc_bench_config.json`
+
+Le fichier `~/printer_data/config/qc_bench_config.json` porte ce qui est propre à
+UN banc (posé à la main à l'installation, comme `qc_token`) :
+
+| Clé | Rôle | Défaut |
+|-----|------|--------|
+| `yms_version` | version produit des boîtiers testés (`YMS<PRO|L>V<version>-…`, `{qc_model}` de l'étiquette) | `"1.0"` |
+| `extruder_model` | référence exacte de l'extrudeur monté (traçabilité, rapport) | `""` |
+| `spring_model` | référence exacte du ressort interne (traçabilité, rapport) | `""` |
+| `bench_mark` | **repère visuel du banc** imprimé tel quel par le placeholder `{bench_mark}` du gabarit (point en bas à droite, PASS et FAIL) et remonté dans le rapport | `""` |
+
+`bench_mark` existe parce que plusieurs bancs partagent la même POS80L réseau
+(`smartpi-printer-factory`) et sortent des étiquettes identiques : les piles se
+mélangent à la sortie de l'imprimante. Convention usine : 1er banc = `""` (rien),
+2e banc = `"●"`. Valeur libre (`"●●"`, `"B"`…) si un 3e banc arrive. Une valeur
+vide ou non-chaîne est ignorée (repli sur le défaut). Exemple :
+
+```json
+{"yms_version": "1.0", "extruder_model": "MK12", "spring_model": "1.0*8*20", "bench_mark": "●"}
+```
+
 ## Sélecteur LIGHT / PRO
 
 Au lancement d'une séquence YMS, un dialogue demande le modèle. Toute la
@@ -100,10 +122,16 @@ ce boîtier seul. Le système :
 
 Le code précédent (échec) reste brûlé, conformément au contrat serveur.
 
-## Étiquette TSPL
+## Étiquette
 
-Impression sur POS80L (`/dev/usb/lp0`) uniquement en cas de PASS. Le TSPL
-contient un QR code vers `https://qc.yumi-lab.com/report/<printer_id>`.
+Une étiquette à CHAQUE test (PASS = numéro de série + QR vers
+`https://qc.yumi-lab.com/report/<printer_id>`, FAIL = étiquette de rejet), rendue en
+bitmap depuis le gabarit live `https://label.yumi-lab.com/qc-label-yms.json`
+(éditable dans Label Expert, repli sur `render_qc_tspl.DEFAULTS` si injoignable).
+Chemins d'impression, dans l'ordre : POS80L USB locale (`/dev/usb/lp0`) → serveur
+d'impression réseau usine (`smartpi-printer-factory`, CUPS) → relais cloud
+(`qc.yumi-lab.com/api/qc/print/factory`). Placeholders : `{code}` `{qc_model}` `{date}`
+`{qr}` `{bench_position}` `{fail_reason}` `{bench_mark}` (cf. config par banc).
 
 ## Déploiement
 
