@@ -52,6 +52,13 @@ run_privileged() {
     fi
 }
 
+# Install a systemd unit from generator/, with @PROJECT_DIR@ rendered to this checkout.
+# (systemd's %h is the manager's home — /root for a system unit — not the unit's User=.)
+install_unit() {
+    local src="$1" dst="$2"
+    sed "s#@PROJECT_DIR@#$PROJECT_DIR#g" "$src" | run_privileged tee "$dst" >/dev/null
+}
+
 # Define the installation function
 function install {
   # Replace project files in the Klipper directory
@@ -106,13 +113,15 @@ EOF
       mv "$temp_file" $KLIPPER_CONFIG_DIR/moonraker.conf
   fi
 
-  # Only replace printer.cfg on first install, never during Moonraker updates
-  if [ "$1" == "smartpad-generic" ] && [ -z "$MOONRAKER_PROCESS_UID" ]; then
-      cp "$KLIPPER_CONFIG_DIR/printer.cfg" "$KLIPPER_CONFIG_DIR/Backupupdate-printer.cfg"
-      rm -f "$KLIPPER_CONFIG_DIR/printer.cfg" && echo "printer.cfg deleted successfully." || echo "Error deleting printer.cfg."
-      cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg copied successfully." || echo "Error copying printer.cfg."
-  elif [ -n "$MOONRAKER_PROCESS_UID" ]; then
-      echo "Moonraker update detected — skipping printer.cfg replacement"
+  # printer.cfg belongs to the generator (generator/autoconfig.py rewrites it from the boards
+  # before every Klipper start, calibrations kept). This script only seeds a pad that has NO
+  # printer.cfg at all; an existing one is never replaced — this ran on every no-argument
+  # invocation (YUMI_SYNC re-runs install.sh whenever it changes) and wiped the generated cfg
+  # and its SAVE_CONFIG block (bed mesh) on the bench, twice, 2026-09-06.
+  if [ "$1" == "smartpad-generic" ] && [ -z "$MOONRAKER_PROCESS_UID" ] && [ ! -f "$KLIPPER_CONFIG_DIR/printer.cfg" ]; then
+      cp "$PROJECT_DIR/$1/printer.cfg" "$KLIPPER_CONFIG_DIR" && echo "printer.cfg seeded (none was present)." || echo "Error copying printer.cfg."
+  else
+      echo "printer.cfg present — left to the generator, not replaced."
   fi
 
   # Modify permissions so user "pi" retains rights on created or modified files
@@ -230,6 +239,8 @@ YUMI_EXTRAS=(
   "yumi_z_tap.py"
   "yumi_sensorless_homing.py"
   "probe_pressure.py"
+  "yumi_bed_scan.py"
+  "yumi_filament_head.py"
   "gcode_shell_command.py"
   "mcu_uid.py"
 )
@@ -502,8 +513,38 @@ else
 fi
 
 # === Hardware detection -> printer.cfg at boot (generator/autoconfig.py, before Klipper) ===
+# Printer configuration wizard (KlipperScreen panel): the print head cannot be read from the
+# boards, the operator picks it there, then printer.cfg is regenerated from the detected boards.
+if [ -d "$USER_HOME/KlipperScreen/panels" ]; then
+    rm -f "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    ln -sf "$PROJECT_DIR/generator/cfg_wizard.py" "$USER_HOME/KlipperScreen/panels/cfg_wizard.py"
+    echo "Symlink created: panels/cfg_wizard.py"
+    KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
+    if [ -f "$KS_EXCLUDE" ] && ! grep -qF "panels/cfg_wizard.py" "$KS_EXCLUDE"; then
+        echo "panels/cfg_wizard.py" >> "$KS_EXCLUDE"
+    fi
+fi
+if [ -f "$CONFIG_FILE" ] && ! grep -q "panel: cfg_wizard" "$CONFIG_FILE"; then
+    cat >> "$CONFIG_FILE" <<'WIZMENU'
+
+[menu __main more CfgWizard]
+name: Printer Config
+icon: settings
+panel: cfg_wizard
+WIZMENU
+    echo "Added Printer Config menu entry to KlipperScreen.conf"
+fi
+
+# Klipper regenerates its printer.cfg before every start (boot, update, YUMI_SETUP, panel)
+echo "Installing the klipper.service autoconfig drop-in..."
+if run_privileged mkdir -p /etc/systemd/system/klipper.service.d \
+   && install_unit "$PROJECT_DIR/generator/klipper-autoconfig.conf" /etc/systemd/system/klipper.service.d/yumi-autoconfig.conf; then
+    run_privileged systemctl daemon-reload
+    echo "klipper.service drop-in installed (autoconfig --boot as ExecStartPre)"
+fi
+
 echo "Installing yumi-autoconfig.service..."
-if run_privileged cp "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
+if install_unit "$PROJECT_DIR/generator/yumi-autoconfig.service" /etc/systemd/system/yumi-autoconfig.service; then
     run_privileged systemctl daemon-reload
     run_privileged systemctl enable yumi-autoconfig.service
     echo "yumi-autoconfig.service enabled at boot (boards scan, printer.cfg only rewritten when they change)"
