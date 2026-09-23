@@ -3,9 +3,25 @@
 ## Principes
 
 - Chaque composant physique = un objet avec ses enfants (cfg + macros)
-- Les schemas de connexion sont generes dynamiquement depuis le JSON produit
-- Detection automatique du hardware au firstboot via scan MCU + drivers TMC
-- Configuration progressive : scan → cfg minimal → test → cfg final
+- **Un tronc commun, des machines reduites a leur geometrie** : la carte (`SMART_MAKER_1X`)
+  porte tout ce qui est identique d'une taille a l'autre (pins, courants, vitesses, sondes,
+  homing, macros) ; une machine (`C235`/`C335`/`C435`) ne porte que endstops, courses, mesh,
+  `zero_reference_position`, vis. Une valeur ne vit qu'a UN endroit ; `generator.py` ne contient
+  aucune valeur, seulement le rendu. Test : deux tailles ne different que par la geometrie.
+- **Les macros ne connaissent aucune machine** : elles lisent `printer.configfile.settings` et la
+  macro unique `_YUMI_MACHINE` (classe deduite de la longueur de l'axe X). Aucune copie par
+  taille ; identiques octet pour octet sur toutes les machines.
+- **La tete se choisit, elle ne se detecte pas** : direct drive (`[extruder]` = moteur reel sur E0)
+  ou CHROMAX X12 (`[extruder]` fictif sur des pins libres, feeders `extruder0..N` = les YMS) via
+  le wizard KlipperScreen ; idem pour la machine quand le descripteur n'en nomme aucune.
+- **Les commentaires d'origine voyagent avec les valeurs** (`_comment`, `_comments`, `_notes`).
+- **Reference = lignee usine/QC** (`qc/qc_printer_<M>.cfg`) : la cfg generee y est comparee option
+  par option dans les tests.
+- Detection automatique du hardware au boot via scan MCU (`YUMI_CONFIG` grave) ; rien n'est
+  reecrit tant que cartes et recette (catalogue + generateur) n'ont pas change ; une mise a jour
+  du tronc commun se propage a toutes les machines au boot suivant, calibrations conservees.
+- Construit progressivement, machine par machine : C235 tete DD validee sur le banc ; C335/C435
+  = geometrie des cfg QC, `_status` "a valider sur machine".
 
 ---
 
