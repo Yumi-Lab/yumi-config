@@ -237,6 +237,8 @@ def main():
                     % '|'.join(MAINS_RATINGS))
     ap.add_argument('--voltage', help='libellé imprimé ; sinon déduit de la tension (ex. « 220–240 V~ »)')
     ap.add_argument('--power', default=None, help='puissance totale (W) ; sinon plateau (bedw MCU) + PSU')
+    ap.add_argument('--bedw', default=None, help='puissance plateau gravée (W) ; sinon lue au MCU (YUMI_CONFIG bedw=). '
+                    'Avec --serial/--model/--mains : aucun appel Moonraker (boîtier usine, réimpression)')
     ap.add_argument('--psu', type=int, default=PSU_WATTS, help='puissance alim DC fixe C-SERIES (W)')
     ap.add_argument('--lot'); ap.add_argument('--qr')
     ap.add_argument('--qr-base', dest='qr_base', default='https://qc.yumi-lab.com/report/',
@@ -256,7 +258,7 @@ def main():
     # MACHINE UID = UID STM32 (24 hex) lu via QUERY_MCU_UID (Moonraker, nécessite [mcu_uid]).
     # modèle/tension/puissance/lot = YUMI_CONFIG (DEVICE). Série = MACHINE UID. QR = page rapport QC.
     # Tout forcé en ligne de commande -> pas de Moonraker (test hors pad, réimpression manuelle).
-    forced = all((a.serial, a.model, a.mains, a.power))
+    forced = all((a.serial, a.model, a.mains, a.power or a.bedw))
     ident = {} if forced else moonraker_identity(a.moonraker)
     uid = (a.serial or ident.get('serial') or '').strip().upper()
     if not uid:
@@ -280,7 +282,7 @@ def main():
     # plage de la tension gravée (MAINS_RATINGS), arrondi au 1 A SUPÉRIEUR.
     #   C235 220 V : 300 + 120 = 420 W -> 420 / 220 = 1,9 -> 2 A.   C235 110 V : 420 / 100 -> 5 A.
     model = a.model or ident.get('model') or '?'
-    elec, problems = electrical_rating(a.mains or ident.get('mains'), ident.get('bedw'),
+    elec, problems = electrical_rating(a.mains or ident.get('mains'), a.bedw or ident.get('bedw'),
                                        psu=a.psu, power=a.power, voltage=a.voltage)
     data = {
         'serial': uid,
