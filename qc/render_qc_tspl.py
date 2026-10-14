@@ -43,7 +43,8 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import qrcodegen
 
-MEDIA = {"yms": (50, 30), "machine": (39, 39)}
+# hyperdrive (14/10/2026) : carte HyperDrive testée sur le banc, même média que le YMS.
+MEDIA = {"yms": (50, 30), "machine": (39, 39), "hyperdrive": (50, 30)}
 
 FONT_REG = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
@@ -323,7 +324,26 @@ DEFAULTS = {
 TEMPLATE_URL = {
     "yms": "https://label.yumi-lab.com/qc-label-yms.json",
     "machine": "https://label.yumi-lab.com/qc-label-machine.json",
+    "hyperdrive": "https://label.yumi-lab.com/qc-label-hyperdrive.json",
 }
+
+
+def _without_bench_position(elements):
+    """Retire {bench_position} et le cadre qui le précède (la case position)."""
+    out = []
+    for el in elements:
+        if el.get("c") == "{bench_position}":
+            if out and out[-1].get("t") == "frame":
+                out.pop()
+            continue
+        out.append(el)
+    return out
+
+
+# HyperDrive (14/10/2026) : l'étiquette YMS (Nicolas : « on garde la même
+# étiquette, YMS -> HyperDrive » ; {qc_model} = HYPERDRIVE, {code} = UID STM32),
+# sans la case position banc : une seule carte à la fois sur le banc.
+DEFAULTS["hyperdrive"] = {sec: _without_bench_position(els) for sec, els in DEFAULTS["yms"].items()}
 
 
 def render_qc_label(kind, section, data):

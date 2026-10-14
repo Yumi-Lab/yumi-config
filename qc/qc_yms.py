@@ -192,6 +192,10 @@ BENCH_CONFIG_DEFAULTS = {
     # tel quel par le placeholder {bench_mark} du gabarit (ex. "●" sur le
     # 2e banc, "" = rien sur le 1er). Remonté aussi dans le rapport.
     "bench_mark": "",
+    # Banc HyperDrive (14/10/2026) : la clé USB de référence branchée sur le
+    # pad, "vvvv:pppp" (idVendor:idProduct) ou son numéro de série USB. Vide
+    # = test USB en FAIL (jamais de PASS sans référence), cf. find_usb_device.
+    "usb_ref": "",
 }
 
 
@@ -302,6 +306,62 @@ def find_unready_heat_positions(positions, temperatures):
     return bad
 
 
+def _tools_arg(positions):
+    return ",".join(str(p) for p in positions)
+
+
+def _heat_start_test(positions, target=HEAT_TARGET_C):
+    return {
+        "id": HEAT_START_TEST_ID,
+        "name": "全部并行加热启动 / Heat start (parallel, %d°C)" % target,
+        "type": "automated",
+        "macro": "QC_HEAT_START TOOLS=%s TARGET=%d" % (_tools_arg(positions), target),
+        "timeout": 30,
+    }
+
+
+def _load_all_test(positions):
+    return {
+        "id": LOAD_ALL_TEST_ID,
+        "name": "全部并行加载 / Load all (parallel, %dmm)" % LOAD_DIST_MM,
+        "type": "automated",
+        "macro": "QC_LOAD_ALL TOOLS=%s DIST=%d" % (_tools_arg(positions), LOAD_DIST_MM),
+        "timeout": 60,
+    }
+
+
+def _stress_all_test(positions):
+    return {
+        "id": STRESS_ALL_TEST_ID,
+        "name": "全部并行应力测试 / Stress sweep (parallel, all boxes)",
+        "type": "automated",
+        "macro": "QC_STRESS_ALL TOOLS=%s" % _tools_arg(positions),
+        # 60 -> 120 (28/08) : la rampe 16 segments ±70mm (26/08) prend a
+        # elle seule ~50s de mouvement pur (1120mm, 10->80->10mm/s) + la
+        # latence de replanification entre segments (0.3s x 16) -- ca
+        # depassait regulierement les 60s d'origine (calibres pour
+        # l'ancienne rampe 8 segments ±20mm), faisant tomber le test en
+        # FAIL par timeout AVANT le "QC:STRESS_ALL:PASS" de la macro,
+        # meme quand le sweep se passait bien (constate en reel : le
+        # test ressortait TOUJOURS en FAIL).
+        "timeout": 120,
+    }
+
+
+def _heat_wait_test(positions, target=HEAT_TARGET_C):
+    return {
+        "id": HEAT_ALL_TEST_ID,
+        "name": "全部并行加热测试 / Heat wait (parallel, %d°C)" % target,
+        "type": "automated",
+        "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d TIMEOUT=%d" % (
+            _tools_arg(positions), target, HEAT_WAIT_TIMEOUT_S),
+        # 330 -> 390 (28/08, +1 minute) : suit le timeout interne de
+        # la macro (300 -> 360, cf. generate_yms12_cfg.py
+        # _qc_heat_all_step) avec la meme marge de ~30s.
+        "timeout": HEAT_WAIT_TEST_TIMEOUT_S,
+    }
+
+
 def build_yms_tests(disabled_positions=None, model=None):
     """Construit la séquence YMS12 incluant les positions désactivées en SKIP.
 
@@ -346,7 +406,6 @@ def build_yms_tests(disabled_positions=None, model=None):
         "timeout": 60,
     }]
     if enabled:
-        tools_arg = ",".join(str(p) for p in enabled)
         if is_pro:
             # v4 (23/08) : la chauffe DEMARRE en premier, non-bloquant --
             # elle monte en tâche de fond PENDANT load_all/stress_all
@@ -354,46 +413,11 @@ def build_yms_tests(disabled_positions=None, model=None):
             # coup au temps total. QC_HEAT_WAIT (fin de séquence) ne
             # décompte son timeout QUE depuis son propre appel -- le temps
             # déjà chauffé pendant load/stress est "gratuit".
-            tests.append({
-                "id": HEAT_START_TEST_ID,
-                "name": "全部并行加热启动 / Heat start (parallel, %d°C)" % HEAT_TARGET_C,
-                "type": "automated",
-                "macro": "QC_HEAT_START TOOLS=%s TARGET=%d" % (tools_arg, HEAT_TARGET_C),
-                "timeout": 30,
-            })
-        tests.append({
-            "id": LOAD_ALL_TEST_ID,
-            "name": "全部并行加载 / Load all (parallel, %dmm)" % LOAD_DIST_MM,
-            "type": "automated",
-            "macro": "QC_LOAD_ALL TOOLS=%s DIST=%d" % (tools_arg, LOAD_DIST_MM),
-            "timeout": 60,
-        })
-        tests.append({
-            "id": STRESS_ALL_TEST_ID,
-            "name": "全部并行应力测试 / Stress sweep (parallel, all boxes)",
-            "type": "automated",
-            "macro": "QC_STRESS_ALL TOOLS=%s" % tools_arg,
-            # 60 -> 120 (28/08) : la rampe 16 segments ±70mm (26/08) prend a
-            # elle seule ~50s de mouvement pur (1120mm, 10->80->10mm/s) + la
-            # latence de replanification entre segments (0.3s x 16) -- ca
-            # depassait regulierement les 60s d'origine (calibres pour
-            # l'ancienne rampe 8 segments ±20mm), faisant tomber le test en
-            # FAIL par timeout AVANT le "QC:STRESS_ALL:PASS" de la macro,
-            # meme quand le sweep se passait bien (constate en reel : le
-            # test ressortait TOUJOURS en FAIL).
-            "timeout": 120,
-        })
+            tests.append(_heat_start_test(enabled))
+        tests.append(_load_all_test(enabled))
+        tests.append(_stress_all_test(enabled))
         if is_pro:
-            tests.append({
-                "id": HEAT_ALL_TEST_ID,
-                "name": "全部并行加热测试 / Heat wait (parallel, %d°C)" % HEAT_TARGET_C,
-                "type": "automated",
-                "macro": "QC_HEAT_WAIT TOOLS=%s TARGET=%d TIMEOUT=%d" % (tools_arg, HEAT_TARGET_C, HEAT_WAIT_TIMEOUT_S),
-                # 330 -> 390 (28/08, +1 minute) : suit le timeout interne de
-                # la macro (300 -> 360, cf. generate_yms12_cfg.py
-                # _qc_heat_all_step) avec la meme marge de ~30s.
-                "timeout": HEAT_WAIT_TEST_TIMEOUT_S,
-            })
+            tests.append(_heat_wait_test(enabled))
     return tests
 
 
@@ -416,6 +440,32 @@ def heat_outcome(logs):
         if "heat OK" in l:
             return HEAT_OK
     return HEAT_MISSING
+
+
+def box_verdict(logs, heat_expected):
+    """("PASS"|"FAIL", details) d'une position banc d'apres SES lignes routees
+    (qc_engine range chaque "QC E<n>_HEAD: ..." dans le buffer e<n>_head).
+
+    "no motion detected" -> FAIL definitif au chargement. Sinon tranche par le
+    stress (perte de suivi, ou AUCUNE ligne stress captee -> FAIL, jamais de
+    PASS par defaut faute de preuve : 25/08 YMS-7/10 PASS avec 0 ligne stress ;
+    27/08 "stress" en sous-chaine matchait aussi "ready for group stress" ->
+    12/12 PASS moteur arrete) PUIS, si la position chauffe dans ce lot, par la
+    chauffe (timeout ou verdict absent -> FAIL, 16/09 : 6 boitiers a 35 C PASS).
+    """
+    if any("no motion detected" in l for l in logs):
+        return "FAIL", "Load: no motion detected"
+    if any("LOST tracking" in l for l in logs):
+        return "FAIL", "Stress sweep (group): tracking lost"
+    if not any(re.search(r"stress \d+/\d+ speed=", l) or "stress OK" in l for l in logs):
+        return "FAIL", "Stress sweep (group): no data received"
+    if heat_expected:
+        heat = heat_outcome(logs)
+        if heat == HEAT_FAIL:
+            return "FAIL", "Heat (group): target temperature not reached"
+        if heat == HEAT_MISSING:
+            return "FAIL", "Heat (group): no heat verdict received"
+    return "PASS", ""
 
 
 def build_retest_sequence(position, model=None):
@@ -666,7 +716,8 @@ def _label_kind_section_data(report):
     qc_model = report.get("qc_model", "")
     date = (report.get("date_end") or "")[:16].replace("T", " ")
     is_yms = qc_model.upper().startswith("YMS")
-    kind = "yms" if is_yms else "machine"
+    is_hd = qc_model.upper() == HD_MODEL
+    kind = "yms" if is_yms else ("hyperdrive" if is_hd else "machine")
     section = "pass" if overall == "PASS" else "fail"
 
     # {qc_model} affiché sur l'étiquette porte la version produit (demandé le
@@ -697,7 +748,17 @@ def _label_kind_section_data(report):
         # jusque-là seul le FAIL le recevait -> "POS {bench_position}" sortait
         # tel quel, non substitué, dès qu'on l'ajoutait à la section pass).
         data["bench_position"] = report.get("bench_position", "?")
-    if section == "fail":
+    if is_hd:
+        # Carte seule sur le banc : pas de case position ; raison = slots/tests
+        # en échec, déjà résumés par build_hyperdrive_report.
+        data["bench_position"] = ""
+        if section == "fail":
+            # 50 mm de large : la 1re raison + le nombre des autres (liste
+            # complète dans le rapport, derrière le QR).
+            reasons = report.get("fail_reasons") or []
+            data["fail_reason"] = (reasons[0] + (" +%d" % (len(reasons) - 1) if len(reasons) > 1 else "")
+                                   if reasons else "")
+    elif section == "fail":
         if is_yms:
             data["fail_reason"] = str((report.get("measures") or {}).get("fail_reason") or "")
         else:
@@ -733,7 +794,7 @@ def build_label_tspl(report):
 # Média physique par kind, mm -- même table que render_qc_tspl.MEDIA, dupliquée
 # ici pour rester un module PUR (pas d'import Pillow) tant que
 # build_label_png_job n'a besoin QUE des dimensions, pas du rendu lui-même.
-LABEL_MEDIA_MM = {"yms": (50, 30), "machine": (39, 39)}
+LABEL_MEDIA_MM = {"yms": (50, 30), "machine": (39, 39), "hyperdrive": (50, 30)}
 
 
 def build_label_png_job(report, qty=1, seq=None):
@@ -766,3 +827,181 @@ def build_label_png_job(report, qty=1, seq=None):
     if seq is not None:
         job["seq"] = seq
     return job
+
+
+# ─── BANC HYPERDRIVE (14/10/2026) ──────────────────────────────────────────
+# Même banc que le YMS PRO (une C235 + UN HyperDrive 3P2L sur l'UART /dev/ttyS2),
+# mais l'objet testé est la CARTE HyperDrive, un seul à la fois : ses 5 slots
+# moteur + capteur (positions 3..7, 5 YMS de référence branchés dessus) et ses
+# 3 sorties chauffe MOSFET (positions 3/4/5) passent par les MÊMES macros que le
+# YMS PRO (QC_HEAT_START/QC_LOAD_ALL/QC_STRESS_ALL/QC_HEAT_WAIT) et le même
+# verdict par position (box_verdict). En plus : firmware gravé identique à la
+# référence + UID STM32 (QC_HD_FIRMWARE, sous l'id mcu_check pour que qc_engine
+# en tire machine_uid/yumi_config comme pour une machine), NeoPixel (visuel),
+# clé USB de référence sur le pad. Identité = UID STM32 de la carte (pas
+# d'allocation serveur), un rapport par carte, PASS seulement si TOUT passe.
+HD_MODEL = "HYPERDRIVE"            # bouton du panel, _QC_MODE, qc_printer_HYPERDRIVE.cfg
+HD_DEVICE = "HYPERDRIVE_3P2L"      # device= gravé par firmware.yumi-lab.com
+HD_MCU = "hyperdrive_uart"
+HD_POSITIONS = (3, 4, 5, 6, 7)     # slots 1..5 de la carte = extruder2..6
+HD_HEAT_POSITIONS = (3, 4, 5)      # sorties chauffe = slots 1..3
+# Firmware de référence (firmware.yumi-lab.com, firmware_FF65D9.bin) : on ne
+# recompile pas, toutes les cartes portent CE descripteur à l'identique (même
+# firmware que les machines, décision Nicolas 14/10).
+HD_FIRMWARE_DESCRIPTOR = (
+    "board=SMART_MAKER_1_X;cpu=STM32F401;conn=UART;device=%s;"
+    "e2=SMART_TMC2209_V2;e3=SMART_TMC2209_V2;e4=SMART_TMC2209_V2;"
+    "e5=SMART_TMC2209_V2;e6=SMART_TMC2209_V2;lot=20260618;uid=FF65D9" % HD_DEVICE)
+# Version Klipper de ce même binaire (registre du builder, 14/10) : le descripteur
+# ne change pas si on recompile sur un Klipper plus récent, la version oui.
+HD_FIRMWARE_VERSION = "v0.13.0-693-g5ac7c301"
+# Chauffe : on valide la SORTIE MOSFET de la carte, pas le plateau du YMS --
+# monter à 40 °C suffit (Nicolas 14/10 : « si ça monte à 40 degrés, tu peux
+# couper, c'est validé »). _qc_heat_all_step tranche à TARGET - 2 °C.
+HD_HEAT_PASS_C = 40
+HD_HEAT_TARGET_C = HD_HEAT_PASS_C + 2
+HD_LED = "hyperdrive_led"
+HD_LED_TEST_ID = "hd_led"
+# NeoPixel vérifié par la caméra du banc, une LED collée sur l'objectif (Nicolas
+# 14/10) : image noire LED éteinte, lumineuse allumée, et elle change avec la
+# couleur commandée. Pas de colorimétrie (la caméra sature, « pas hyper grave ») :
+# une LED morte ou un fil de données coupé laisse l'image noire. Attente 0,5 s
+# par couleur : la caméra a ~0,3 s de retard (mesuré : à 0,15 s on lisait encore
+# l'image précédente). Seuils = luminosité moyenne 0..255, mesures du 14/10 :
+# éteinte 0, allumée 197..255, écart vert/bleu 53.
+LED_CAM_SNAPSHOT_URL = "http://127.0.0.1:8080/snapshot"   # crowsnest [cam 1]
+LED_CAM_SEQUENCE = (("off", (0, 0, 0)), ("red", (1, 0, 0)), ("green", (0, 1, 0)), ("blue", (0, 0, 1)))
+LED_CAM_SETTLE_S = 0.5
+LED_DARK_MAX = 40
+LED_LIT_MIN = 100
+LED_CHANGE_MIN = 30
+HD_USB_TEST_ID = "usb_ref"
+HD_SLOT_TEST_ID = "slot%d"
+USB_SYSFS = "/sys/bus/usb/devices"
+
+
+def build_hyperdrive_tests():
+    """Séquence du banc HyperDrive. La chauffe démarre juste après le contrôle
+    firmware et monte pendant les contrôles opérateur (USB, LED) puis la
+    charge et le stress, comme le YMS PRO."""
+    return [
+        {
+            "id": "mcu_check",
+            "name": "HyperDrive 固件 + UID / firmware + UID",
+            "type": "automated",
+            "macro": "QC_HD_FIRMWARE",
+            "timeout": 60,
+        },
+        _heat_start_test(HD_HEAT_POSITIONS, HD_HEAT_TARGET_C),
+        {
+            "id": HD_USB_TEST_ID,
+            "name": "USB 参考设备 / USB reference key",
+            "type": "automated",
+            "host_check": HD_USB_TEST_ID,
+        },
+        {
+            "id": HD_LED_TEST_ID,
+            "name": "灯 (摄像头) / NeoPixel LED (camera)",
+            "type": "automated",
+            "host_check": HD_LED_TEST_ID,
+        },
+        _load_all_test(HD_POSITIONS),
+        _stress_all_test(HD_POSITIONS),
+        _heat_wait_test(HD_HEAT_POSITIONS, HD_HEAT_TARGET_C),
+    ]
+
+
+def find_usb_device(ref, sys_root=USB_SYSFS):
+    """Cherche la clé USB de référence parmi les périphériques USB du pad.
+    ref = "vvvv:pppp" (idVendor:idProduct, insensible à la casse) ou numéro de
+    série USB exact. Renvoie (trouvé, vus) ; vus = ["vvvv:pppp serial", ...]
+    pour le log du rapport (diagnostic d'un FAIL sans console)."""
+    ref = (ref or "").strip()
+    seen = []
+    try:
+        names = sorted(os.listdir(sys_root))
+    except OSError:
+        names = []
+    found = False
+    for name in names:
+        def attr(key):
+            try:
+                with open(os.path.join(sys_root, name, key)) as f:
+                    return f.read().strip()
+            except OSError:
+                return ""
+        vid, pid = attr("idVendor"), attr("idProduct")
+        if not vid:
+            continue  # interface, pas un périphérique
+        serial = attr("serial")
+        seen.append(("%s:%s %s" % (vid, pid, serial)).strip())
+        if ref and (ref.lower() == ("%s:%s" % (vid, pid)).lower() or ref == serial):
+            found = True
+    return found, seen
+
+
+def led_cam_verdict(frames):
+    """(passé, détails) d'après la couleur moyenne (r, g, b) de l'image caméra pour
+    chaque pas de LED_CAM_SEQUENCE. Voir les constantes LED_* pour le pourquoi."""
+    lum = {n: sum(rgb) / 3.0 for n, rgb in frames.items()}
+    if lum["off"] > LED_DARK_MAX:
+        return False, "image claire LED éteinte (%d) : LED décollée de l'objectif ?" % lum["off"]
+    dark = [n for n, _rgb in LED_CAM_SEQUENCE[1:] if lum[n] < LED_LIT_MIN]
+    if dark:
+        return False, "LED éteinte en %s" % "/".join(dark)
+    lit = [frames[n] for n, _rgb in LED_CAM_SEQUENCE[1:]]
+    change = max(sum(abs(a - b) for a, b in zip(x, y)) for x in lit for y in lit)
+    if change < LED_CHANGE_MIN:
+        return False, "la LED ne change pas de couleur (écart %d)" % change
+    return True, ""
+
+
+def build_hyperdrive_report(report, test_log, bench_mark=""):
+    """Rapport UNIQUE d'une carte HyperDrive depuis le rapport moteur
+    (qc_engine.generate_report : tests groupés, machine_uid = UID STM32 de la
+    carte testée, lu par QC_HD_FIRMWARE). Ajoute un test par slot (verdict
+    box_verdict + measures, log de la position) : les étapes groupées sortent
+    PASS dès que leur macro a fini, le verdict de chaque slot est dans ses
+    lignes. PASS uniquement si le moteur dit PASS ET les 5 slots sont PASS."""
+    rep = dict(report)
+    tests = list(rep.get("tests", []))
+    failed = list(rep.get("failed_tests", []))
+    reasons = [t["name"].split("/")[-1].strip() for t in tests if t.get("id") in failed]
+    for slot, pos in enumerate(HD_POSITIONS, 1):
+        logs = list(test_log.get(test_id_for_position(pos), []))
+        heat = pos in HD_HEAT_POSITIONS
+        verdict, details = box_verdict(logs, heat)
+        tid = HD_SLOT_TEST_ID % slot
+        measures = extract_measures(logs, verdict == "PASS")
+        tests.append({
+            "id": tid,
+            "name": "插槽 %d / Slot %d: motor+sensor%s" % (slot, slot, "+heat" if heat else ""),
+            "type": "automated",
+            "result": verdict.lower(),
+            "details": details,
+            "measures": measures,
+            "log": logs,
+        })
+        if verdict != "PASS":
+            failed.append(tid)
+            reasons.append("S%d %s" % (slot, measures["fail_reason"]))
+    overall = rep.get("overall_result")
+    if failed:
+        overall = "FAIL"
+    # Le moteur a déjà tranché PARTIAL (test non joué) : jamais remonté en PASS.
+    firmware = rep.get("yumi_config", "")
+    rep.update({
+        "tests": tests,
+        "failed_tests": failed,
+        "overall_result": overall,
+        "qc_model": HD_MODEL,
+        # La famille se lit sur device= côté compteur : imposée par le banc, pas
+        # par le firmware (une carte flashée C235 par erreur ne doit jamais
+        # compter comme une machine) ; le descripteur réel reste dans firmware.
+        "yumi_config": "device=%s" % HD_DEVICE,
+        "firmware": firmware,
+        "bench_mark": bench_mark,
+        "fail_reasons": reasons,
+        "fail_reason": ", ".join(reasons),
+    })
+    return rep
