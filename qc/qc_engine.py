@@ -295,10 +295,12 @@ class QCEngine:
         self._on_visual_prompt = on_visual_prompt
         self._on_qc_complete = on_qc_complete
 
-    def start(self, printer_id, technician="", model=""):
+    def start(self, printer_id, technician="", model="", tests=None):
+        """tests : séquence fournie par l'appelant (banc HyperDrive,
+        qc_yms.build_hyperdrive_tests), sinon celle du modèle."""
         self.printer_id = printer_id
         self.technician = technician
-        self.tests = tests_for_model(model)
+        self.tests = tests or tests_for_model(model)
         self.start_time = datetime.now()
         self.current_test_index = -1
         self.results = {}
@@ -470,6 +472,13 @@ class QCEngine:
             self._record_result(test["id"], QCResult.PASS)
         else:
             self._record_result(test["id"], QCResult.FAIL, "Visual check: operator reported failure")
+
+    def record_check(self, passed, details=""):
+        """Résultat d'un contrôle exécuté par le panel lui-même, sans macro
+        (ex. clé USB de référence du banc HyperDrive)."""
+        test = self.get_current_test()
+        if test:
+            self._record_result(test["id"], QCResult.PASS if passed else QCResult.FAIL, details)
 
     def skip_current_test(self):
         """Skip the current test."""

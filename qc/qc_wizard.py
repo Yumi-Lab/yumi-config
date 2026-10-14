@@ -3,15 +3,16 @@ QC Wizard Panel — KlipperScreen panel for factory quality control.
 Provides a step-by-step wizard with automated tests and visual confirmations.
 """
 import gi
+import io
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -92,9 +93,19 @@ try:
         load_disabled_positions,
         find_unready_heat_positions,
         heat_positions_for_run,
-        heat_outcome,
-        HEAT_FAIL,
-        HEAT_MISSING,
+        box_verdict,
+        build_hyperdrive_report,
+        build_hyperdrive_tests,
+        find_usb_device,
+        led_cam_verdict,
+        HD_HEAT_POSITIONS,
+        HD_LED,
+        HD_LED_TEST_ID,
+        HD_MODEL,
+        HD_USB_TEST_ID,
+        LED_CAM_SEQUENCE,
+        LED_CAM_SETTLE_S,
+        LED_CAM_SNAPSHOT_URL,
         HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
@@ -124,9 +135,19 @@ except ImportError:
         load_disabled_positions,
         find_unready_heat_positions,
         heat_positions_for_run,
-        heat_outcome,
-        HEAT_FAIL,
-        HEAT_MISSING,
+        box_verdict,
+        build_hyperdrive_report,
+        build_hyperdrive_tests,
+        find_usb_device,
+        led_cam_verdict,
+        HD_HEAT_POSITIONS,
+        HD_LED,
+        HD_LED_TEST_ID,
+        HD_MODEL,
+        HD_USB_TEST_ID,
+        LED_CAM_SEQUENCE,
+        LED_CAM_SETTLE_S,
+        LED_CAM_SNAPSHOT_URL,
         HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
@@ -138,6 +159,9 @@ except ImportError:
         DEFAULT_MODEL,
     )
 
+
+# Banc HyperDrive (14/10/2026) : une carte HyperDrive à la fois sur le banc YMS PRO.
+QC_SIZES.append(HD_MODEL)
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
@@ -214,7 +238,12 @@ class Panel(ScreenPanel):
         # confronter l'étiquette imprimée à l'imprimante branchée. Repli sur la MAC end0.
         self.labels["id_display"] = Gtk.Label()
         self.labels["id_display"].set_markup(f"<span size='small' foreground='#9E9E9E'>ID: {yumi_id}</span>")
-        box.pack_start(self.labels["id_display"], False, False, 2)
+        # UID et état du mode QC sur UNE ligne (14/10, Nicolas) : avec le 5e
+        # bouton modèle, la rangée du bas sortait de l'écran 480 px.
+        info_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        info_row.set_halign(Gtk.Align.CENTER)
+        info_row.pack_start(self.labels["id_display"], False, False, 0)
+        box.pack_start(info_row, False, False, 2)
         self._load_mcu_uid()
 
         # QC mode status + actions
@@ -227,22 +256,17 @@ class Panel(ScreenPanel):
         mode_label = Gtk.Label()
         if qc_mode:
             mode_label.set_markup(
-                f"<span size='medium' foreground='#4CAF50'>QC模式 已激活 — {active_model or '?'} / "
-                f"QC mode active</span>")
+                f"<span size='medium' foreground='#4CAF50'>QC模式 / QC mode — {active_model or '?'}</span>")
         else:
+            # La consigne « toucher un modèle » est déjà sur la ligne d'aide verte.
             mode_label.set_markup(
-                "<span size='medium' foreground='#FF9800'>生产配置 — 触摸机型加载QC / "
-                "Production cfg — touch a model to load QC</span>")
-        mode_label.set_justify(Gtk.Justification.CENTER)
-        mode_label.set_line_wrap(True)
-        box.pack_start(mode_label, False, False, 2)
+                "<span size='medium' foreground='#FF9800'>生产配置 / Production cfg</span>")
+        info_row.pack_start(mode_label, False, False, 0)
 
         # Sélecteur de taille machine — TOUJOURS visible et ACTIF : un appui sur
         # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
-        size_title = Gtk.Label()
-        size_title.set_markup("<span size='medium' weight='bold'>机型 / Model</span>")
-        box.pack_start(size_title, False, False, 2)
-
+        # Pas de titre « 机型 / Model » au-dessus (14/10) : les boutons parlent
+        # d'eux-mêmes et la hauteur manquait pour la rangée du bas.
         size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         size_row.set_halign(Gtk.Align.CENTER)
         for size in QC_SIZES:
@@ -814,6 +838,9 @@ class Panel(ScreenPanel):
             # Banc YMS : choix du modèle AVANT l'allocation groupée.
             self._show_yms_model_selector(printer_id)
             return
+        if self._selected_size == HD_MODEL:
+            self._hd_start_sequence(printer_id)
+            return
 
         self._build_running_screen()
         test = self.engine.start(printer_id, model=self._selected_size)
@@ -1015,6 +1042,96 @@ class Panel(ScreenPanel):
             self._run_test(test)
         return False
 
+    # ─── BANC HYPERDRIVE (une carte à la fois) ──────────────────────────
+
+    def _hd_start_sequence(self, printer_id, attempt=0):
+        """Même contrôle préalable que le YMS PRO : une sonde de chauffe HS
+        (thermistance débranchée) se voit AVANT de lancer, pas 6 min plus tard.
+        Changer de carte = Klipper perd le MCU HyperDrive (shutdown) : on le
+        relance d'abord, sinon les sondes de la nouvelle carte sont illisibles.
+        One-shot GLib (renvoie toujours False)."""
+        if getattr(self._screen.printer, "state", "") in ("shutdown", "error"):
+            if attempt >= 2:
+                self._screen.show_popup_message(
+                    "Klipper 无法启动 / Klipper ne redémarre pas -- vérifier le câble "
+                    "et l'alimentation du HyperDrive", level=3)
+                return False
+            self._screen.show_popup_message(
+                "重启 Klipper / redémarrage Klipper (nouvelle carte)...", level=1)
+            self._screen._ws.klippy.restart_firmware()
+            GLib.timeout_add_seconds(25, self._hd_start_sequence, printer_id, attempt + 1)
+            return False
+        bad = find_unready_heat_positions(
+            HD_HEAT_POSITIONS, self._query_heat_temperatures(HD_HEAT_POSITIONS))
+        if bad:
+            names = ", ".join("YMS-%d" % p for p in bad)
+            self._screen.show_popup_message(
+                "温度传感器异常 %s，测试未启动 / capteur(s) température %s non "
+                "fonctionnel(s) -- QC HyperDrive NON lancé" % (names, names), level=3)
+            return False
+        self._bench_config = load_bench_config(
+            os.path.join(CONFIG_DIR, "qc_bench_config.json"))
+        self._box_started = {}
+        self._build_running_screen()
+        test = self.engine.start(printer_id, model=HD_MODEL, tests=build_hyperdrive_tests())
+        self._start_gcode_poller()
+        if test:
+            self._run_test(test)
+        return False
+
+    def _run_usb_check(self):
+        """Clé USB de référence branchée sur le pad (usb_ref de qc_bench_config.json)."""
+        ref = (self._bench_config or {}).get("usb_ref", "")
+        found, seen = find_usb_device(ref)
+        log = self.engine._test_log.setdefault(HD_USB_TEST_ID, [])
+        log.append("usb_ref=%s" % (ref or "(non configuré)"))
+        log.extend("usb: %s" % d for d in seen)
+        details = "" if found else (
+            "clé USB de référence %s absente" % ref if ref
+            else "usb_ref absent de qc_bench_config.json")
+        logger.info("QC HD: clé USB %s -> %s", ref or "-", "OK" if found else details)
+        self.engine.record_check(found, details)
+
+    def _run_led_check(self):
+        """NeoPixel vu par la caméra du banc (qc_yms.led_cam_verdict) : ~2,5 s
+        d'allers-retours Moonraker + caméra, hors du fil GTK."""
+        threading.Thread(target=self._led_check_worker, daemon=True).start()
+
+    def _led_check_worker(self):
+        def gcode(script):
+            urllib.request.urlopen(
+                "http://localhost:7125/printer/gcode/script?script="
+                + urllib.parse.quote(script), timeout=10).read()
+        frames, err = {}, ""
+        try:
+            from PIL import Image
+            for name, (r, g, b) in LED_CAM_SEQUENCE:
+                gcode("SET_LED LED=%s RED=%d GREEN=%d BLUE=%d" % (HD_LED, r, g, b))
+                time.sleep(LED_CAM_SETTLE_S)
+                raw = urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=5).read()
+                im = Image.open(io.BytesIO(raw)).convert("RGB").resize((32, 24))
+                frames[name] = tuple(c // (32 * 24) for c in
+                                     [sum(ch) for ch in zip(*im.getdata())])
+        except Exception as e:
+            err = "caméra/LED indisponible : %s" % e
+        try:
+            gcode("SET_LED LED=%s RED=0 GREEN=0 BLUE=0" % HD_LED)
+        except Exception as e:
+            logger.warning("QC HD: extinction LED: %s", e)
+        passed, details = (False, err) if err else led_cam_verdict(frames)
+        log = "led " + " ".join("%s=%s" % (n, frames.get(n)) for n, _c in LED_CAM_SEQUENCE)
+        logger.info("QC HD: %s -> %s", log, "OK" if passed else details)
+        GLib.idle_add(self._record_host_check, HD_LED_TEST_ID, passed, details, [log])
+
+    def _record_host_check(self, test_id, passed, details, lines):
+        """Main thread : n'enregistre que si ce test est encore le test courant
+        (QC abandonné entre-temps -> rien)."""
+        test = self.engine.get_current_test()
+        if test and test["id"] == test_id:
+            self.engine._test_log.setdefault(test_id, []).extend(lines)
+            self.engine.record_check(passed, details)
+        return False
+
     # ─── RE-TEST UNITAIRE D'UN BOÎTIER YMS EN FAIL ─────────────────
 
     def _on_yms_fail_row_clicked(self, widget, event, test_id):
@@ -1200,6 +1317,14 @@ class Panel(ScreenPanel):
         # au même instant réel, l'impression séquentielle qui suit n'est que
         # de la paperasse, pas une nouvelle mesure.
         self._batch_ended = datetime.now(timezone.utc)
+        if self._selected_size == HD_MODEL:
+            # Un rapport par carte : verdict des 5 slots ajouté, device imposé.
+            report = build_hyperdrive_report(
+                report, self.engine._test_log,
+                bench_mark=(self._bench_config or {}).get("bench_mark", ""))
+            if not report.get("machine_uid"):
+                self._hd_unidentified(report)
+                return
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
         # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
@@ -1243,6 +1368,23 @@ class Panel(ScreenPanel):
             # Envoi AUTOMATIQUE au compteur en fin de QC — indépendant du
             # bouton Terminer et de la présence d'un backup.
             GLib.idle_add(self._auto_upload)
+
+    def _hd_unidentified(self, report):
+        """Carte sans UID lu (MCU muet, mauvais câble) : aucune identité -> ni
+        envoi au compteur ni étiquette (le uid= du firmware est le même sur
+        toutes les cartes), rapport gardé en local pour le diagnostic."""
+        report["printer_id"] = "NOUID-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._current_report = report
+        self._screen._ws.klippy.gcode_script("QC_CLEANUP")
+        try:
+            path = self.engine.save_report(report)
+            open(path + ".sent", "w").close()
+        except OSError as e:
+            logger.warning("QC HD: sauvegarde rapport sans UID: %s", e)
+        GLib.idle_add(self._build_summary_screen, report)
+        GLib.idle_add(self._screen.show_popup_message,
+                      "HyperDrive 未识别 / HyperDrive non identifié (UID illisible) "
+                      "-- rebrancher la carte et relancer", 3)
 
     def _auto_upload(self):
         """Sauvegarde + envoie le rapport au compteur en fin de QC. Si l'envoi
@@ -1367,48 +1509,8 @@ class Panel(ScreenPanel):
                 logs = self.engine._test_log.get(test_id, [])
                 if not logs:
                     continue  # position absente de ce lot (désactivée) -> pas de rapport
-                load_failed = any("no motion detected" in l for l in logs)
-                if load_failed:
-                    final = QCResult.FAIL
-                    details = "Load: no motion detected"
-                else:
-                    stress_lost = any("LOST tracking" in l for l in logs)
-                    # Aucune ligne stress captée pour cette position = son
-                    # résultat n'a jamais été confirmé -- ne JAMAIS retomber
-                    # sur un PASS par défaut faute de preuve (constaté 25/08 :
-                    # YMS-7 et YMS-10 validés PASS avec 0 ligne stress).
-                    # v10 (27/08) : "stress" en simple sous-chaine matchait
-                    # AUSSI la ligne de fin de charge ("...ready for group
-                    # stress") -> stress_missing valait TOUJOURS False des
-                    # qu'un chargement reussissait, meme sans une seule
-                    # ligne de stress reelle (constate en reel : arret moteur
-                    # manuel en plein stress -> 12/12 boitiers PASS avec
-                    # "0/8 segments"). Motif precis : uniquement les VRAIES
-                    # lignes de la phase stress (progression "stress N/M
-                    # speed=...", recap "stress OK", ou perte de suivi).
-                    stress_missing = not any(
-                        re.search(r"stress \d+/\d+ speed=", l) or "stress OK" in l
-                        for l in logs)
-                    heat = heat_outcome(logs)
-                    # Position cablee chauffe de ce lot (YMS Pro) : un verdict de
-                    # chauffe est OBLIGATOIRE -- "missing" = FAIL, jamais PASS par
-                    # defaut (16/09 : 6 boitiers a 35 C etiquetes PASS).
-                    heat_expected = pos in heat_positions
-                    if stress_lost:
-                        final = QCResult.FAIL
-                        details = "Stress sweep (group): tracking lost"
-                    elif stress_missing:
-                        final = QCResult.FAIL
-                        details = "Stress sweep (group): no data received"
-                    elif heat_expected and heat == HEAT_FAIL:
-                        final = QCResult.FAIL
-                        details = "Heat (group): target temperature not reached"
-                    elif heat_expected and heat == HEAT_MISSING:
-                        final = QCResult.FAIL
-                        details = "Heat (group): no heat verdict received"
-                    else:
-                        final = QCResult.PASS
-                        details = ""
+                verdict, details = box_verdict(logs, pos in heat_positions)
+                final = QCResult.PASS if verdict == "PASS" else QCResult.FAIL
                 self.engine.results[test_id] = {
                     "result": final,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1805,6 +1907,11 @@ class Panel(ScreenPanel):
             return
         self._restart_retries = 0
         self._box_started[test["id"]] = datetime.now(timezone.utc)
+        host_check = {HD_USB_TEST_ID: self._run_usb_check,
+                      HD_LED_TEST_ID: self._run_led_check}.get(test.get("host_check"))
+        if host_check:
+            host_check()
+            return
         timeout = test.get("timeout", 0)
         if timeout:
             self._timeout_id = GLib.timeout_add_seconds(

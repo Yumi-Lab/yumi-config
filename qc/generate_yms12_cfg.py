@@ -87,9 +87,9 @@ def replace(text, old, new, count):
     return text.replace(old, new)
 
 
-def mcu_sections():
+def mcu_sections(hds=HYPERDRIVES):
     out = []
-    for name, serial, first in HYPERDRIVES:
+    for name, serial, first in hds:
         n0, n1 = first + 1, first + len(SLOTS)
         out.append("""\
 [mcu %s]
@@ -99,9 +99,9 @@ restart_method: command
     return "\n".join(out)
 
 
-def extruder_sections():
+def extruder_sections(hds=HYPERDRIVES):
     out = []
-    for name, _serial, first in HYPERDRIVES:
+    for name, _serial, first in hds:
         for i, s in enumerate(SLOTS):
             e = first + i
             out.append("""\
@@ -127,9 +127,9 @@ stealthchop_threshold: 0
     return "\n".join(out)
 
 
-def sensor_sections():
+def sensor_sections(hds=HYPERDRIVES):
     out = []
-    for name, _serial, first in HYPERDRIVES:
+    for name, _serial, first in hds:
         for i, s in enumerate(SLOTS):
             yms = first + i + 1
             out.append("""\
@@ -189,9 +189,9 @@ HEAT_SLOTS = [
 ]
 
 
-def heater_sections():
+def heater_sections(hds=HYPERDRIVES):
     out = []
-    for name, _serial, first in HYPERDRIVES:
+    for name, _serial, first in hds:
         for i, h in enumerate(HEAT_SLOTS):
             yms = first + i + 1
             out.append("""\
@@ -236,28 +236,28 @@ heating_gain: 2
     return "\n".join(out)
 
 
-def heat_positions():
+def heat_positions(hds=HYPERDRIVES):
     """Les 6 positions cablees chauffe (YMS-3/4/5/8/9/10) -- memes positions
     que HEAT_CAPABLE_POSITIONS cote qc_yms.py, calculees ici depuis la meme
     source (HYPERDRIVES x HEAT_SLOTS) plutot que dupliquees en dur."""
-    return [first + i + 1 for _n, _s, first in HYPERDRIVES for i in range(len(HEAT_SLOTS))]
+    return [first + i + 1 for _n, _s, first in hds for i in range(len(HEAT_SLOTS))]
 
 
-def heat_peak_vars():
+def heat_peak_vars(hds=HYPERDRIVES):
     """Une variable peak_<N> (temperature max vue pendant QC_HEAT_WAIT) par
     position chauffante -- meme convention par position que ok_<t>/pushed_<t>
     de _QC_YMS_STATE. Remise a 0 par QC_HEAT_WAIT, tranchee par
     _qc_heat_all_step."""
-    return "".join("variable_peak_%d: 0.0\n" % y for y in heat_positions())
+    return "".join("variable_peak_%d: 0.0\n" % y for y in heat_positions(hds))
 
 
-def heat_fans_on_macro():
-    positions = heat_positions()
+def heat_fans_on_macro(hds=HYPERDRIVES):
+    positions = heat_positions(hds)
     on_lines = "".join(
         "    SET_FAN_SPEED FAN=YMS-%d-fan SPEED=1.0\n" % y for y in positions)
     return """\
 [gcode_macro _QC_HEAT_FANS_ON]
-description: QC banc — YMS Pro : (re)allume les 6 ventilateurs de plateau chauffant (YMS-%s), decouples du heater -- ils tournent en permanence HORS chauffe QC (des le demarrage de Klipper via _qc_heat_fans_boot : brancher un YMS = son ventilo part, c'est le controle qu'il fonctionne) ; seuls QC_HEAT_START/QC_HEAT_WAIT les coupent, _qc_heat_all_step les rallume apres le verdict.
+description: QC banc — YMS Pro : (re)allume les %d ventilateurs de plateau chauffant (YMS-%s), decouples du heater -- ils tournent en permanence HORS chauffe QC (des le demarrage de Klipper via _qc_heat_fans_boot : brancher un YMS = son ventilo part, c'est le controle qu'il fonctionne) ; seuls QC_HEAT_START/QC_HEAT_WAIT les coupent, _qc_heat_all_step les rallume apres le verdict.
 gcode:
 %s
 # Ventilos a fond des le demarrage de Klipper (16/09, Nicolas) : quand on branche
@@ -268,12 +268,12 @@ gcode:
 initial_duration: 2.0
 gcode:
     _QC_HEAT_FANS_ON
-""" % ("/".join(str(y) for y in positions), on_lines)
+""" % (len(positions), "/".join(str(y) for y in positions), on_lines)
 
 
-def autotune_sections():
+def autotune_sections(hds=HYPERDRIVES):
     out = []
-    for name, _serial, first in HYPERDRIVES:
+    for name, _serial, first in hds:
         for i in range(len(SLOTS)):
             out.append("""\
 [autotune_tmc extruder_stepper extruder%d]
@@ -289,26 +289,27 @@ pwm_freq_target: 60000
     return "\n".join(out)
 
 
-def main():
+def build(hds=HYPERDRIVES, header=HEADER, model="YMS12"):
+    """Cfg banc depuis la C235 : YMS12 (2 HyperDrive) par defaut."""
     with open(SRC) as f:
         cfg = f.read()
 
     # 1) En-tete + modele du marqueur QC
-    cfg = re.sub(r"\A#{5,}\n.*?#{5,}\n", HEADER, cfg, count=1, flags=re.S)
-    cfg = replace(cfg, 'variable_model: "C235"', 'variable_model: "YMS12"', 1)
+    cfg = re.sub(r"\A#{5,}\n.*?#{5,}\n", header, cfg, count=1, flags=re.S)
+    cfg = replace(cfg, 'variable_model: "C235"', 'variable_model: "%s"' % model, 1)
 
     # 2) Autotune TMC des 10 extrudeurs hyperdrive (avant [idle_timeout])
-    cfg = replace(cfg, "[idle_timeout]", autotune_sections() + "\n[idle_timeout]", 1)
+    cfg = replace(cfg, "[idle_timeout]", autotune_sections(hds) + "\n[idle_timeout]", 1)
 
     # 3) MCU hyperdrives (apres le host SmartPiOne)
     cfg = replace(
         cfg,
         "[mcu SmartPiOne]\nserial: /tmp/klipper_host_mcu\n",
-        "[mcu SmartPiOne]\nserial: /tmp/klipper_host_mcu\n\n" + mcu_sections(),
+        "[mcu SmartPiOne]\nserial: /tmp/klipper_host_mcu\n\n" + mcu_sections(hds),
         1)
 
     # 4) extruder2..11 + TMC (apres le bloc extruder1, avant [heater_bed])
-    cfg = replace(cfg, "\n[heater_bed]", "\n" + extruder_sections() + "\n[heater_bed]", 1)
+    cfg = replace(cfg, "\n[heater_bed]", "\n" + extruder_sections(hds) + "\n[heater_bed]", 1)
 
     # Liaison YMS <-> extruder en commentaire sur les sections de la base C235
     cfg = replace(cfg, "[extruder_stepper extruder0]",
@@ -329,7 +330,7 @@ def main():
     cfg = replace(
         cfg,
         "[filament_switch_sensor head_sensor]",
-        sensor_sections() + "\n" + heater_sections()
+        sensor_sections(hds) + "\n" + heater_sections(hds)
         + "\n[filament_switch_sensor head_sensor]",
         1)
 
@@ -597,7 +598,7 @@ def main():
 """,
         1)
 
-    cfg += "\n" + parallel_stress_macros()
+    cfg += "\n" + parallel_stress_macros(hds)
 
     # Bascule TOUS les capteurs YMS (1..12, y compris les 2 herites de la
     # base C235 + le lookup generique de qc_macros.cfg inline) sur le VRAI
@@ -607,14 +608,15 @@ def main():
     # filament_switch_sensor, nom distinct) -- remplacement global sans
     # ambiguite, y compris les 2 boucles `name.startswith(...)`
     # (isolation avant test + QC_CLEANUP) qui doivent suivre le nouveau nom.
-    cfg = cfg.replace("filament_motion_sensor", "filament_yumi_smart_motion_sensor")
-
-    with open(DST, "w") as f:
-        f.write(cfg)
-    print("OK ->", DST)
+    return cfg.replace("filament_motion_sensor", "filament_yumi_smart_motion_sensor")
 
 
-def parallel_stress_macros():
+def bench_positions(hds=HYPERDRIVES):
+    """YMS-1/2 (carte principale E0/E1) + les 5 slots de chaque HyperDrive."""
+    return [1, 2] + [first + i + 1 for _n, _s, first in hds for i in range(len(SLOTS))]
+
+
+def parallel_stress_macros(hds=HYPERDRIVES):
     """PHASE 1 (QC_HEAD_FEED_REACH, par YMS, séquentiel — le capteur tête !PA8
     est UNIQUE et partagé par les 12, impossible d'attribuer une détection
     tête à la bonne position si 2+ poussent en même temps) + PHASE 2
@@ -637,7 +639,7 @@ def parallel_stress_macros():
 [gcode_macro _QC_YMS_STATE]
 description: QC banc - Etat persistant phase1->phase2 (distance poussee + eligibilite stress par position). Remis a zero par CHAQUE position au debut de SA PROPRE phase 1 -> pas de residu inter-run possible pour une position qui tourne vraiment.
 """ + "".join(
-        "variable_pushed_%d: 0\nvariable_ok_%d: 0\n" % (n, n) for n in range(1, 13)
+        "variable_pushed_%d: 0\nvariable_ok_%d: 0\n" % (n, n) for n in bench_positions(hds)
     ) + """\
 gcode:
     # macro porte-etat, jamais appelee directement
@@ -646,16 +648,16 @@ gcode:
 description: QC banc — PRATIQUE (test manuel console) : synchronise les 12 extruder_steppers EN MEME TEMPS sur la queue E (preuve directe que SYNC_EXTRUDER_MOTION accepte plusieurs steppers a la fois -- validee le 22/08). Aucun garde-fou ok_n : usage MANUEL uniquement, jamais appelee par le wizard.
 gcode:
 """ + "".join(
-        "    SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=extruder\n" % n
-        for n in range(12)
+        "    SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=extruder\n" % (n - 1)
+        for n in bench_positions(hds)
     ) + """\
 
 [gcode_macro TNONE]
 description: QC banc — PRATIQUE (test manuel console) : desynchronise les 12 extruder_steppers (contrepartie de TALL).
 gcode:
 """ + "".join(
-        "    SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=\n" % n
-        for n in range(12)
+        "    SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=\n" % (n - 1)
+        for n in bench_positions(hds)
     ) + """\
 
 [gcode_macro QC_LOAD_ALL]
@@ -869,7 +871,7 @@ variable_tools: []
 variable_target: 85
 variable_elapsed: 0
 variable_timeout: 300
-""" + heat_peak_vars() + """\
+""" + heat_peak_vars(hds) + """\
 gcode:
     # macro porte-etat, jamais appelee directement
 
@@ -938,7 +940,103 @@ gcode:
         SET_GCODE_VARIABLE MACRO=_QC_HEAT_ALL_STEP VARIABLE=elapsed VALUE={elapsed + 1}
         UPDATE_DELAYED_GCODE ID=_qc_heat_all_step DURATION=1.0
     {% endif %}
-""" + "\n" + heat_fans_on_macro()
+""" + "\n" + heat_fans_on_macro(hds)
+
+
+# ── BANC HYPERDRIVE (14/10/2026) ─────────────────────────────────────────────
+# Meme banc que le YMS PRO mais UN SEUL HyperDrive, celui qu'on teste, sur
+# l'UART : ses 5 slots = YMS-3..YMS-7, ses 3 sorties chauffe = YMS-3/4/5. Les
+# constantes vivent dans qc_yms.py (lues aussi par le panel).
+from qc_yms import (HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_HEAT_POSITIONS,
+                    HD_LED, HD_MCU, HD_MODEL, HD_POSITIONS)
+
+HD_DST = os.path.join(HERE, "qc_printer_%s.cfg" % HD_MODEL)
+HD_HYPERDRIVES = [(HD_MCU, "/dev/ttyS2", HD_POSITIONS[0] - 1)]
+# Sortie NeoPixel de la carte SMART MAKER 1.1 (connecteur « Neopixel » 12V/GND/PC12).
+HD_LED_PIN = "PC12"
+HD_LED_COUNT = 1
+# Ordre des couleurs de la bande du banc, mesuré à la caméra le 14/10 : en GRB,
+# « vert » allumait du bleu et « bleu » du vert.
+HD_LED_ORDER = "BRG"
+
+HD_HEADER = """\
+#####################################################################
+# YUMI QC — printer.cfg dédié BANC QC HYPERDRIVE (une carte à la fois)
+# GÉNÉRÉ depuis qc_printer_C235.cfg par qc/generate_yms12_cfg.py
+# — NE PAS éditer à la main.
+#
+# Banc = une C235 de test + LE HyperDrive 3P2L testé sur %(mcu)s
+# (/dev/ttyS2), 5 YMS PRO de référence branchés sur ses 5 slots :
+#   YMS-%(p0)d..YMS-%(p1)d -> slots 1..5 (moteur + capteur)
+#   YMS-%(heat)s -> sorties chauffe MOSFET (slots 1..3)
+# + firmware de référence + UID STM32 (QC_HD_FIRMWARE, [mcu_uid] sur la
+# carte testée = son numéro de série), NeoPixel (vérifié par la caméra du banc).
+#####################################################################
+""" % dict(mcu=HD_MCU, p0=HD_POSITIONS[0], p1=HD_POSITIONS[-1],
+           heat="/".join(str(p) for p in HD_HEAT_POSITIONS))
+
+
+def hyperdrive_macros():
+    return """\
+# =====================================================================
+# BANC HYPERDRIVE — firmware + UID de la carte testee, NeoPixel (verifie par la
+# camera du banc depuis le panel, qc_yms.led_cam_verdict)
+# =====================================================================
+
+[neopixel %(led)s]
+pin: %(mcu)s:%(pin)s
+chain_count: %(count)d
+color_order: %(order)s
+initial_RED: 0.0
+initial_GREEN: 0.0
+initial_BLUE: 0.0
+
+# Signaux QC:MCU_CHECK:* et ligne "[mcu %(mcu)s] <descripteur>" : qc_engine en
+# tire yumi_config et machine_uid (MCU_UID=...) comme pour une machine. Le
+# descripteur ne passe JAMAIS dans une ligne gcode (RESPOND) : ";" y ouvre un
+# commentaire ; action_respond_info est un appel Python, sans ce piege.
+[gcode_macro QC_HD_FIRMWARE]
+description: QC banc HyperDrive — firmware de la carte testee IDENTIQUE a la reference (descripteur YUMI_CONFIG grave par firmware.yumi-lab.com ET version Klipper) + UID STM32 = numero de serie.
+gcode:
+    RESPOND MSG="QC:MCU_CHECK:START"
+    {%% set m = printer["mcu %(mcu)s"] %%}
+    {%% set got = m.mcu_constants.YUMI_CONFIG|default("") %%}
+    {action_respond_info("[mcu %(mcu)s] " ~ got)}
+    {action_respond_info("[mcu %(mcu)s] version: " ~ m.mcu_version)}
+    QUERY_MCU_UID
+    {%% if got == "%(fw)s" and m.mcu_version == "%(ver)s" %%}
+        RESPOND MSG="QC:MCU_CHECK:PASS"
+    {%% else %%}
+        RESPOND TYPE=error MSG="QC: firmware HyperDrive different de la reference firmware.yumi-lab.com (lu ci-dessus)"
+        RESPOND MSG="QC:MCU_CHECK:FAIL"
+    {%% endif %%}
+""" % dict(led=HD_LED, mcu=HD_MCU, pin=HD_LED_PIN, count=HD_LED_COUNT,
+           order=HD_LED_ORDER, fw=HD_FIRMWARE_DESCRIPTOR, ver=HD_FIRMWARE_VERSION)
+
+
+def build_hyperdrive():
+    cfg = build(HD_HYPERDRIVES, HD_HEADER, HD_MODEL)
+    # Numero de serie = UID STM32 de la CARTE TESTEE, pas de la C235 du banc.
+    cfg = replace(cfg, "[mcu_uid]\n# mcu: mcu ",
+                  "[mcu_uid]\nmcu: %s   # banc HyperDrive : UID de la carte testee\n# mcu: mcu " % HD_MCU, 1)
+    # Fin du stress : le filament REVIENT a sa position de depart (Nicolas 14/10) --
+    # sur ce banc les 5 YMS restent charges, seule la carte change ; l'ejecter de
+    # 300 mm obligeait a recharger 5 filaments par carte. Le stress est a somme
+    # nulle (+70/-70), il reste a reculer de la charge.
+    # ponytail: exact pour un slot PASS ; un slot desynchronise en cours de stress
+    # (capteur perdu) garde son dernier segment (+70 mm) -- suivre le deplacement
+    # par slot si ca gene un jour.
+    cfg = replace(cfg, "            G1 E-300 F1200\n",
+                  "            # banc HyperDrive : retour a la position de depart, pas d'ejection\n"
+                  "            G1 E-{ns.maxpush} F1200\n", 1)
+    return cfg + "\n" + hyperdrive_macros()
+
+
+def main():
+    for dst, cfg in ((DST, build()), (HD_DST, build_hyperdrive())):
+        with open(dst, "w") as f:
+            f.write(cfg)
+        print("OK ->", dst)
 
 
 if __name__ == "__main__":

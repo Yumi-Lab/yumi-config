@@ -177,3 +177,30 @@ Voir `docs/FORMAT-YMS.md` (v1.1) dans `Yumi-Lab/yumi-qc-counter` :
 - `POST /api/qc/report` avec un rapport par boîtier, `device=YMS-LIGHT|YMS-PRO`,
   `machine_uid:""`, champs `bench_position/slot/session/total` ;
 - `measures{}` est la source primaire avec `fail_reason` normé.
+
+## Banc HyperDrive (une carte à la fois)
+
+Bouton **HYPERDRIVE** du panel → `qc_printer_HYPERDRIVE.cfg`, générée par le même
+`generate_yms12_cfg.py` que la YMS12 : une C235 de test + **un seul** HyperDrive 3P2L,
+celui qu'on teste, sur l'UART (`/dev/ttyS2`). Cinq YMS PRO de référence restent
+branchés sur ses 5 slots.
+
+| Test | Ce qu'il valide |
+|------|-----------------|
+| `mcu_check` (`QC_HD_FIRMWARE`) | descripteur `YUMI_CONFIG` **identique** au firmware de référence (`qc_yms.HD_FIRMWARE_DESCRIPTOR`, firmware.yumi-lab.com `FF65D9`) + lecture de l'UID STM32 |
+| `heat_start` / `heat_wait` | sorties chauffe MOSFET des slots 1-3 (positions 3/4/5), mêmes macros et même verdict sur le pic que le YMS PRO |
+| `usb_ref` | le périphérique USB de référence est vu par le pad (`usb_ref` de `qc_bench_config.json` : `"vvvv:pppp"` ou numéro de série USB ; sur le banc, la caméra `0c50:2090`) |
+| `hd_led` | sortie NeoPixel (`PC12`, bande en `BRG`) vérifiée par la caméra du banc, une LED collée sur l'objectif : image noire éteinte, lumineuse et changeante en rouge/vert/bleu (~2,5 s, pas de question opérateur) |
+| `load_all` / `stress_all` | les 5 drivers moteur + 5 entrées capteur (positions 3..7) |
+
+- **Identité = UID STM32 de la carte** (`[mcu_uid] mcu: hyperdrive_uart`), comme une
+  machine : pas d'allocation serveur, un rapport par passage, PASS seulement si tout passe
+  (chaque slot est tranché par `box_verdict`, la même fonction que le banc YMS).
+- Carte sans UID lisible : rapport gardé en local, ni envoi ni étiquette.
+- Changer de carte fait perdre le MCU à Klipper : le panel le relance tout seul avant
+  le contrôle des sondes.
+- Étiquette : gabarit `qc-label-hyperdrive.json` (même média 50×30 que le YMS, sans case
+  position), repli sur `render_qc_tspl.DEFAULTS["hyperdrive"]`.
+- Compteur : `device=HYPERDRIVE_3P2L` imposé par le banc → 3e famille sur qc.yumi-lab.com
+  (le serveur doit la connaître AVANT le premier rapport, sinon les cartes comptent comme
+  des machines).
