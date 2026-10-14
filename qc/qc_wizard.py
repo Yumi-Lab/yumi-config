@@ -748,6 +748,14 @@ class Panel(ScreenPanel):
         save_btn.set_size_request(160, 55)
         btn_box.pack_start(save_btn, False, False, 0)
 
+        # Banc HyperDrive : réimprimer l'étiquette de la carte (14/10, étiquette
+        # sortie décalée) -- même rapport, même chemin d'impression, sans retester.
+        if self._selected_size == HD_MODEL and report.get("machine_uid"):
+            reprint_btn = self._gtk.Button("print", "重印标签 / Réimprimer", "color1")
+            reprint_btn.connect("clicked", self._on_hd_reprint)
+            reprint_btn.set_size_request(160, 55)
+            btn_box.pack_start(reprint_btn, False, False, 0)
+
         new_btn = self._gtk.Button("refresh", _("新检测 / New QC"), "color1")
         new_btn.connect("clicked", self._on_new_qc)
         new_btn.set_size_request(160, 55)
@@ -1713,6 +1721,18 @@ class Panel(ScreenPanel):
             self._on_yms_retest_confirmed(dialog, Gtk.ResponseType.YES, test_id)
             return
         self._gtk.remove_dialog(dialog)
+
+    def _on_hd_reprint(self, widget):
+        """Réimprime l'étiquette de la carte HyperDrive de l'écran résumé, hors du
+        fil GTK (le chemin réseau peut prendre ~10 s)."""
+        report = self._current_report
+
+        def worker():
+            ok, msg = self._print_qc_label_network(report)
+            GLib.idle_add(self._screen.show_popup_message,
+                          "%s: 标签已重印 / étiquette réimprimée ✓" % report["printer_id"] if ok
+                          else "%s: %s" % (report["printer_id"], msg), 1 if ok else 3)
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_reprint_label(self, widget, pos):
         """Réimprime l'étiquette du boîtier testé (depuis l'écran résumé)."""
