@@ -9,7 +9,8 @@ from unittest import mock
 
 from qc.qc_engine import QC_TESTS, QCEngine, QCResult
 from qc.qc_yms import (
-    HD_DEVICE, HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
+    HD_CAMERA_ERR, HD_DEVICE, HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
+    HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
     HD_POSITIONS, HD_USB_TEST_ID, box_verdict, build_hyperdrive_report,
     build_hyperdrive_tests, build_label_png_job, find_usb_device, led_cam_verdict,
     test_id_for_position)
@@ -107,7 +108,7 @@ class TestLedCamVerdict(unittest.TestCase):
     def test_led_off_from_the_lens(self):
         ok, why = led_cam_verdict(dict(self.REAL, off=(180, 170, 150)))
         self.assertFalse(ok)
-        self.assertIn("objectif", why)
+        self.assertIn("lens", why)
 
     def test_led_stuck_on_one_colour(self):
         stuck = dict(self.REAL, red=(200, 200, 200), green=(205, 200, 198), blue=(201, 203, 200))
@@ -174,14 +175,40 @@ class TestHyperdriveReport(unittest.TestCase):
         rep = build_hyperdrive_report(self._engine_report(), self._log(broken=6))
         self.assertEqual(rep["overall_result"], "FAIL")
         self.assertEqual(rep["failed_tests"], ["slot4"])
-        self.assertEqual(rep["fail_reason"], "S4 no_motion_on_load")
+        self.assertEqual(rep["fail_reason"], "S4 no motion")
 
     def test_failed_engine_test_named_in_reason(self):
         er = self._engine_report("FAIL")
         er["failed_tests"] = ["mcu_check"]
         rep = build_hyperdrive_report(er, self._log())
         self.assertEqual(rep["overall_result"], "FAIL")
-        self.assertEqual(rep["fail_reason"], "firmware + UID")
+        self.assertEqual(rep["fail_reason"], "Firmware")
+
+    def _failed(self, tid, log=(), details="Automated check failed"):
+        er = self._engine_report("FAIL")
+        er["failed_tests"] = [tid]
+        er["tests"] = [{"id": tid, "name": tid, "result": "fail", "details": details, "log": list(log)}]
+        return build_hyperdrive_report(er, self._log())
+
+    def test_firmware_build_or_version_is_named(self):
+        rep = self._failed("mcu_check", ["QC: %s (descriptor above)" % HD_FW_BUILD_ERR])
+        self.assertEqual(rep["fail_reasons"], ["Firmware build"])
+        self.assertIn(HD_FW_BUILD_ERR, rep["tests"][0]["details"])  # écran résumé
+        rep = self._failed("mcu_check", ["QC: %s v0.13.0-1, expected x" % HD_FW_VERSION_ERR])
+        self.assertEqual(rep["fail_reasons"], ["Firmware version"])
+
+    def test_bench_camera_is_not_the_board(self):
+        self.assertEqual(self._failed("hd_led", details="%s: timed out" % HD_CAMERA_ERR)["fail_reasons"],
+                         ["Camera (bench)"])
+        self.assertEqual(self._failed("hd_led", details="LED stays dark on red/green/blue")["fail_reasons"],
+                         ["LED"])
+        self.assertEqual(self._failed(HD_USB_TEST_ID)["fail_reasons"], ["USB"])
+
+    def test_slot_lost_at_the_ramp_is_a_lost_sensor(self):
+        log = self._log()
+        log["e3_head"] = ["QC E3_HEAD: motion sensor YMS-4 lost tracking during ramp segment 1/16 (ignored, not counted)"]
+        rep = build_hyperdrive_report(self._engine_report(), log)
+        self.assertEqual(rep["fail_reasons"], ["S2 sensor lost"])
 
     def test_partial_never_becomes_pass(self):
         self.assertEqual(build_hyperdrive_report(self._engine_report("PARTIAL"), self._log())["overall_result"], "PARTIAL")
@@ -249,8 +276,10 @@ class TestGeneratedCfg(unittest.TestCase):
         self.assertRegex(self.cfg, r"\[mcu_uid\]\nmcu: %s\b" % HD_MCU)
 
     def test_firmware_and_led(self):
-        self.assertIn('{% if got == "' + HD_FIRMWARE_DESCRIPTOR + '" and m.mcu_version == "'
-                      + HD_FIRMWARE_VERSION + '" %}', self.cfg)
+        self.assertIn('{% if got != "' + HD_FIRMWARE_DESCRIPTOR + '" %}', self.cfg)
+        self.assertIn('{% elif m.mcu_version != "' + HD_FIRMWARE_VERSION + '" %}', self.cfg)
+        self.assertIn(HD_FW_BUILD_ERR, self.cfg)
+        self.assertIn(HD_FW_VERSION_ERR, self.cfg)
         self.assertIn("[neopixel %s]\npin: %s:PC12" % (HD_LED, HD_MCU), self.cfg)
         self.assertIn("color_order: BRG", self.cfg)
         # ";" ouvre un commentaire dans une ligne gcode : jamais de descripteur dans un RESPOND.
