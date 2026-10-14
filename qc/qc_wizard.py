@@ -98,6 +98,7 @@ try:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
         HD_LED_TEST_ID,
@@ -140,6 +141,7 @@ except ImportError:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
         HD_LED_TEST_ID,
@@ -1087,8 +1089,8 @@ class Panel(ScreenPanel):
         log.append("usb_ref=%s" % (ref or "(non configuré)"))
         log.extend("usb: %s" % d for d in seen)
         details = "" if found else (
-            "clé USB de référence %s absente" % ref if ref
-            else "usb_ref absent de qc_bench_config.json")
+            "USB reference %s not found" % ref if ref
+            else "usb_ref missing in qc_bench_config.json")
         logger.info("QC HD: clé USB %s -> %s", ref or "-", "OK" if found else details)
         self.engine.record_check(found, details)
 
@@ -1113,7 +1115,7 @@ class Panel(ScreenPanel):
                 frames[name] = tuple(c // (32 * 24) for c in
                                      [sum(ch) for ch in zip(*im.getdata())])
         except Exception as e:
-            err = "caméra/LED indisponible : %s" % e
+            err = "%s: %s" % (HD_CAMERA_ERR, e)
         try:
             gcode("SET_LED LED=%s RED=0 GREEN=0 BLUE=0" % HD_LED)
         except Exception as e:

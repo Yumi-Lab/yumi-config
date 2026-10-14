@@ -947,8 +947,9 @@ gcode:
 # Meme banc que le YMS PRO mais UN SEUL HyperDrive, celui qu'on teste, sur
 # l'UART : ses 5 slots = YMS-3..YMS-7, ses 3 sorties chauffe = YMS-3/4/5. Les
 # constantes vivent dans qc_yms.py (lues aussi par le panel).
-from qc_yms import (HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_HEAT_POSITIONS,
-                    HD_LED, HD_MCU, HD_MODEL, HD_POSITIONS)
+from qc_yms import (HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
+                    HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
+                    HD_POSITIONS)
 
 HD_DST = os.path.join(HERE, "qc_printer_%s.cfg" % HD_MODEL)
 HD_HYPERDRIVES = [(HD_MCU, "/dev/ttyS2", HD_POSITIONS[0] - 1)]
@@ -1004,14 +1005,19 @@ gcode:
     {action_respond_info("[mcu %(mcu)s] " ~ got)}
     {action_respond_info("[mcu %(mcu)s] version: " ~ m.mcu_version)}
     QUERY_MCU_UID
-    {%% if got == "%(fw)s" and m.mcu_version == "%(ver)s" %%}
-        RESPOND MSG="QC:MCU_CHECK:PASS"
-    {%% else %%}
-        RESPOND TYPE=error MSG="QC: firmware HyperDrive different de la reference firmware.yumi-lab.com (lu ci-dessus)"
+    {%% if got != "%(fw)s" %%}
+        RESPOND TYPE=error MSG="QC: %(build_err)s (descriptor above, reference = firmware.yumi-lab.com %(uid)s)"
         RESPOND MSG="QC:MCU_CHECK:FAIL"
+    {%% elif m.mcu_version != "%(ver)s" %%}
+        RESPOND TYPE=error MSG="QC: %(ver_err)s {m.mcu_version}, expected %(ver)s"
+        RESPOND MSG="QC:MCU_CHECK:FAIL"
+    {%% else %%}
+        RESPOND MSG="QC:MCU_CHECK:PASS"
     {%% endif %%}
 """ % dict(led=HD_LED, mcu=HD_MCU, pin=HD_LED_PIN, count=HD_LED_COUNT,
-           order=HD_LED_ORDER, fw=HD_FIRMWARE_DESCRIPTOR, ver=HD_FIRMWARE_VERSION)
+           order=HD_LED_ORDER, fw=HD_FIRMWARE_DESCRIPTOR, ver=HD_FIRMWARE_VERSION,
+           build_err=HD_FW_BUILD_ERR, ver_err=HD_FW_VERSION_ERR,
+           uid=HD_FIRMWARE_DESCRIPTOR.rsplit("uid=", 1)[1])
 
 
 def build_hyperdrive():

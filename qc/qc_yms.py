@@ -875,8 +875,36 @@ LED_CAM_SETTLE_S = 0.5
 LED_DARK_MAX = 40
 LED_LIT_MIN = 100
 LED_CHANGE_MIN = 30
+
 HD_USB_TEST_ID = "usb_ref"
 HD_SLOT_TEST_ID = "slot%d"
+
+# Raisons d'échec HyperDrive (14/10, Nicolas : « collé sur l'étiquette, on sait ce
+# qu'il y a comme problème ») : courtes, en anglais (la police de l'étiquette n'a
+# pas de chinois), chacune dit QUOI réparer. Table unique, lue par le rapport,
+# l'écran résumé et l'étiquette ; les messages d'erreur ci-dessous sont émis par
+# QC_HD_FIRMWARE et le panel, et relus ici.
+HD_FW_BUILD_ERR = "HyperDrive firmware: wrong build"
+HD_FW_VERSION_ERR = "HyperDrive firmware: wrong Klipper version"
+HD_CAMERA_ERR = "bench camera unavailable"
+HD_TEST_REASONS = {
+    "mcu_check": "Firmware",
+    HEAT_START_TEST_ID: "Heat start",
+    HD_USB_TEST_ID: "USB",
+    HD_LED_TEST_ID: "LED",
+    LOAD_ALL_TEST_ID: "Motors",
+    STRESS_ALL_TEST_ID: "Motors",
+    HEAT_ALL_TEST_ID: "Heat",
+}
+# box_verdict -> raison d'un slot. « no data received » = le capteur a décroché dès
+# la rampe du stress (vu sur le banc 14/10, filament absent) : c'est un capteur perdu.
+HD_SLOT_REASONS = {
+    "Load: no motion detected": "no motion",
+    "Stress sweep (group): tracking lost": "sensor lost",
+    "Stress sweep (group): no data received": "sensor lost",
+    "Heat (group): target temperature not reached": "no heat",
+    "Heat (group): no heat verdict received": "no heat data",
+}
 USB_SYSFS = "/sys/bus/usb/devices"
 
 
@@ -945,15 +973,29 @@ def led_cam_verdict(frames):
     chaque pas de LED_CAM_SEQUENCE. Voir les constantes LED_* pour le pourquoi."""
     lum = {n: sum(rgb) / 3.0 for n, rgb in frames.items()}
     if lum["off"] > LED_DARK_MAX:
-        return False, "image claire LED éteinte (%d) : LED décollée de l'objectif ?" % lum["off"]
+        return False, "LED not on the camera lens (image bright with LED off: %d)" % lum["off"]
     dark = [n for n, _rgb in LED_CAM_SEQUENCE[1:] if lum[n] < LED_LIT_MIN]
     if dark:
-        return False, "LED éteinte en %s" % "/".join(dark)
+        return False, "LED stays dark on %s" % "/".join(dark)
     lit = [frames[n] for n, _rgb in LED_CAM_SEQUENCE[1:]]
     change = max(sum(abs(a - b) for a, b in zip(x, y)) for x in lit for y in lit)
     if change < LED_CHANGE_MIN:
-        return False, "la LED ne change pas de couleur (écart %d)" % change
+        return False, "LED does not change colour (difference %d)" % change
     return True, ""
+
+
+def _hd_test_reason(test):
+    """Raison d'étiquette d'une étape en échec (HD_TEST_REASONS), précisée par
+    son log : build ou version pour le firmware, banc pour la caméra."""
+    tid, logs = test.get("id"), test.get("log") or []
+    if tid == "mcu_check":
+        if any(HD_FW_VERSION_ERR in l for l in logs):
+            return "Firmware version"
+        if any(HD_FW_BUILD_ERR in l for l in logs):
+            return "Firmware build"
+    if tid == HD_LED_TEST_ID and HD_CAMERA_ERR in (test.get("details") or ""):
+        return "Camera (bench)"
+    return HD_TEST_REASONS.get(tid, tid)
 
 
 def build_hyperdrive_report(report, test_log, bench_mark=""):
@@ -966,7 +1008,14 @@ def build_hyperdrive_report(report, test_log, bench_mark=""):
     rep = dict(report)
     tests = list(rep.get("tests", []))
     failed = list(rep.get("failed_tests", []))
-    reasons = [t["name"].split("/")[-1].strip() for t in tests if t.get("id") in failed]
+    reasons = []
+    for t in tests:
+        if t.get("id") in failed:
+            reasons.append(_hd_test_reason(t))
+            # Écran résumé : la ligne d'erreur du macro plutôt que le générique du moteur.
+            err = [l for l in t.get("log") or [] if "HyperDrive firmware:" in l]
+            if err:
+                t["details"] = err[-1]
     for slot, pos in enumerate(HD_POSITIONS, 1):
         logs = list(test_log.get(test_id_for_position(pos), []))
         heat = pos in HD_HEAT_POSITIONS
@@ -984,7 +1033,7 @@ def build_hyperdrive_report(report, test_log, bench_mark=""):
         })
         if verdict != "PASS":
             failed.append(tid)
-            reasons.append("S%d %s" % (slot, measures["fail_reason"]))
+            reasons.append("S%d %s" % (slot, HD_SLOT_REASONS.get(details, details)))
     overall = rep.get("overall_result")
     if failed:
         overall = "FAIL"
