@@ -11,7 +11,7 @@ from qc.qc_engine import QC_TESTS, QCEngine, QCResult
 from qc.qc_yms import (
     HD_CAMERA_ERR, HD_DEVICE, HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
-    HD_POSITIONS, HD_USB_TEST_ID, box_verdict, build_hyperdrive_report,
+    HD_POSITIONS, HD_USB_TEST_ID, LED_PREFLIGHT_SEQUENCE, box_verdict, build_hyperdrive_report,
     build_hyperdrive_tests, build_label_png_job, find_usb_device, led_cam_verdict,
     test_id_for_position)
 from qc import render_qc_tspl
@@ -113,6 +113,15 @@ class TestLedCamVerdict(unittest.TestCase):
     def test_led_stuck_on_one_colour(self):
         stuck = dict(self.REAL, red=(200, 200, 200), green=(205, 200, 198), blue=(201, 203, 200))
         self.assertFalse(led_cam_verdict(stuck)[0])
+
+    def test_launch_check_white(self):
+        """Contrôle au clic : éteinte puis blanche, une seule couleur allumée."""
+        lit = {"off": (8, 8, 8), "white": (243, 242, 244)}
+        self.assertEqual(led_cam_verdict(lit, LED_PREFLIGHT_SEQUENCE), (True, ""))
+        ok, why = led_cam_verdict(dict(lit, white=(8, 8, 8)), LED_PREFLIGHT_SEQUENCE)
+        self.assertFalse(ok)
+        self.assertIn("dark on white", why)
+        self.assertFalse(led_cam_verdict(dict(lit, off=(180, 170, 150)), LED_PREFLIGHT_SEQUENCE)[0])
 
 
 class TestFindUsbDevice(unittest.TestCase):
@@ -286,6 +295,24 @@ class TestGeneratedCfg(unittest.TestCase):
         for line in self.cfg.splitlines():
             if line.strip().startswith("RESPOND"):
                 self.assertNotIn(";", line)
+
+    def test_led_always_on_white(self):
+        self.assertIn("initial_RED: 1.0\ninitial_GREEN: 1.0\ninitial_BLUE: 1.0", self.cfg)
+        self.assertIn("[delayed_gcode _HD_LED_KEEP]\ninitial_duration: 1\n", self.cfg)
+
+    def test_led_refresh_flip_flops_one_byte(self):
+        """L'octet rouge bascule 255<->254 / 0<->1 : chaque renvoi diffère, donc part
+        vraiment vers la LED (neopixel.send_data n'émet rien si rien ne change)."""
+        import jinja2
+        body = self.cfg.split("[gcode_macro _HD_LED_REFRESH]\ngcode:\n", 1)[1].split("\n\n", 1)[0]
+        tpl = jinja2.Environment("{%", "%}", "{", "}").from_string(body)  # = gcode_macro.py
+
+        def red_byte(red):
+            out = tpl.render(printer={"neopixel %s" % HD_LED: {"color_data": [(red, 0.0, 1.0, 0.0)]}})
+            self.assertIn("GREEN=0.0 BLUE=1.0 SYNC=0", out)
+            return int(float(re.search(r"RED=(\S+)", out).group(1)) * 255. + .5)  # update_color_data
+        self.assertEqual([red_byte(1.0), red_byte(254 / 255.)], [254, 255])
+        self.assertEqual([red_byte(0.0), red_byte(1 / 255.)], [1, 0])
 
     def test_led_pin_free_on_the_board(self):
         used = re.findall(r"%s:!?(P[A-C]\d+)" % HD_MCU, self.cfg)
