@@ -98,6 +98,7 @@ try:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        led_frame_settled,
         HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
@@ -105,8 +106,12 @@ try:
         HD_MODEL,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
+        LED_ON_RGB,
+        LED_PREFLIGHT_SEQUENCE,
         LED_CAM_SETTLE_S,
+        LED_CAM_STEP_MAX_S,
         LED_CAM_SNAPSHOT_URL,
+        LED_CAM_WAIT_S,
         HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
@@ -141,6 +146,7 @@ except ImportError:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        led_frame_settled,
         HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
@@ -148,8 +154,12 @@ except ImportError:
         HD_MODEL,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
+        LED_ON_RGB,
+        LED_PREFLIGHT_SEQUENCE,
         LED_CAM_SETTLE_S,
+        LED_CAM_STEP_MAX_S,
         LED_CAM_SNAPSHOT_URL,
+        LED_CAM_WAIT_S,
         HEAT_START_TEST_ID,
         position_from_test_id,
         test_id_for_position,
@@ -198,6 +208,7 @@ class Panel(ScreenPanel):
         self._disabled_positions = []  # positions 1..12 hors service
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
+        self._hd_checking = False   # banc HyperDrive : contrôle LED au lancement en cours
         self._batch_ended = None    # v8 (26/08) : datetime de fin du lot (durée/boîtier)
         self._box_reports = {}      # position -> rapport envoyé (carte + réimpression)
 
@@ -849,7 +860,8 @@ class Panel(ScreenPanel):
             self._show_yms_model_selector(printer_id)
             return
         if self._selected_size == HD_MODEL:
-            self._hd_start_sequence(printer_id)
+            if not self._hd_checking:  # contrôle LED en cours : pas de second lancement
+                self._hd_start_sequence(printer_id)
             return
 
         self._build_running_screen()
@@ -1079,6 +1091,29 @@ class Panel(ScreenPanel):
                 "温度传感器异常 %s，测试未启动 / capteur(s) température %s non "
                 "fonctionnel(s) -- QC HyperDrive NON lancé" % (names, names), level=3)
             return False
+        self._screen.show_popup_message(
+            "检查 LED / vérification LED (caméra)...", level=1)
+        self._hd_checking = True
+        threading.Thread(target=self._hd_led_preflight, args=(printer_id,),
+                         daemon=True).start()
+        return False
+
+    def _hd_led_preflight(self, printer_id):
+        """Thread : la LED doit s'allumer en blanc devant la caméra (LED_PREFLIGHT_SEQUENCE)
+        avant le protocole complet, sinon QC non lancé."""
+        frames, err = self._led_capture(LED_PREFLIGHT_SEQUENCE)
+        passed, details = (False, err) if err else led_cam_verdict(frames, LED_PREFLIGHT_SEQUENCE)
+        logger.info("QC HD: LED au lancement %s -> %s", frames, "OK" if passed else details)
+        GLib.idle_add(self._hd_launch, printer_id, passed, details)
+
+    def _hd_launch(self, printer_id, led_ok, details):
+        """Main thread, one-shot GLib : protocole complet si la LED s'est allumée."""
+        self._hd_checking = False
+        if not led_ok:
+            self._screen.show_popup_message(
+                "LED 不亮 / LED ne s'allume pas -- vérifier la LED et son câble, "
+                "QC HyperDrive NON lancé (%s)" % details, level=3)
+            return False
         self._bench_config = load_bench_config(
             os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
@@ -1108,6 +1143,15 @@ class Panel(ScreenPanel):
         threading.Thread(target=self._led_check_worker, daemon=True).start()
 
     def _led_check_worker(self):
+        frames, err = self._led_capture(LED_CAM_SEQUENCE)
+        passed, details = (False, err) if err else led_cam_verdict(frames)
+        log = "led " + " ".join("%s=%s" % (n, frames.get(n)) for n, _c in LED_CAM_SEQUENCE)
+        logger.info("QC HD: %s -> %s", log, "OK" if passed else details)
+        GLib.idle_add(self._record_host_check, HD_LED_TEST_ID, passed, details, [log])
+
+    def _led_capture(self, sequence):
+        """Couleur moyenne (r, g, b) de l'image caméra pour chaque pas de `sequence`,
+        puis LED rallumée en LED_ON_RGB. Hors fil GTK. -> (frames, erreur)."""
         def gcode(script):
             urllib.request.urlopen(
                 "http://localhost:7125/printer/gcode/script?script="
@@ -1115,23 +1159,33 @@ class Panel(ScreenPanel):
         frames, err = {}, ""
         try:
             from PIL import Image
-            for name, (r, g, b) in LED_CAM_SEQUENCE:
+            deadline = time.time() + LED_CAM_WAIT_S
+            while True:  # caméra pas encore revenue après un rebranchement (cf. LED_CAM_WAIT_S)
+                try:
+                    urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=3).read()
+                    break
+                except Exception:
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(2)
+            for name, (r, g, b) in sequence:
                 gcode("SET_LED LED=%s RED=%d GREEN=%d BLUE=%d" % (HD_LED, r, g, b))
-                time.sleep(LED_CAM_SETTLE_S)
-                raw = urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=5).read()
-                im = Image.open(io.BytesIO(raw)).convert("RGB").resize((32, 24))
-                frames[name] = tuple(c // (32 * 24) for c in
-                                     [sum(ch) for ch in zip(*im.getdata())])
+                step_end = time.time() + LED_CAM_STEP_MAX_S
+                while True:  # relue jusqu'à suivre la commande (cf. LED_CAM_STEP_MAX_S)
+                    time.sleep(LED_CAM_SETTLE_S)
+                    raw = urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=5).read()
+                    im = Image.open(io.BytesIO(raw)).convert("RGB").resize((32, 24))
+                    frames[name] = tuple(c // (32 * 24) for c in
+                                         [sum(ch) for ch in zip(*im.getdata())])
+                    if led_frame_settled(name, frames[name]) or time.time() > step_end:
+                        break
         except Exception as e:
             err = "%s: %s" % (HD_CAMERA_ERR, e)
         try:
-            gcode("SET_LED LED=%s RED=0 GREEN=0 BLUE=0" % HD_LED)
+            gcode("SET_LED LED=%s RED=%d GREEN=%d BLUE=%d" % ((HD_LED,) + LED_ON_RGB))
         except Exception as e:
-            logger.warning("QC HD: extinction LED: %s", e)
-        passed, details = (False, err) if err else led_cam_verdict(frames)
-        log = "led " + " ".join("%s=%s" % (n, frames.get(n)) for n, _c in LED_CAM_SEQUENCE)
-        logger.info("QC HD: %s -> %s", log, "OK" if passed else details)
-        GLib.idle_add(self._record_host_check, HD_LED_TEST_ID, passed, details, [log])
+            logger.warning("QC HD: LED %s: %s", LED_ON_RGB, e)
+        return frames, err
 
     def _record_host_check(self, test_id, passed, details, lines):
         """Main thread : n'enregistre que si ce test est encore le test courant

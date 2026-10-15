@@ -949,7 +949,7 @@ gcode:
 # constantes vivent dans qc_yms.py (lues aussi par le panel).
 from qc_yms import (HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
                     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
-                    HD_POSITIONS)
+                    HD_POSITIONS, LED_ON_RGB)
 
 HD_DST = os.path.join(HERE, "qc_printer_%s.cfg" % HD_MODEL)
 HD_HYPERDRIVES = [(HD_MCU, "/dev/ttyS2", HD_POSITIONS[0] - 1)]
@@ -988,9 +988,28 @@ def hyperdrive_macros():
 pin: %(mcu)s:%(pin)s
 chain_count: %(count)d
 color_order: %(order)s
-initial_RED: 0.0
-initial_GREEN: 0.0
-initial_BLUE: 0.0
+initial_RED: %(on_r).1f
+initial_GREEN: %(on_g).1f
+initial_BLUE: %(on_b).1f
+
+# LED toujours allumee (qc_yms.LED_ON_RGB). Une LED rebranchee a chaud repart
+# eteinte, et Klipper n'emet rien si la couleur n'a pas change (neopixel.send_data) :
+# chaque seconde on renvoie la couleur courante en faisant basculer l'octet rouge
+# entre deux valeurs voisines (255<->254, 0<->1, invisible) pour forcer l'envoi.
+# SYNC=0 : ne reveille pas le toolhead (idle_timeout intact). La couleur est lue
+# dans la macro (sous le verrou gcode), pas dans le delayed_gcode : un SET_LED du
+# test caméra arrive entre deux secondes sans etre ecrase par une valeur perimee.
+[gcode_macro _HD_LED_REFRESH]
+gcode:
+    {%% set c = printer["neopixel %(led)s"].color_data[0] %%}
+    {%% set b = (c[0] * 255)|round|int %%}
+    SET_LED LED=%(led)s RED={(b - 1 if b is odd else b + 1) / 255} GREEN={c[1]} BLUE={c[2]} SYNC=0
+
+[delayed_gcode _HD_LED_KEEP]
+initial_duration: 1
+gcode:
+    _HD_LED_REFRESH
+    UPDATE_DELAYED_GCODE ID=_HD_LED_KEEP DURATION=1
 
 # Signaux QC:MCU_CHECK:* et ligne "[mcu %(mcu)s] <descripteur>" : qc_engine en
 # tire yumi_config et machine_uid (MCU_UID=...) comme pour une machine. Le
@@ -1015,6 +1034,7 @@ gcode:
         RESPOND MSG="QC:MCU_CHECK:PASS"
     {%% endif %%}
 """ % dict(led=HD_LED, mcu=HD_MCU, pin=HD_LED_PIN, count=HD_LED_COUNT,
+           on_r=LED_ON_RGB[0], on_g=LED_ON_RGB[1], on_b=LED_ON_RGB[2],
            order=HD_LED_ORDER, fw=HD_FIRMWARE_DESCRIPTOR, ver=HD_FIRMWARE_VERSION,
            build_err=HD_FW_BUILD_ERR, ver_err=HD_FW_VERSION_ERR,
            uid=HD_FIRMWARE_DESCRIPTOR.rsplit("uid=", 1)[1])

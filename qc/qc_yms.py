@@ -872,9 +872,22 @@ HD_LED_TEST_ID = "hd_led"
 LED_CAM_SNAPSHOT_URL = "http://127.0.0.1:8080/snapshot"   # crowsnest [cam 1]
 LED_CAM_SEQUENCE = (("off", (0, 0, 0)), ("red", (1, 0, 0)), ("green", (0, 1, 0)), ("blue", (0, 0, 1)))
 LED_CAM_SETTLE_S = 0.5
+# LED toujours allumée en blanc (Nicolas 15/10) : l'opérateur la voit avant de lancer,
+# et au clic le panel vérifie à la caméra qu'elle s'allume (éteinte puis blanche) AVANT
+# le protocole complet -- LED débranchée = QC non lancé, pas 6 min perdues.
+LED_ON_RGB = (1, 1, 1)
+LED_PREFLIGHT_SEQUENCE = (("off", (0, 0, 0)), ("white", LED_ON_RGB))
+# Caméra rebranchée au changement de HyperDrive (15/10, banc 2) : crowsnest met ~35 s à
+# revenir (image coupée 19:09:09 -> 19:09:47) ; le test l'attend jusqu'à ce délai au lieu
+# de recaler la carte pour un défaut du banc.
+LED_CAM_WAIT_S = 60
 LED_DARK_MAX = 40
 LED_LIT_MIN = 100
 LED_CHANGE_MIN = 30
+# Le retard caméra dépasse parfois 0,5 s (15/10 : image encore allumée après l'extinction,
+# 4 lancements refusés à tort) : chaque couleur est relue jusqu'à ce que l'image suive la
+# commande (led_frame_settled), dans cette limite.
+LED_CAM_STEP_MAX_S = 3
 
 HD_USB_TEST_ID = "usb_ref"
 HD_SLOT_TEST_ID = "slot%d"
@@ -968,18 +981,24 @@ def find_usb_device(ref, sys_root=USB_SYSFS):
     return found, seen
 
 
-def led_cam_verdict(frames):
+def led_frame_settled(name, rgb):
+    """L'image caméra suit-elle la commande `name` ? Sombre pour "off", allumée sinon."""
+    lum = sum(rgb) / 3.0
+    return lum <= LED_DARK_MAX if name == "off" else lum >= LED_LIT_MIN
+
+
+def led_cam_verdict(frames, sequence=LED_CAM_SEQUENCE):
     """(passé, détails) d'après la couleur moyenne (r, g, b) de l'image caméra pour
-    chaque pas de LED_CAM_SEQUENCE. Voir les constantes LED_* pour le pourquoi."""
-    lum = {n: sum(rgb) / 3.0 for n, rgb in frames.items()}
-    if lum["off"] > LED_DARK_MAX:
-        return False, "LED not on the camera lens (image bright with LED off: %d)" % lum["off"]
-    dark = [n for n, _rgb in LED_CAM_SEQUENCE[1:] if lum[n] < LED_LIT_MIN]
+    chaque pas de `sequence` ("off" d'abord). Voir les constantes LED_* pour le pourquoi."""
+    if not led_frame_settled("off", frames["off"]):
+        return False, "LED not on the camera lens (image bright with LED off: %d)" % (
+            sum(frames["off"]) / 3.0)
+    dark = [n for n, _rgb in sequence[1:] if not led_frame_settled(n, frames[n])]
     if dark:
         return False, "LED stays dark on %s" % "/".join(dark)
-    lit = [frames[n] for n, _rgb in LED_CAM_SEQUENCE[1:]]
+    lit = [frames[n] for n, _rgb in sequence[1:]]
     change = max(sum(abs(a - b) for a, b in zip(x, y)) for x in lit for y in lit)
-    if change < LED_CHANGE_MIN:
+    if len(lit) > 1 and change < LED_CHANGE_MIN:
         return False, "LED does not change colour (difference %d)" % change
     return True, ""
 
