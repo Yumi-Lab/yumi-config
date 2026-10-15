@@ -884,6 +884,10 @@ LED_CAM_WAIT_S = 60
 LED_DARK_MAX = 40
 LED_LIT_MIN = 100
 LED_CHANGE_MIN = 30
+# Le retard caméra dépasse parfois 0,5 s (15/10 : image encore allumée après l'extinction,
+# 4 lancements refusés à tort) : chaque couleur est relue jusqu'à ce que l'image suive la
+# commande (led_frame_settled), dans cette limite.
+LED_CAM_STEP_MAX_S = 3
 
 HD_USB_TEST_ID = "usb_ref"
 HD_SLOT_TEST_ID = "slot%d"
@@ -977,13 +981,19 @@ def find_usb_device(ref, sys_root=USB_SYSFS):
     return found, seen
 
 
+def led_frame_settled(name, rgb):
+    """L'image caméra suit-elle la commande `name` ? Sombre pour "off", allumée sinon."""
+    lum = sum(rgb) / 3.0
+    return lum <= LED_DARK_MAX if name == "off" else lum >= LED_LIT_MIN
+
+
 def led_cam_verdict(frames, sequence=LED_CAM_SEQUENCE):
     """(passé, détails) d'après la couleur moyenne (r, g, b) de l'image caméra pour
     chaque pas de `sequence` ("off" d'abord). Voir les constantes LED_* pour le pourquoi."""
-    lum = {n: sum(rgb) / 3.0 for n, rgb in frames.items()}
-    if lum["off"] > LED_DARK_MAX:
-        return False, "LED not on the camera lens (image bright with LED off: %d)" % lum["off"]
-    dark = [n for n, _rgb in sequence[1:] if lum[n] < LED_LIT_MIN]
+    if not led_frame_settled("off", frames["off"]):
+        return False, "LED not on the camera lens (image bright with LED off: %d)" % (
+            sum(frames["off"]) / 3.0)
+    dark = [n for n, _rgb in sequence[1:] if not led_frame_settled(n, frames[n])]
     if dark:
         return False, "LED stays dark on %s" % "/".join(dark)
     lit = [frames[n] for n, _rgb in sequence[1:]]

@@ -98,6 +98,7 @@ try:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        led_frame_settled,
         HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
@@ -108,6 +109,7 @@ try:
         LED_ON_RGB,
         LED_PREFLIGHT_SEQUENCE,
         LED_CAM_SETTLE_S,
+        LED_CAM_STEP_MAX_S,
         LED_CAM_SNAPSHOT_URL,
         LED_CAM_WAIT_S,
         HEAT_START_TEST_ID,
@@ -144,6 +146,7 @@ except ImportError:
         build_hyperdrive_tests,
         find_usb_device,
         led_cam_verdict,
+        led_frame_settled,
         HD_CAMERA_ERR,
         HD_HEAT_POSITIONS,
         HD_LED,
@@ -154,6 +157,7 @@ except ImportError:
         LED_ON_RGB,
         LED_PREFLIGHT_SEQUENCE,
         LED_CAM_SETTLE_S,
+        LED_CAM_STEP_MAX_S,
         LED_CAM_SNAPSHOT_URL,
         LED_CAM_WAIT_S,
         HEAT_START_TEST_ID,
@@ -1166,11 +1170,15 @@ class Panel(ScreenPanel):
                     time.sleep(2)
             for name, (r, g, b) in sequence:
                 gcode("SET_LED LED=%s RED=%d GREEN=%d BLUE=%d" % (HD_LED, r, g, b))
-                time.sleep(LED_CAM_SETTLE_S)
-                raw = urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=5).read()
-                im = Image.open(io.BytesIO(raw)).convert("RGB").resize((32, 24))
-                frames[name] = tuple(c // (32 * 24) for c in
-                                     [sum(ch) for ch in zip(*im.getdata())])
+                step_end = time.time() + LED_CAM_STEP_MAX_S
+                while True:  # relue jusqu'à suivre la commande (cf. LED_CAM_STEP_MAX_S)
+                    time.sleep(LED_CAM_SETTLE_S)
+                    raw = urllib.request.urlopen(LED_CAM_SNAPSHOT_URL, timeout=5).read()
+                    im = Image.open(io.BytesIO(raw)).convert("RGB").resize((32, 24))
+                    frames[name] = tuple(c // (32 * 24) for c in
+                                         [sum(ch) for ch in zip(*im.getdata())])
+                    if led_frame_settled(name, frames[name]) or time.time() > step_end:
+                        break
         except Exception as e:
             err = "%s: %s" % (HD_CAMERA_ERR, e)
         try:

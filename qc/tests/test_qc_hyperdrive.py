@@ -12,7 +12,7 @@ from qc.qc_yms import (
     HD_CAMERA_ERR, HD_DEVICE, HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
     HD_POSITIONS, HD_USB_TEST_ID, LED_PREFLIGHT_SEQUENCE, box_verdict, build_hyperdrive_report,
-    build_hyperdrive_tests, build_label_png_job, find_usb_device, led_cam_verdict,
+    build_hyperdrive_tests, build_label_png_job, find_usb_device, led_cam_verdict, led_frame_settled,
     test_id_for_position)
 from qc import render_qc_tspl
 
@@ -113,6 +113,14 @@ class TestLedCamVerdict(unittest.TestCase):
     def test_led_stuck_on_one_colour(self):
         stuck = dict(self.REAL, red=(200, 200, 200), green=(205, 200, 198), blue=(201, 203, 200))
         self.assertFalse(led_cam_verdict(stuck)[0])
+
+    def test_frame_follows_command(self):
+        """Image relue tant qu'elle ne suit pas la commande : vue réelle du 15/10 à 0,5 s
+        de l'extinction = encore allumée (250, 156, 152)."""
+        self.assertFalse(led_frame_settled("off", (250, 156, 152)))
+        self.assertTrue(led_frame_settled("off", (8, 8, 8)))
+        self.assertTrue(led_frame_settled("white", (255, 254, 255)))
+        self.assertFalse(led_frame_settled("red", (0, 0, 0)))
 
     def test_launch_check_white(self):
         """Contrôle au clic : éteinte puis blanche, une seule couleur allumée."""
