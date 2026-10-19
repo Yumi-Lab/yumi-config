@@ -10,6 +10,7 @@ Thresholds come from a real board on 19/10/2026 (bench pad 02810E28F273): rest n
 +-16 g range), gravity at rest 1.1 g.
 """
 import math
+import re
 import statistics
 
 ADXL_MODEL = "ADXL"
@@ -23,11 +24,10 @@ REST_S = 2                       # rest window, operator hands off
 WINDOW_S = 2                     # shake windows (the stream needs ~1 s to start: 1 s gave ~200 samples)
 MEASURE_CSV = "/tmp/adxl345-%s.csv"   # written by Klipper's ACCELEROMETER_MEASURE NAME=<name>
 AXES = ("x", "y", "z")
-# Klipper's answers to ACCELEROMETER_QUERY: no chip (wrong id) vs chip there but no samples. The
-# second one is what a hot-swapped board gives until Klipper restarts (seen 19/10: 0 samples,
-# 5/5 queries refused; after FIRMWARE_RESTART 5/5 fine).
-BAD_ID_MSG = "Invalid adxl345 id"
-NO_SAMPLES_MSG = "No accelerometer measurements found"
+# Presence = chip id (register 0x00) read with ACCELEROMETER_DEBUG_READ REG=0, an info line that
+# never raises: polling with ACCELEROMETER_QUERY made KlipperScreen pop an error every second.
+ADXL345_DEVID = 0xE5
+_DEVID_RE = re.compile(r"Accelerometer REG\[0x0\] = 0x([0-9a-fA-F]+)")
 
 # Screen texts (Chinese / French, like the rest of the QC panel), one place.
 TEXT = {
@@ -52,10 +52,14 @@ def rest_check(samples):
     return True, ""
 
 
-def chip_state(error_text):
-    """State of the board from a refused ACCELEROMETER_QUERY: "stuck" (chip id fine, no samples:
-    Klipper must restart) or "absent" (no chip, or any other refusal)."""
-    return "stuck" if NO_SAMPLES_MSG in error_text else "absent"
+def devid_from_messages(messages):
+    """Chip id from Klipper's answers (oldest first): the newest "Accelerometer REG[0x0] = 0x.."
+    line, or None."""
+    for text in reversed(messages):
+        m = _DEVID_RE.search(text)
+        if m:
+            return int(m.group(1), 16)
+    return None
 
 
 def axis_stdevs(samples):

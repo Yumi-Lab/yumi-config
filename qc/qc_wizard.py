@@ -81,8 +81,8 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 try:
     from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from ks_includes.qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
-                                     axis_stdevs, build_adxl_report, chip_state, read_measure_csv,
-                                     rest_check, shake_step)
+                                     ADXL345_DEVID, axis_stdevs, build_adxl_report,
+                                     devid_from_messages, read_measure_csv, rest_check, shake_step)
     from ks_includes.qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -132,8 +132,8 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
-                         axis_stdevs, build_adxl_report, chip_state, read_measure_csv,
-                         rest_check, shake_step)
+                         ADXL345_DEVID, axis_stdevs, build_adxl_report,
+                         devid_from_messages, read_measure_csv, rest_check, shake_step)
     from qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -1256,15 +1256,16 @@ class Panel(ScreenPanel):
             % (esc(line), esc(detail), esc(ADXL_TEXT["count"] % _adxl_bench["count"])))
         return False
 
-    def _adxl_state(self):
-        """"ok" (samples flow), "stuck" (chip there, no samples: hot swap) or "absent"."""
+    def _adxl_present(self):
+        """The chip answers its id (register 0x00 = 0xE5), read without raising (qc_adxl)."""
         try:
-            self._moonraker_gcode("ACCELEROMETER_QUERY")
-            return "ok"
-        except urllib.error.HTTPError as e:
-            return chip_state(e.read().decode("utf-8", "replace"))
-        except urllib.error.URLError:   # Moonraker unreachable: nothing to test
-            return "absent"
+            self._moonraker_gcode("ACCELEROMETER_DEBUG_READ REG=0")
+            with urllib.request.urlopen(
+                    "http://localhost:7125/server/gcode_store?count=5", timeout=5) as r:
+                store = json.load(r)["result"]["gcode_store"]
+        except (urllib.error.URLError, ValueError, KeyError):   # Klipper not ready
+            return False
+        return devid_from_messages([g.get("message", "") for g in store]) == ADXL345_DEVID
 
     def _adxl_restart(self):
         """FIRMWARE_RESTART and wait for Klipper: a hot-swapped board gives no samples until then.
@@ -1315,18 +1316,17 @@ class Panel(ScreenPanel):
         def show(*args):
             GLib.idle_add(self._adxl_show, *args)
         while _adxl_bench["active"]:
-            state = self._adxl_state()
-            if state == "absent":
+            if not self._adxl_present():
                 show("wait", ADXL_TEXT["plug"])
                 time.sleep(0.5)
-                continue
-            if state == "stuck":
-                self._adxl_restart()
                 continue
             logger.info("QC ADXL: board plugged")
             show("busy", ADXL_TEXT["rest"])
             try:
                 rest = self._adxl_measure("qcrest", REST_S)
+                if not rest:   # chip id fine but no samples: hot swap, Klipper must restart
+                    self._adxl_restart()
+                    continue
                 ok, reason = rest_check(rest)
                 logger.info("QC ADXL: rest %d samples, mean %s -> %s", len(rest),
                             [round(sum(a) / len(a)) for a in zip(*rest)] if rest else [], reason or "ok")
@@ -1350,7 +1350,7 @@ class Panel(ScreenPanel):
             show("pass" if passed else "fail", ADXL_TEXT["pass" if passed else "fail"],
                  (reason + " -- " if reason else "") + ADXL_TEXT["unplug"])
             threading.Thread(target=self._adxl_send, args=(passed, reason), daemon=True).start()
-            while _adxl_bench["active"] and self._adxl_state() == "ok":
+            while _adxl_bench["active"] and self._adxl_present():
                 time.sleep(0.5)
             logger.info("QC ADXL: board unplugged")
 
