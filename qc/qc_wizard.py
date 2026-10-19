@@ -294,7 +294,11 @@ class Panel(ScreenPanel):
         # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
         # Pas de titre « 机型 / Model » au-dessus (14/10) : les boutons parlent
         # d'eux-mêmes et la hauteur manquait pour la rangée du bas.
-        size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        # Every mode button shares the content width (19/10: with ADXL, 6 fixed 120 px buttons
+        # ran off the right edge of the 800 px screen).
+        spacing = 8
+        btn_w = min(120, (self._gtk.content_width - 40 - spacing * (len(QC_SIZES) - 1)) // len(QC_SIZES))
+        size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=spacing)
         size_row.set_halign(Gtk.Align.CENTER)
         for size in QC_SIZES:
             avail = os.path.exists(self._qc_cfg_path(size))
@@ -302,7 +306,7 @@ class Panel(ScreenPanel):
             label = size if avail else f"{size}\n待生成/TBD"
             style = "color3" if selected else ("color1" if avail else "color2")
             sbtn = self._gtk.Button(None, label, style)
-            sbtn.set_size_request(120, 58)
+            sbtn.set_size_request(btn_w, 58)
             sbtn.set_sensitive(avail)
             sbtn.connect("clicked", self._on_size_selected, size)
             size_row.pack_start(sbtn, False, False, 0)
@@ -1241,10 +1245,20 @@ class Panel(ScreenPanel):
         _adxl_bench["active"] = False
         self._build_start_screen()
 
+    def _adxl_keep_awake(self):
+        """Main thread: the operator never touches the screen, so the bench keeps the screensaver
+        away (19/10: the screen blanked 60 s after Start). One-shot for GLib.idle_add."""
+        saver = self._screen.screensaver
+        if saver.is_showing:
+            saver.close()
+        saver.reset_timeout()
+        return False
+
     def _adxl_show(self, state, line, detail=""):
         """Main thread: background colour of the state and big text. One-shot for GLib.idle_add."""
         if not _adxl_bench["active"] or not hasattr(self, "_adxl_panel"):
             return False
+        self._adxl_keep_awake()
         rgba = Gdk.RGBA()
         rgba.parse(ADXL_COLORS[state])
         self._adxl_panel.override_background_color(Gtk.StateFlags.NORMAL, rgba)
@@ -1351,6 +1365,7 @@ class Panel(ScreenPanel):
                  (reason + " -- " if reason else "") + ADXL_TEXT["unplug"])
             threading.Thread(target=self._adxl_send, args=(passed, reason), daemon=True).start()
             while _adxl_bench["active"] and self._adxl_present():
+                GLib.idle_add(self._adxl_keep_awake)
                 time.sleep(0.5)
             logger.info("QC ADXL: board unplugged")
 
