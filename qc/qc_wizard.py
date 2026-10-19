@@ -1227,9 +1227,11 @@ class Panel(ScreenPanel):
         self._adxl_label.set_line_wrap(True)
         self._adxl_panel.add(self._adxl_label)
         box.pack_start(self._adxl_panel, True, True, 0)
-        stop = self._gtk.Button("stop", _("停止 / Arrêter"), "color2")
+        stop = self._gtk.Button(None, _("停止 / Arrêter"), "color2")
+        stop.set_vexpand(False)     # a thin bar: the colour fills the screen
+        stop.set_size_request(-1, 48)
         stop.connect("clicked", self._adxl_bench_stop)
-        box.pack_end(stop, False, False, 5)
+        box.pack_end(stop, False, False, 4)
         self.content.add(box)
         self.content.show_all()
         self._adxl_show("wait", ADXL_TEXT["plug"])

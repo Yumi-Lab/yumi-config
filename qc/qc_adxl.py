@@ -29,11 +29,12 @@ AXES = ("x", "y", "z")
 ADXL345_DEVID = 0xE5
 _DEVID_RE = re.compile(r"Accelerometer REG\[0x0\] = 0x([0-9a-fA-F]+)")
 
-# Screen texts (Chinese / French, like the rest of the QC panel), one place.
+# Screen texts (Chinese / French, like the rest of the QC panel), one place. Only characters the
+# pad's fonts have: 动 and 摇 showed as empty boxes (19/10), checked with fc-list :charset=<hex>.
 TEXT = {
     "plug": "插入 ADXL / Branchez un ADXL",
-    "rest": "不要动 / Ne bougez pas l'ADXL",
-    "shake": "摇动 ADXL / Secouez l'ADXL !",
+    "rest": "保持静止 / Ne bougez pas l'ADXL",
+    "shake": "用力晃 ADXL / Secouez l'ADXL !",
     "pass": "合格 / VALIDÉ",
     "fail": "不合格 / REFUSÉ",
     "unplug": "拔出 ADXL / Débranchez-le",
