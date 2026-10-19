@@ -182,7 +182,8 @@ except ImportError:
 QC_SIZES.append(HD_MODEL)
 # ADXL bench (19/10/2026): one accelerometer at a time on the pad GPIO, hands-free loop.
 QC_SIZES.append(ADXL_MODEL)
-ADXL_COLORS = {"wait": "#3a3a3a", "busy": "#1f4e8c", "pass": "#1e7b34", "fail": "#a11d1d"}
+# rest = orange, so "keep still" and "shake" (blue) are told apart at a glance (Nicolas 19/10).
+ADXL_COLORS = {"wait": "#3a3a3a", "rest": "#c46a00", "busy": "#1f4e8c", "pass": "#1e7b34", "fail": "#a11d1d"}
 # Bench state at module level: a Klipper restart makes KlipperScreen re-initialise this panel, the
 # bench must come back by itself (operator hands-free) with a single worker thread.
 _adxl_bench = {"active": False, "thread": None, "count": 0}
@@ -1337,7 +1338,7 @@ class Panel(ScreenPanel):
                 time.sleep(0.5)
                 continue
             logger.info("QC ADXL: board plugged")
-            show("busy", ADXL_TEXT["rest"])
+            show("rest", ADXL_TEXT["rest"])
             try:
                 rest = self._adxl_measure("qcrest", REST_S)
                 if not rest:   # chip id fine but no samples: hot swap, Klipper must restart
