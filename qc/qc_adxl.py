@@ -19,10 +19,15 @@ GRAVITY_TOLERANCE = 0.25         # rest magnitude within +-25 % of 1 g
 SHAKE_STDEV_MIN_MM_S2 = 2000.0   # per axis: ~8x the rest noise, ~4x below a real hand shake
 SHAKE_MIN_SAMPLES = 100          # the ADXL345 streams ~3200 Hz: one second gives thousands
 SHAKE_STRIKES_MAX = 3            # windows with a still axis while the others move -> FAIL
-REST_S = 1                       # rest window, operator hands off
-WINDOW_S = 1                     # shake windows, repeated until a verdict
+REST_S = 2                       # rest window, operator hands off
+WINDOW_S = 2                     # shake windows (the stream needs ~1 s to start: 1 s gave ~200 samples)
 MEASURE_CSV = "/tmp/adxl345-%s.csv"   # written by Klipper's ACCELEROMETER_MEASURE NAME=<name>
 AXES = ("x", "y", "z")
+# Klipper's answers to ACCELEROMETER_QUERY: no chip (wrong id) vs chip there but no samples. The
+# second one is what a hot-swapped board gives until Klipper restarts (seen 19/10: 0 samples,
+# 5/5 queries refused; after FIRMWARE_RESTART 5/5 fine).
+BAD_ID_MSG = "Invalid adxl345 id"
+NO_SAMPLES_MSG = "No accelerometer measurements found"
 
 # Screen texts (Chinese / French, like the rest of the QC panel), one place.
 TEXT = {
@@ -47,10 +52,20 @@ def rest_check(samples):
     return True, ""
 
 
+def chip_state(error_text):
+    """State of the board from a refused ACCELEROMETER_QUERY: "stuck" (chip id fine, no samples:
+    Klipper must restart) or "absent" (no chip, or any other refusal)."""
+    return "stuck" if NO_SAMPLES_MSG in error_text else "absent"
+
+
+def axis_stdevs(samples):
+    """Per-axis standard deviation of a window, {"x": ..., "y": ..., "z": ...} in mm/s2."""
+    return {axis: statistics.pstdev(values) for axis, values in zip(AXES, zip(*samples))}
+
+
 def still_axes(samples):
     """Axes that did not move in a window (stdev under SHAKE_STDEV_MIN_MM_S2), e.g. ["y"]."""
-    return [axis for axis, values in zip(AXES, zip(*samples))
-            if statistics.pstdev(values) < SHAKE_STDEV_MIN_MM_S2]
+    return [axis for axis, sd in axis_stdevs(samples).items() if sd < SHAKE_STDEV_MIN_MM_S2]
 
 
 def shake_step(samples, strikes):

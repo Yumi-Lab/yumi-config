@@ -81,7 +81,8 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 try:
     from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from ks_includes.qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
-                                     build_adxl_report, read_measure_csv, rest_check, shake_step)
+                                     axis_stdevs, build_adxl_report, chip_state, read_measure_csv,
+                                     rest_check, shake_step)
     from ks_includes.qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -131,7 +132,8 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
     from qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
-                         build_adxl_report, read_measure_csv, rest_check, shake_step)
+                         axis_stdevs, build_adxl_report, chip_state, read_measure_csv,
+                         rest_check, shake_step)
     from qc_yms import (
         allocate_yms_codes,
         build_box_report,
@@ -181,6 +183,9 @@ QC_SIZES.append(HD_MODEL)
 # ADXL bench (19/10/2026): one accelerometer at a time on the pad GPIO, hands-free loop.
 QC_SIZES.append(ADXL_MODEL)
 ADXL_COLORS = {"wait": "#3a3a3a", "busy": "#1f4e8c", "pass": "#1e7b34", "fail": "#a11d1d"}
+# Bench state at module level: a Klipper restart makes KlipperScreen re-initialise this panel, the
+# bench must come back by itself (operator hands-free) with a single worker thread.
+_adxl_bench = {"active": False, "thread": None, "count": 0}
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
@@ -216,6 +221,8 @@ class Panel(ScreenPanel):
         self._bench_session = ""    # pad_mac-YYYYMMDD-HHMM du début de séquence
         self._box_started = {}      # test_id -> datetime de début (durée/boîtier)
         self._hd_checking = False   # banc HyperDrive : contrôle LED au lancement en cours
+        if _adxl_bench["active"]:   # panel re-initialised after a Klipper restart: bench resumes
+            GLib.idle_add(self._adxl_bench_start)
         self._batch_ended = None    # v8 (26/08) : datetime de fin du lot (durée/boîtier)
         self._box_reports = {}      # position -> rapport envoyé (carte + réimpression)
 
@@ -1204,11 +1211,11 @@ class Panel(ScreenPanel):
     # ─── ADXL BENCH (hands-free: plug, shake, unplug) ───────────────────
 
     def _adxl_bench_start(self):
-        """Full-screen loop: the operator only plugs, shakes and unplugs boards (qc_adxl)."""
+        """Full-screen loop: the operator only plugs, shakes and unplugs boards (qc_adxl).
+        Also called after a panel re-init while the bench is active. One-shot for GLib.idle_add."""
+        _adxl_bench["active"] = True
+        self._adxl_pad = self.labels["printer_id"].get_text().strip() if "printer_id" in self.labels else ""
         self._clear_content()
-        self._adxl_running = True
-        self._adxl_count = 0
-        self._adxl_pad = self.labels["printer_id"].get_text().strip()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self._adxl_panel = Gtk.EventBox()
         self._adxl_label = Gtk.Label()
@@ -1222,15 +1229,21 @@ class Panel(ScreenPanel):
         self.content.add(box)
         self.content.show_all()
         self._adxl_show("wait", ADXL_TEXT["plug"])
-        threading.Thread(target=self._adxl_loop, daemon=True).start()
+        worker = _adxl_bench["thread"]
+        if not (worker and worker.is_alive()):
+            logger.info("QC ADXL: bench started (pad %s)", self._adxl_pad)
+            _adxl_bench["thread"] = threading.Thread(target=self._adxl_loop, daemon=True)
+            _adxl_bench["thread"].start()
+        return False
 
     def _adxl_bench_stop(self, widget):
-        self._adxl_running = False
+        logger.info("QC ADXL: bench stopped by the operator (%d validated)", _adxl_bench["count"])
+        _adxl_bench["active"] = False
         self._build_start_screen()
 
     def _adxl_show(self, state, line, detail=""):
         """Main thread: background colour of the state and big text. One-shot for GLib.idle_add."""
-        if not self._adxl_running:
+        if not _adxl_bench["active"] or not hasattr(self, "_adxl_panel"):
             return False
         rgba = Gdk.RGBA()
         rgba.parse(ADXL_COLORS[state])
@@ -1240,16 +1253,43 @@ class Panel(ScreenPanel):
             "<span size='xx-large' weight='bold' foreground='white'>%s</span>\n"
             "<span size='large' foreground='white'>%s</span>\n\n"
             "<span foreground='white'>%s</span>"
-            % (esc(line), esc(detail), esc(ADXL_TEXT["count"] % self._adxl_count)))
+            % (esc(line), esc(detail), esc(ADXL_TEXT["count"] % _adxl_bench["count"])))
         return False
 
-    def _adxl_present(self):
-        """The chip answers with its id (Klipper refuses ACCELEROMETER_QUERY otherwise)."""
+    def _adxl_state(self):
+        """"ok" (samples flow), "stuck" (chip there, no samples: hot swap) or "absent"."""
         try:
             self._moonraker_gcode("ACCELEROMETER_QUERY")
-            return True
-        except urllib.error.URLError:   # HTTPError included: no chip, or Klipper not ready
-            return False
+            return "ok"
+        except urllib.error.HTTPError as e:
+            return chip_state(e.read().decode("utf-8", "replace"))
+        except urllib.error.URLError:   # Moonraker unreachable: nothing to test
+            return "absent"
+
+    def _adxl_restart(self):
+        """FIRMWARE_RESTART and wait for Klipper: a hot-swapped board gives no samples until then.
+        KlipperScreen drops every panel on the restart; _adxl_reopen brings the bench back."""
+        logger.warning("QC ADXL: chip answers but no samples (hot swap) -> FIRMWARE_RESTART")
+        urllib.request.urlopen(urllib.request.Request(
+            "http://localhost:7125/printer/firmware_restart", method="POST"), timeout=10).read()
+        end = time.time() + 30
+        while time.time() < end:
+            time.sleep(1)
+            try:
+                with urllib.request.urlopen(
+                        "http://localhost:7125/printer/objects/query?webhooks=state", timeout=5) as r:
+                    if json.load(r)["result"]["status"]["webhooks"]["state"] == "ready":
+                        break
+            except (urllib.error.URLError, ValueError, KeyError):
+                continue   # Moonraker answers 503 while Klippy restarts
+        time.sleep(3)      # let KlipperScreen show its main menu first, then take the screen back
+        GLib.idle_add(self._adxl_reopen)
+
+    def _adxl_reopen(self):
+        """Main thread: put the bench panel back on screen after a Klipper restart."""
+        if _adxl_bench["active"] and self._screen._cur_panels[-1:] != ["qc_wizard"]:
+            self._screen.show_panel("qc_wizard", _("质量检测 / Quality Control"))
+        return False
 
     def _adxl_measure(self, name, seconds):
         """Samples of one ACCELEROMETER_MEASURE window. Klipper writes the file from a background
@@ -1270,46 +1310,60 @@ class Panel(ScreenPanel):
         raise OSError("no measurement file " + path)
 
     def _adxl_loop(self):
-        """Worker thread: plug -> rest (1 g) -> shake windows -> verdict + report -> wait for unplug."""
+        """Worker thread: plug -> rest (1 g) -> shake windows -> verdict + report -> wait for unplug.
+        Every step is logged (KlipperScreen.log) for a remote diagnosis."""
         def show(*args):
             GLib.idle_add(self._adxl_show, *args)
-        while self._adxl_running:
-            if not self._adxl_present():
+        while _adxl_bench["active"]:
+            state = self._adxl_state()
+            if state == "absent":
                 show("wait", ADXL_TEXT["plug"])
                 time.sleep(0.5)
                 continue
+            if state == "stuck":
+                self._adxl_restart()
+                continue
+            logger.info("QC ADXL: board plugged")
             show("busy", ADXL_TEXT["rest"])
             try:
-                ok, reason = rest_check(self._adxl_measure("qcrest", REST_S))
-                state, strikes = ("wait", 0) if ok else ("fail", 0)
+                rest = self._adxl_measure("qcrest", REST_S)
+                ok, reason = rest_check(rest)
+                logger.info("QC ADXL: rest %d samples, mean %s -> %s", len(rest),
+                            [round(sum(a) / len(a)) for a in zip(*rest)] if rest else [], reason or "ok")
+                verdict, strikes = ("wait", 0) if ok else ("fail", 0)
                 if ok:
                     show("busy", ADXL_TEXT["shake"])
-                while state == "wait" and self._adxl_running:
-                    state, strikes, reason = shake_step(self._adxl_measure("qcshake", WINDOW_S), strikes)
+                while verdict == "wait" and _adxl_bench["active"]:
+                    window = self._adxl_measure("qcshake", WINDOW_S)
+                    verdict, strikes, reason = shake_step(window, strikes)
+                    logger.info("QC ADXL: shake window %d samples, stdev %s -> %s", len(window),
+                                {k: round(v) for k, v in axis_stdevs(window).items()} if window else {},
+                                verdict)
             except (urllib.error.URLError, OSError) as e:
-                # Unplugged mid-test (chip id lost) or Klipper busy: start over from "plug".
-                logger.info("QC ADXL: test interrupted: %s", e)
+                logger.info("QC ADXL: test interrupted (unplugged or Klipper busy): %s", e)
                 continue
-            if not self._adxl_running:
+            if not _adxl_bench["active"]:
                 break
-            passed = state == "pass"
-            self._adxl_count += passed
+            passed = verdict == "pass"
+            _adxl_bench["count"] += passed
+            logger.info("QC ADXL: verdict %s %s", "PASS" if passed else "FAIL", reason)
             show("pass" if passed else "fail", ADXL_TEXT["pass" if passed else "fail"],
                  (reason + " -- " if reason else "") + ADXL_TEXT["unplug"])
-            self._adxl_send(passed, reason)
-            while self._adxl_running and self._adxl_present():
+            threading.Thread(target=self._adxl_send, args=(passed, reason), daemon=True).start()
+            while _adxl_bench["active"] and self._adxl_state() == "ok":
                 time.sleep(0.5)
+            logger.info("QC ADXL: board unplugged")
 
     def _adxl_send(self, passed, reason):
-        """One report per board to qc.yumi-lab.com (QC token); kept locally until it went out, the
-        qc-upload timer resends it otherwise. No label."""
+        """Thread: one report per board to qc.yumi-lab.com (QC token), never blocking the bench.
+        Kept locally until it went out; the qc-upload timer resends it otherwise. No label."""
         report = build_adxl_report(passed, reason, self._adxl_pad, datetime.now(timezone.utc),
                                    getattr(self.engine, "technician", ""))
         path = self.engine.save_report(report)
         ok, msg = self._upload_report(report)
         if ok and path:
             open(path + ".sent", "w").close()
-        logger.info("QC ADXL: %s %s -> %s", report["printer_id"], report["overall_result"], msg)
+        logger.info("QC ADXL: report %s %s -> %s", report["printer_id"], report["overall_result"], msg)
 
     def _record_host_check(self, test_id, passed, details, lines):
         """Main thread : n'enregistre que si ce test est encore le test courant

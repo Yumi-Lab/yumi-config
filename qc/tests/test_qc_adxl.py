@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime
 
 from qc.qc_adxl import (ADXL_DEVICE, ADXL_MODEL, GRAVITY_MM_S2, SHAKE_STRIKES_MAX, build_adxl_report,
-                        read_measure_csv, rest_check, shake_step)
+                        chip_state, read_measure_csv, rest_check, shake_step)
 
 QC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REST = [(-2324.0 + i % 7, 421.0 - i % 5, 10420.0 + i % 11) for i in range(3000)]  # real board, 19/10
@@ -50,6 +50,16 @@ class TestShakeStep(unittest.TestCase):
 
     def test_one_partial_window_is_not_a_fail(self):
         self.assertEqual(shake_step(shake(dead_axis=1), 0)[0], "wait")
+
+
+class TestChipState(unittest.TestCase):
+    def test_moonraker_refusals(self):
+        """Bodies as Moonraker returns them on the pad (19/10)."""
+        self.assertEqual(chip_state('{"error":{"code":400,"message":"No accelerometer measurements found"}}'),
+                         "stuck")
+        self.assertEqual(chip_state('{"error":{"code":400,"message":"Invalid adxl345 id (got 0 vs e5)"}}'),
+                         "absent")
+        self.assertEqual(chip_state('{"error":{"code":503,"message":"Klippy Host not connected"}}'), "absent")
 
 
 class TestReport(unittest.TestCase):
