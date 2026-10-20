@@ -79,7 +79,8 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
-    from ks_includes.qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
+    from ks_includes.qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
+                                       HOTEND_DEVICES, hotend_plugged, hotend_report)
     from ks_includes.qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                                      ADXL345_DEVID, axis_stdevs, build_adxl_report,
                                      devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -130,7 +131,8 @@ except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-    from qc_engine import QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback
+    from qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
+                           HOTEND_DEVICES, hotend_plugged, hotend_report)
     from qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                          ADXL345_DEVID, axis_stdevs, build_adxl_report,
                          devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -182,6 +184,8 @@ except ImportError:
 QC_SIZES.append(HD_MODEL)
 # ADXL bench (19/10/2026): one accelerometer at a time on the pad GPIO, hands-free loop.
 QC_SIZES.append(ADXL_MODEL)
+# Hot end bench (21/10/2026): one print head at a time, X12 or DD (direct drive).
+QC_SIZES.extend(HOTEND_DEVICES)
 # rest = orange, so "keep still" and "shake" (blue) are told apart at a glance (Nicolas 19/10).
 ADXL_COLORS = {"wait": "#3a3a3a", "rest": "#c46a00", "busy": "#1f4e8c", "pass": "#1e7b34", "fail": "#a11d1d"}
 # Bench state at module level: a Klipper restart makes KlipperScreen re-initialise this panel, the
@@ -880,6 +884,11 @@ class Panel(ScreenPanel):
             return
         if self._selected_size == ADXL_MODEL:
             self._adxl_bench_start()
+            return
+        if self._selected_size in HOTEND_DEVICES and not hotend_plugged(
+                self._screen.printer.get_stat("extruder", "temperature")):
+            self._screen.show_popup_message(
+                "未检测到喷头 / Tête non branchée (sonde de température) -- QC non lancé", level=3)
             return
         if self._selected_size == HD_MODEL:
             if not self._hd_checking:  # contrôle LED en cours : pas de second lancement
@@ -1585,6 +1594,9 @@ class Panel(ScreenPanel):
             if not report.get("machine_uid"):
                 self._hd_unidentified(report)
                 return
+        if self._selected_size in HOTEND_DEVICES:
+            report = hotend_report(report, self._selected_size, datetime.now())
+            self.engine.printer_id = report["printer_id"]
         # Modèle machine choisi à l'écran (fiable même si YUMI_CONFIG vide).
         report["qc_model"] = self._selected_size
         # Le YUMI_CONFIG gravé sépare les clés par des ';' ; le compteur ventile
@@ -1664,14 +1676,16 @@ class Panel(ScreenPanel):
             # Étiquette QC auto — réseau par défaut, "local" seulement si
             # basculé manuellement depuis le panel (secours, cf. bouton
             # d'écran d'accueil). Silencieux si imprimante/réseau absents.
-            if self._get_print_mode() == QC_PRINT_MODE_LOCAL:
-                lok, lmsg = self._print_qc_label(self._current_report)
-            else:
-                lok, lmsg = self._print_qc_label_network(self._current_report)
-            if lok:
-                msg += " — 标签已打印 / étiquette imprimée"
-            elif "absente" not in lmsg:
-                msg += " — " + lmsg
+            # A print head gets no label (21/10): its report only feeds the counter.
+            if self._selected_size not in HOTEND_DEVICES:
+                if self._get_print_mode() == QC_PRINT_MODE_LOCAL:
+                    lok, lmsg = self._print_qc_label(self._current_report)
+                else:
+                    lok, lmsg = self._print_qc_label_network(self._current_report)
+                if lok:
+                    msg += " — 标签已打印 / étiquette imprimée"
+                elif "absente" not in lmsg:
+                    msg += " — " + lmsg
             self._screen.show_popup_message(msg, level=1 if ok else 2)
         return False
 

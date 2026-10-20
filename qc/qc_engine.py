@@ -243,6 +243,67 @@ QC_TESTS_YMS12 = [
     for n in range(1, 13)
 ]
 
+# ── Hot end bench (21/10/2026): one print head at a time on a C-series board
+# (qc_printer_X12.cfg / qc_printer_DD.cfg, generate_hotend_cfg.py). The head heats to HOTEND_TEMP
+# while the operator checks the fans; once Klipper's PID has settled, the operator reads the
+# nozzle with their own thermometer and answers. A DD (direct drive) head also extrudes, to test
+# its motor. A head has no serial number: like an ADXL, every test is one head. The heater
+# stays on until the end (the DD extrusion needs it): QC_CLEANUP turns it off. ──
+HOTEND_TEMP = 230
+HOTEND_EXTRUDE_MM = 30
+HOTEND_EXTRUDE_MM_S = 2.5
+HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> report device=
+# An unplugged thermistor reads about -87 C (open circuit, min_temp -200 in the C-series cfg).
+HOTEND_PLUGGED_MIN_C = 0
+
+_HOTEND_TESTS = [
+    {
+        # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
+        "id": "heat_start",
+        "name": "开始加热 / Start heating",
+        "type": "automated",
+        "macro": "QC_HOTEND_HEAT_START TEMP=%d" % HOTEND_TEMP,
+        "timeout": 30,
+    },
+    _QC_BY_ID["fan_hotend"],
+    _QC_BY_ID["fan_part"],
+    {
+        "id": "hotend_temp",
+        "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
+        "type": "visual",
+        "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
+        "prompt": "测温仪读数约 %d°C 吗？\nDoes the thermometer read about %d °C?"
+                  % (HOTEND_TEMP, HOTEND_TEMP),
+        "timeout": 300,
+    },
+]
+HOTEND_TESTS = {
+    "X12": _HOTEND_TESTS,
+    "DD": _HOTEND_TESTS + [{
+        "id": "hotend_extrude",
+        "name": "挤出电机 / Extruder motor",
+        "type": "visual",
+        "macro": "QC_HOTEND_EXTRUDE MM=%d SPEED=%s" % (HOTEND_EXTRUDE_MM, HOTEND_EXTRUDE_MM_S),
+        "prompt": "电机转动，喷嘴出料了吗？\nDid the motor turn and filament come out of the nozzle?",
+        "timeout": 120,
+    }],
+}
+
+
+def hotend_plugged(temperature):
+    """A head is on the bench when its thermistor reads a real temperature. KlipperScreen's
+    get_stat gives {} for a value it does not have yet."""
+    return isinstance(temperature, (int, float)) and temperature > HOTEND_PLUGGED_MIN_C
+
+
+def hotend_report(report, model, now):
+    """Report of one head: its own id (device + pad + time), never the bench board's identity."""
+    device = HOTEND_DEVICES[model]
+    report.pop("machine_uid_missing", None)
+    report.update(printer_id="%s-%s-%s" % (device, report["pad_mac"], now.strftime("%Y%m%d-%H%M%S")),
+                  machine_uid="", yumi_config="device=" + device)
+    return report
+
 
 # Retour de QC_PRINT_PLAQUE (print_plaque.py lancé par RUN_SHELL_COMMAND verbose, hors venv :
 # les deux chaînes sont le CONTRAT entre les deux process, print_plaque.py les émet) à montrer à
@@ -268,6 +329,8 @@ def tests_for_model(model):
     ou protocole machine C-series (défaut)."""
     if (model or "").upper().startswith("YMS"):
         return QC_TESTS_YMS12
+    if model in HOTEND_TESTS:
+        return HOTEND_TESTS[model]
     return QC_TESTS
 
 
