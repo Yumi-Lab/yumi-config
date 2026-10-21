@@ -755,7 +755,9 @@ class QCEngine:
         os.makedirs(report_dir, exist_ok=True)
 
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"QC_{self.printer_id}_{date_str}.json"
+        # The report's own id: an ADXL report never runs the engine, whose printer_id stays empty,
+        # and 1 140 reports landed as "QC__<date>.json" (21/10).
+        filename = f"QC_{report.get('printer_id') or self.printer_id}_{date_str}.json"
         filepath = os.path.join(report_dir, filename)
 
         with open(filepath, "w") as f:

@@ -90,5 +90,18 @@ class TestReadMeasureCsv(unittest.TestCase):
         self.assertEqual(read_measure_csv(path), [(-196.0, 98.5, 9810.2), (10.0, -20.0, 9790.0)])
 
 
+
+class TestSavedFileName(unittest.TestCase):
+    def test_file_named_after_the_report(self):
+        """21/10: ADXL reports were saved as QC__<date>.json (the engine id is empty on that bench)."""
+        from unittest import mock
+        from qc.qc_engine import QCEngine
+        home = tempfile.mkdtemp()
+        report = build_adxl_report(True, "", "0281E4FB8D93", datetime(2026, 10, 20, 8, 40, 26))
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            path = QCEngine().save_report(report)
+        self.assertTrue(os.path.basename(path).startswith("QC_ADXL-0281E4FB8D93-20261020-084026_"))
+
+
 if __name__ == "__main__":
     unittest.main()
