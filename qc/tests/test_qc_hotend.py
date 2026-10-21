@@ -25,12 +25,12 @@ def _macro_body(cfg, name):
     return _body(cfg, "gcode_macro " + name)
 
 
-def _render(body, detected, left=0, params=None):
+def _render(body, detected, pushed=0, params=None):
     import jinja2
     tpl = jinja2.Environment("{%", "%}", "{", "}").from_string(body)   # = gcode_macro.py
-    return tpl.render(params=params or {}, printer={
+    return tpl.render(params=params or {}, action_respond_info=lambda msg: "// " + msg, printer={
         "filament_switch_sensor head_sensor": {"filament_detected": detected},
-        "gcode_macro QC_HOTEND_SWITCH": {"left": left}})
+        "gcode_macro QC_HOTEND_SWITCH": {"pushed": pushed, "maxd": 800, "speed": 10.0, "chunk": 25}})
 
 
 class TestSequences(unittest.TestCase):
@@ -86,26 +86,41 @@ class TestCfg(unittest.TestCase):
 
 
 class TestHeadSwitch(unittest.TestCase):
-    """Same check as the machine QC feed: free first, then triggered by the filament."""
+    """Same check as the machine QC feed: switch free first, then YMS-3 feeds until it triggers.
+    No retract (the operator cuts the filament)."""
 
     def setUp(self):
         self.cfg = _generator().build("X12")
 
     def test_stuck_switch_fails_at_once(self):
-        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), True, params={"WAIT": "60"})
+        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), True, params={"MAXD": "800", "SPEED": "10"})
         self.assertIn("QC:HEAD_SWITCH:FAIL", out)
         self.assertNotIn("UPDATE_DELAYED_GCODE", out)
 
-    def test_free_switch_starts_the_wait(self):
-        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), False, params={"WAIT": "60"})
-        self.assertIn("VARIABLE=left VALUE=120", out)
-        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5", out)
+    def test_free_switch_starts_the_feed(self):
+        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), False, params={"MAXD": "800", "SPEED": "10"})
+        self.assertIn("VARIABLE=maxd VALUE=800", out)
+        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3", out)
 
-    def test_loop(self):
+    def test_feed_loop(self):
         loop = _body(self.cfg, "delayed_gcode _qc_hotend_switch")
-        self.assertIn("QC:HEAD_SWITCH:PASS", _render(loop, True, left=40))
-        self.assertIn("VALUE=39", _render(loop, False, left=40))
-        self.assertIn("QC:HEAD_SWITCH:FAIL", _render(loop, False, left=0))
+        step = _render(loop, False, pushed=100)
+        self.assertIn("SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder", step)
+        self.assertIn("G1 E25 F600.0", step)
+        self.assertIn("VARIABLE=pushed VALUE=125", step)
+        done = _render(loop, True, pushed=325)
+        self.assertIn("QC:HEAD_SWITCH:PASS", done)
+        self.assertIn("MOTION_QUEUE=\n", done)
+        self.assertNotIn("E-", done)                      # no retract
+        self.assertIn("QC:HEAD_SWITCH:FAIL", _render(loop, False, pushed=800))
+
+    def test_yms3_only_where_the_switch_is_checked(self):
+        """X12 drives YMS-3 on the HyperDrive slot 1; DD does not need a HyperDrive on the bench."""
+        self.assertIn("[extruder_stepper extruder2]\nextruder:\nstep_pin: hyperdrive_uart:PB12", self.cfg)
+        self.assertIn("[mcu hyperdrive_uart]", self.cfg)
+        dd = _generator().build("DD")
+        self.assertNotIn("hyperdrive_uart", dd)
+        self.assertNotIn("QC_HOTEND_SWITCH", dd)
 
     def test_cleanup_stops_the_loop(self):
         self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0\n",

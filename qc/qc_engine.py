@@ -256,7 +256,8 @@ HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> rep
 # An unplugged thermistor reads about -87 C (open circuit, min_temp -200 in the C-series cfg).
 HOTEND_PLUGGED_MIN_C = 0
 
-HOTEND_SWITCH_WAIT_S = 60
+HOTEND_FEED_MAX_MM = 800      # same budget as the machine QC feed (_QC_HEAD_FEED maxd)
+HOTEND_FEED_MM_S = 10
 
 _HEAT_START = {
     # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
@@ -267,13 +268,14 @@ _HEAT_START = {
     "timeout": 30,
 }
 _HEAD_SWITCH = {
-    # Same check as the machine QC feed (QC_HEAD_FEED): the switch is free first (else stuck),
-    # then triggers when the operator pushes a filament in (done while the head heats).
+    # Same check as the machine QC feed (QC_HEAD_FEED): the head switch is free first (else stuck),
+    # then the bench's YMS-3 feeds a filament until it triggers. No retract: the operator cuts it
+    # by hand (21/10). Runs while the head heats.
     "id": "head_switch",
-    "name": "插入耗材 / Insert a filament: head switch",
+    "name": "YMS-3 送料到喷头开关 / YMS-3 feed to the head switch",
     "type": "automated",
-    "macro": "QC_HOTEND_SWITCH WAIT=%d" % HOTEND_SWITCH_WAIT_S,
-    "timeout": HOTEND_SWITCH_WAIT_S + 30,
+    "macro": "QC_HOTEND_SWITCH MAXD=%d SPEED=%s" % (HOTEND_FEED_MAX_MM, HOTEND_FEED_MM_S),
+    "timeout": int(HOTEND_FEED_MAX_MM / HOTEND_FEED_MM_S * 1.5) + 30,
 }
 _HOTEND_TEMP = {
     "id": "hotend_temp",
