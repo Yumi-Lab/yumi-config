@@ -249,7 +249,10 @@ QC_TESTS_YMS12 = [
 # nozzle with their own thermometer and answers. A DD (direct drive) head also extrudes, to test
 # its motor. A head has no serial number: like an ADXL, every test is one head. The heater
 # stays on until the end (the DD extrusion needs it): QC_CLEANUP turns it off. ──
-HOTEND_TEMP = 230
+HOTEND_TEMP = 220
+# The operator's external probe on the heater block wall reads ~10 C below the nozzle sensor
+# (Nicolas 21/10: 220 C measured for 230, 210 for 220).
+HOTEND_WALL_READING = HOTEND_TEMP - 10
 HOTEND_EXTRUDE_MM = 30
 HOTEND_EXTRUDE_MM_S = 2.5
 HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> report device=
@@ -283,8 +286,8 @@ _HOTEND_TEMP = {
     "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
     "type": "visual",
     "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
-    "prompt": "测温仪读数约 %d°C 吗？\nDoes the thermometer read about %d °C?"
-              % (HOTEND_TEMP, HOTEND_TEMP),
+    "prompt": "外部测温仪读数约 %d°C 吗？\nDoes the external thermometer read about %d °C?"
+              % (HOTEND_WALL_READING, HOTEND_WALL_READING),
     "timeout": 300,
 }
 _HOTEND_EXTRUDE = {
