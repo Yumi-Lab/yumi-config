@@ -392,6 +392,10 @@ class Panel(ScreenPanel):
         if uid:
             self._set_mcu_uid(uid)
             return
+        # Part benches (ADXL, hot ends) load a cfg without [mcu_uid]: QUERY_MCU_UID would pop
+        # "Unknown command" at every start screen (21/10). The pad MAC stays displayed.
+        if not self._screen.printer.get_config_section("mcu_uid"):
+            return
         import threading
         threading.Thread(target=self._worker_mcu_uid, daemon=True).start()
 
