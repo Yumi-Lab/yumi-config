@@ -2,12 +2,12 @@
 """
 Generates the hot end bench cfgs (qc_printer_X12.cfg, qc_printer_DD.cfg) from qc_printer_C235.cfg.
 
-Bench = a C-series board alone, one print head plugged at a time: no axes (kinematics none), only
-what a head carries (heater, thermistor, hotend fan, part fan, head switch, extruder motor for a
-DD head).
-The C235 cfg stays the single source of the pins: its sections are copied verbatim. The two
-files differ only by the model of the _QC_MODE marker (the panel button); the test sequences
-live in qc_engine.HOTEND_TESTS.
+Bench = a C-series board, one print head plugged at a time: no axes (kinematics none), only what
+a head carries (heater, thermistor, hotend fan, part fan, extruder motor for a DD head).
+A head whose sequence checks the head switch (X12) also gets the switch and the bench's YMS-3
+feeder (extruder2 on the HyperDrive slot 1, so a HyperDrive must stay plugged on the bench).
+The C235 and HyperDrive cfgs stay the single source of the pins: their sections are copied
+verbatim. The test sequences live in qc_engine.HOTEND_TESTS.
 
 Usage:  python3 generate_hotend_cfg.py   (from yumi-config/qc/)
 """
@@ -16,10 +16,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_qc_cfg import parse_sections
-from qc_engine import HOTEND_DEVICES
+from qc_engine import HOTEND_DEVICES, HOTEND_TESTS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "qc_printer_C235.cfg")
+HD_SRC = os.path.join(HERE, "qc_printer_HYPERDRIVE.cfg")
 
 # Copied verbatim from the C235 cfg, in this order.
 C235_SECTIONS = [
@@ -30,10 +31,13 @@ C235_SECTIONS = [
     "verify_heater extruder",
     "fan",
     "fan_generic hotend_fan",
-    "filament_switch_sensor head_sensor",
     "gcode_macro QC_FAN_HOTEND",
     "gcode_macro QC_FAN_PART",
 ]
+# Head switch check (qc_engine head_switch test): switch from the C235, YMS-3 from the HyperDrive.
+SWITCH_C235_SECTIONS = ["filament_switch_sensor head_sensor"]
+SWITCH_HD_SECTIONS = ["mcu hyperdrive_uart", "extruder_stepper extruder2",
+                      "tmc2209 extruder_stepper extruder2"]
 
 HEADER = """\
 #####################################################################
@@ -74,32 +78,6 @@ gcode:
     M104 S{params.TEMP}
     RESPOND MSG="QC:HEAT_START:PASS"
 
-[gcode_macro QC_HOTEND_SWITCH]
-description: QC hot end - the head switch is free, then triggers within WAIT s when a filament is pushed in
-variable_left: 0
-gcode:
-    RESPOND MSG="QC:HEAD_SWITCH:START"
-    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
-        RESPOND TYPE=error MSG="QC HEAD_SWITCH: switch triggered before any filament (stuck switch)"
-        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
-    {% else %}
-        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=left VALUE={params.WAIT|int * 2}
-        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5
-    {% endif %}
-
-[delayed_gcode _qc_hotend_switch]
-gcode:
-    {% set left = printer["gcode_macro QC_HOTEND_SWITCH"].left|int %}
-    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
-        RESPOND MSG="QC:HEAD_SWITCH:PASS"
-    {% elif left <= 0 %}
-        RESPOND TYPE=error MSG="QC HEAD_SWITCH: no trigger while waiting for the filament"
-        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
-    {% else %}
-        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=left VALUE={left - 1}
-        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5
-    {% endif %}
-
 [gcode_macro QC_HOTEND_TEMP]
 description: QC hot end - M109 returns once the PID has settled (within 1 C, slope under 0.1 C/s)
 gcode:
@@ -128,6 +106,52 @@ gcode:
 """
 
 
+SWITCH_MACROS = """\
+[gcode_macro QC_HOTEND_SWITCH]
+description: QC hot end - the head switch is free, then YMS-3 feeds until it triggers (MAXD mm at most)
+variable_pushed: 0
+variable_maxd: 0
+variable_speed: 0
+variable_chunk: 25
+gcode:
+    RESPOND MSG="QC:HEAD_SWITCH:START"
+    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
+        RESPOND TYPE=error MSG="QC HEAD_SWITCH: switch triggered before the feed (stuck switch or filament left in the head)"
+        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
+    {% else %}
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE=0
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=maxd VALUE={params.MAXD|int}
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=speed VALUE={params.SPEED|float}
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3
+    {% endif %}
+
+# One chunk per step, the switch read between chunks (same loop as the machine _qc_head_step).
+# M83 and the sync are set again in each step: they do not persist across delayed_gcode runs.
+# No retract: the operator cuts the filament by hand.
+[delayed_gcode _qc_hotend_switch]
+gcode:
+    {% set v = printer["gcode_macro QC_HOTEND_SWITCH"] %}
+    {% set pushed = v.pushed|int %}
+    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
+        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
+        {action_respond_info("QC HEAD_SWITCH: filament at the head switch after %dmm" % pushed)}
+        RESPOND MSG="QC:HEAD_SWITCH:PASS"
+    {% elif pushed >= v.maxd|int %}
+        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
+        RESPOND TYPE=error MSG="QC HEAD_SWITCH: no trigger after {pushed}mm of feed (switch, head cable or YMS-3)"
+        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
+    {% else %}
+        M83
+        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder
+        G1 E{v.chunk|int} F{v.speed|float * 60}
+        M400
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE={pushed + v.chunk|int}
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3
+    {% endif %}
+
+"""
+
+
 def _section(text):
     """A section without the trailing blank and comment lines (they introduce the next one)."""
     lines = text.splitlines()
@@ -136,13 +160,20 @@ def _section(text):
     return "\n".join(lines) + "\n\n"
 
 
-def build(model):
-    with open(SRC) as f:
+def _copy(path, names):
+    with open(path) as f:
         sections = dict(parse_sections(f.read()))
-    missing = [name for name in C235_SECTIONS if name not in sections]
+    missing = [n for n in names if n not in sections]
     if missing:
-        raise SystemExit("Missing in qc_printer_C235.cfg: %s" % ", ".join(missing))
-    return HEADER % {"model": model} + "".join(_section(sections[n]) for n in C235_SECTIONS) + MACROS
+        raise SystemExit("Missing in %s: %s" % (os.path.basename(path), ", ".join(missing)))
+    return "".join(_section(sections[n]) for n in names)
+
+
+def build(model):
+    cfg = HEADER % {"model": model} + _copy(SRC, C235_SECTIONS)
+    if any(t["id"] == "head_switch" for t in HOTEND_TESTS[model]):
+        cfg += _copy(SRC, SWITCH_C235_SECTIONS) + _copy(HD_SRC, SWITCH_HD_SECTIONS) + SWITCH_MACROS
+    return cfg + MACROS
 
 
 def main():
