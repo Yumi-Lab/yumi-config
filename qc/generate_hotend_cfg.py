@@ -5,7 +5,7 @@ Generates the hot end bench cfgs (qc_printer_X12.cfg, qc_printer_DD.cfg) from qc
 Bench = a C-series board, one print head plugged at a time: no axes (kinematics none), only what
 a head carries (heater, thermistor, hotend fan, part fan, extruder motor for a DD head).
 A head whose sequence checks the head switch (X12) also gets the switch and the bench's YMS-3
-feeder (extruder2 on the HyperDrive slot 1, so a HyperDrive must stay plugged on the bench).
+feeder (qc_engine.HOTEND_FEEDER, HyperDrive slot 1: a HyperDrive must stay plugged on the bench).
 The C235 and HyperDrive cfgs stay the single source of the pins: their sections are copied
 verbatim. The test sequences live in qc_engine.HOTEND_TESTS.
 
@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from generate_qc_cfg import parse_sections
-from qc_engine import HOTEND_DEVICES, HOTEND_TESTS
+from qc_engine import HOTEND_DEVICES, HOTEND_FEEDER, HOTEND_TESTS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "qc_printer_C235.cfg")
@@ -36,8 +36,8 @@ C235_SECTIONS = [
 ]
 # Head switch check (qc_engine head_switch test): switch from the C235, YMS-3 from the HyperDrive.
 SWITCH_C235_SECTIONS = ["filament_switch_sensor head_sensor"]
-SWITCH_HD_SECTIONS = ["mcu hyperdrive_uart", "extruder_stepper extruder2",
-                      "tmc2209 extruder_stepper extruder2"]
+SWITCH_HD_SECTIONS = ["mcu hyperdrive_uart", "extruder_stepper " + HOTEND_FEEDER,
+                      "tmc2209 extruder_stepper " + HOTEND_FEEDER]
 
 HEADER = """\
 #####################################################################
@@ -85,12 +85,18 @@ gcode:
     RESPOND MSG="QC:HOTEND_TEMP:VISUAL"
 
 [gcode_macro QC_HOTEND_EXTRUDE]
-description: QC DD head - extrude MM mm at SPEED mm/s through the hot nozzle (extruder motor check)
+description: QC hot end - extrude MM mm at SPEED mm/s through the hot nozzle: the head motor (DD), or FEEDER synced to it (X12, YMS-3)
 gcode:
     RESPOND MSG="QC:HOTEND_EXTRUDE:START"
+    {% if params.FEEDER %}
+        SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=extruder
+    {% endif %}
     M83
     G1 E{params.MM} F{params.SPEED|float * 60}
     M400
+    {% if params.FEEDER %}
+        SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=
+    {% endif %}
     RESPOND MSG="QC:HOTEND_EXTRUDE:VISUAL"
 
 [gcode_macro QC_CLEANUP]
@@ -107,10 +113,11 @@ gcode:
 
 SWITCH_MACROS = """\
 [gcode_macro QC_HOTEND_SWITCH]
-description: QC hot end - the head switch is free, then YMS-3 feeds until it triggers (MAXD mm at most)
+description: QC hot end - the head switch is free, then FEEDER (YMS-3) feeds until it triggers (MAXD mm at most)
 variable_pushed: 0
 variable_maxd: 0
 variable_speed: 0
+variable_feeder: ""
 variable_chunk: 25
 gcode:
     RESPOND MSG="QC:HEAD_SWITCH:START"
@@ -121,6 +128,7 @@ gcode:
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE=0
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=maxd VALUE={params.MAXD|int}
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=speed VALUE={params.SPEED|float}
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=feeder VALUE="'{params.FEEDER}'"
         UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.1
     {% endif %}
 
@@ -132,16 +140,16 @@ gcode:
     {% set v = printer["gcode_macro QC_HOTEND_SWITCH"] %}
     {% set pushed = v.pushed|int %}
     {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
-        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
+        SYNC_EXTRUDER_MOTION EXTRUDER={v.feeder} MOTION_QUEUE=
         {action_respond_info("QC HEAD_SWITCH: filament at the head switch after %dmm" % pushed)}
         RESPOND MSG="QC:HEAD_SWITCH:PASS"
     {% elif pushed >= v.maxd|int %}
-        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
+        SYNC_EXTRUDER_MOTION EXTRUDER={v.feeder} MOTION_QUEUE=
         RESPOND TYPE=error MSG="QC HEAD_SWITCH: no trigger after {pushed}mm of feed (switch, head cable or YMS-3)"
         RESPOND MSG="QC:HEAD_SWITCH:FAIL"
     {% else %}
         M83
-        SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder
+        SYNC_EXTRUDER_MOTION EXTRUDER={v.feeder} MOTION_QUEUE=extruder
         G1 E{v.chunk|int} F{v.speed|float * 60}
         M400
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE={pushed + v.chunk|int}
@@ -155,13 +163,13 @@ gcode:
     RESPOND MSG="QC:FILAMENT_CUT:VISUAL"
 
 [gcode_macro QC_HOTEND_RETRACT]
-description: QC hot end - YMS-3 pulls the cut filament back MM mm
+description: QC hot end - FEEDER (YMS-3) pulls the cut filament back MM mm
 gcode:
     M83
-    SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder
+    SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=extruder
     G1 E-{params.MM|float} F{params.SPEED|float * 60}
     M400
-    SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
+    SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=
 
 """
 

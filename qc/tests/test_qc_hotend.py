@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime
 
 from qc.qc_engine import (HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
-                          HOTEND_WALL_READING, QCEngine, hotend_plugged, hotend_report,
+                          QCEngine, hotend_plugged, hotend_report, measure_value,
                           tests_for_model)
 
 QC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,24 +31,29 @@ def _render(body, detected, pushed=0, params=None):
     tpl = jinja2.Environment("{%", "%}", "{", "}").from_string(body)   # = gcode_macro.py
     return tpl.render(params=params or {}, action_respond_info=lambda msg: "// " + msg, printer={
         "filament_switch_sensor head_sensor": {"filament_detected": detected},
-        "gcode_macro QC_HOTEND_SWITCH": {"pushed": pushed, "maxd": 800, "speed": 10.0, "chunk": 25}})
+        "gcode_macro QC_HOTEND_SWITCH": {"pushed": pushed, "maxd": 800, "speed": 10.0, "chunk": 25,
+                                         "feeder": "extruder2"}})
 
 
 class TestSequences(unittest.TestCase):
     def test_x12_heats_and_checks_the_fans(self):
         self.assertEqual([t["id"] for t in tests_for_model("X12")],
                          ["heat_start", "head_switch", "fan_hotend", "fan_part", "hotend_temp",
-                          "filament_cut"])
+                          "hotend_extrude", "filament_cut"])
 
     def test_dd_also_extrudes(self):
         self.assertEqual([t["id"] for t in tests_for_model("DD")],
                          ["heat_start", "fan_hotend", "fan_part", "hotend_temp", "hotend_extrude"])
 
-    def test_operator_reads_the_target_temperature(self):
+    def test_operator_types_the_reading(self):
         temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
-        self.assertEqual(temp["type"], "visual")
-        self.assertIn("about %d °C" % HOTEND_WALL_READING, temp["prompt"])   # read on the block wall
+        self.assertEqual((temp["type"], temp["measure"]), ("visual", "hotend_wall_c"))
         self.assertTrue(temp["macro"].endswith("TEMP=%d" % HOTEND_TEMP))
+
+    def test_keypad_value_has_one_implied_decimal(self):
+        self.assertEqual(measure_value("2113"), 211.3)
+        self.assertEqual(measure_value("5"), 0.5)
+        self.assertIsNone(measure_value(""))
 
 
 class TestPlugged(unittest.TestCase):
@@ -94,8 +99,20 @@ class TestCfg(unittest.TestCase):
         params = {"TEMP": "230", "MM": "30", "SPEED": "2.5"}
         out = env.from_string(_macro_body(cfg, "QC_HOTEND_EXTRUDE")).render(params=params)
         self.assertIn("G1 E30 F150.0", out)
+        self.assertNotIn("SYNC_EXTRUDER_MOTION", out)        # DD: the head's own motor
         out = env.from_string(_macro_body(cfg, "QC_HOTEND_TEMP")).render(params=params)
         self.assertIn("M109 S230", out)
+
+    def test_x12_extrudes_with_yms3(self):
+        import jinja2
+        x12 = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_extrude")
+        params = dict(kv.split("=") for kv in x12["macro"].split()[1:])
+        body = _macro_body(_generator().build("X12"), "QC_HOTEND_EXTRUDE")
+        out = jinja2.Environment("{%", "%}", "{", "}").from_string(body).render(params=params)
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        self.assertEqual(lines[1:5], ["SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder",
+                                      "M83", "G1 E60 F150.0", "M400"])
+        self.assertEqual(lines[5], "SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=")
 
 
 class TestHeadSwitch(unittest.TestCase):
@@ -154,15 +171,23 @@ class TestRun(unittest.TestCase):
     def test_x12_pass_gives_one_head_report(self):
         engine = QCEngine()
         engine.start("02810E28F273", model="X12")
-        for tid in ("HEAT_START", "HEAD_SWITCH", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP", "FILAMENT_CUT"):
+        for tid in ("HEAT_START", "HEAD_SWITCH", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP",
+                    "HOTEND_EXTRUDE", "FILAMENT_CUT"):
             engine.process_gcode_response("QC:%s:START" % tid)
             if tid in ("HEAT_START", "HEAD_SWITCH"):
                 engine.process_gcode_response("QC:%s:PASS" % tid)
             else:
                 engine.process_gcode_response("QC:%s:VISUAL" % tid)
-                engine.record_visual_result(True)
+                if tid == "HOTEND_TEMP":       # what the wizard does with the keypad entry
+                    engine.record_measure("hotend_wall_c", measure_value("2113"))
+                    engine.record_visual_result(True, "hotend_wall_c=211.3")
+                else:
+                    engine.record_visual_result(True)
         report = hotend_report(engine.generate_report(), "X12", datetime(2026, 10, 21, 9, 30, 5))
         self.assertEqual(report["overall_result"], "PASS")
+        self.assertEqual(report["measures"], {"hotend_wall_c": 211.3})
+        temp = next(t for t in report["tests"] if t["id"] == "hotend_temp")
+        self.assertEqual(temp["details"], "hotend_wall_c=211.3")
         self.assertEqual(report["printer_id"], "HOTEND-X12-02810E28F273-20261021-093005")
         self.assertEqual((report["yumi_config"], report["machine_uid"]), ("device=HOTEND-X12", ""))
         self.assertNotIn("machine_uid_missing", report)

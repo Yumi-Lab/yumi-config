@@ -250,10 +250,10 @@ QC_TESTS_YMS12 = [
 # its motor. A head has no serial number: like an ADXL, every test is one head. The heater
 # stays on until the end (the DD extrusion needs it): QC_CLEANUP turns it off. ──
 HOTEND_TEMP = 220
-# The operator's external probe on the heater block wall reads ~10 C below the nozzle sensor
-# (Nicolas 21/10: 220 C measured for 230, 210 for 220).
-HOTEND_WALL_READING = HOTEND_TEMP - 10
-HOTEND_EXTRUDE_MM = 30
+HOTEND_EXTRUDE_MM = 30         # DD: its own motor, the filament already at the nozzle
+HOTEND_X12_EXTRUDE_MM = 60     # X12: YMS-3 pushes from the head switch out of the nozzle (the
+                               # machine QC cutter purge, 21/10)
+HOTEND_FEEDER = "extruder2"    # the bench's YMS-3 (HyperDrive slot 1) feeds the X12 heads
 HOTEND_EXTRUDE_MM_S = 2.5
 HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> report device=
 # An unplugged thermistor reads about -87 C (open circuit, min_temp -200 in the C-series cfg).
@@ -278,7 +278,8 @@ _HEAD_SWITCH = {
     "id": "head_switch",
     "name": "YMS-3 送料到喷头开关 / YMS-3 feed to the head switch",
     "type": "automated",
-    "macro": "QC_HOTEND_SWITCH MAXD=%d SPEED=%s" % (HOTEND_FEED_MAX_MM, HOTEND_FEED_MM_S),
+    "macro": "QC_HOTEND_SWITCH MAXD=%d SPEED=%s FEEDER=%s" % (HOTEND_FEED_MAX_MM, HOTEND_FEED_MM_S,
+                                                             HOTEND_FEEDER),
     "timeout": int(HOTEND_FEED_MAX_MM / HOTEND_FEED_MM_S * 1.5) + 30,
 }
 _HOTEND_TEMP = {
@@ -286,8 +287,10 @@ _HOTEND_TEMP = {
     "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
     "type": "visual",
     "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
-    "prompt": "外部测温仪读数约 %d°C 吗？\nDoes the external thermometer read about %d °C?"
-              % (HOTEND_WALL_READING, HOTEND_WALL_READING),
+    # The operator only types the reading on a keypad (4 digits, one decimal: 2113 -> 211.3) and
+    # presses OK; it goes into the report (measures + test details). No yes/no (21/10).
+    "measure": "hotend_wall_c",
+    "prompt": "外部测温仪读数？\nExternal thermometer reading?",
     "timeout": 300,
 }
 _HOTEND_EXTRUDE = {
@@ -306,14 +309,29 @@ _FILAMENT_CUT = {
     "type": "visual",
     "macro": "QC_HOTEND_CUT",
     "prompt": "剪断耗材后按“是”\nCut the filament, then press YES",
-    "cleanup": "QC_HOTEND_RETRACT MM=%d SPEED=%s" % (HOTEND_RETRACT_MM, HOTEND_FEED_MM_S),
+    "cleanup": "QC_HOTEND_RETRACT MM=%d SPEED=%s FEEDER=%s" % (HOTEND_RETRACT_MM, HOTEND_FEED_MM_S,
+                                                              HOTEND_FEEDER),
     "timeout": 30,
 }
+# X12: no motor on the head, YMS-3 pushes the filament from the switch through the hot nozzle.
+_X12_EXTRUDE = dict(
+    _HOTEND_EXTRUDE,
+    macro="QC_HOTEND_EXTRUDE MM=%d SPEED=%s FEEDER=%s" % (HOTEND_X12_EXTRUDE_MM, HOTEND_EXTRUDE_MM_S,
+                                                          HOTEND_FEEDER),
+    prompt="喷嘴出料了吗？\nDid filament come out of the nozzle?")
 _FANS = [_QC_BY_ID["fan_hotend"], _QC_BY_ID["fan_part"]]
 HOTEND_TESTS = {
-    "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP, _FILAMENT_CUT],
+    "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP, _X12_EXTRUDE, _FILAMENT_CUT],
     "DD": [_HEAT_START] + _FANS + [_HOTEND_TEMP, _HOTEND_EXTRUDE],
 }
+
+
+MEASURE_DIGITS_MAX = 4
+
+
+def measure_value(digits):
+    """Keypad entry -> value: 4 digits at most, one implied decimal ("2113" -> 211.3), or None."""
+    return int(digits) / 10.0 if digits else None
 
 
 def hotend_plugged(temperature):
@@ -376,6 +394,7 @@ class QCEngine:
         self._on_qc_complete = None
         self._ztap_triggers = []  # trigger_z collectés pendant z_tap_calib
         self._test_log = {}       # lignes d'info/erreur capturées par test (rapport)
+        self.measures = {}        # values typed by the operator (hot end: wall temperature)
 
     def set_callbacks(self, on_state_change=None, on_test_complete=None,
                       on_visual_prompt=None, on_qc_complete=None):
@@ -395,6 +414,7 @@ class QCEngine:
         self.results = {}
         self._ztap_triggers = []
         self._test_log = {}
+        self.measures = {}
         for test in self.tests:
             self.results[test["id"]] = {
                 "result": QCResult.PENDING,
@@ -552,15 +572,20 @@ class QCEngine:
 
         return False
 
-    def record_visual_result(self, passed):
-        """Called by the UI when operator responds to a visual check."""
+    def record_visual_result(self, passed, details=""):
+        """Called by the UI when operator responds to a visual check (details: a typed value)."""
         test = self.get_current_test()
         if not test:
             return
         if passed:
-            self._record_result(test["id"], QCResult.PASS)
+            self._record_result(test["id"], QCResult.PASS, details)
         else:
-            self._record_result(test["id"], QCResult.FAIL, "Visual check: operator reported failure")
+            self._record_result(test["id"], QCResult.FAIL, "; ".join(
+                filter(None, ["Visual check: operator reported failure", details])))
+
+    def record_measure(self, key, value):
+        """A value typed by the operator, kept in the report's measures."""
+        self.measures[key] = value
 
     def record_check(self, passed, details=""):
         """Résultat d'un contrôle exécuté par le panel lui-même, sans macro
@@ -648,6 +673,8 @@ class QCEngine:
             "failed_tests": failed,
             "skipped_tests": skipped,
         }
+        if self.measures:
+            report["measures"] = dict(self.measures)
 
         for test in self.tests:
             r = self.results.get(test["id"], {})
