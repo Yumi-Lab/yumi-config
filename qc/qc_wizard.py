@@ -776,8 +776,10 @@ class Panel(ScreenPanel):
             batch_btn.set_size_request(160, 55)
             btn_box.pack_start(batch_btn, False, False, 0)
 
-        # Finish: save report + restore production cfg + restart Klipper
-        if os.path.exists(BACKUP_CFG):
+        # Finish: save report + restore production cfg + restart Klipper. Not on the hot end benches:
+        # a bench pad's "production" cfg is a stale bench cfg (YMS12 on bench 2), Finish restored it
+        # and Klipper could not start (21/10, twice). Between two heads: New QC.
+        if os.path.exists(BACKUP_CFG) and self._selected_size not in HOTEND_DEVICES:
             finish_btn = self._gtk.Button("complete", "完成 / Finish", "color3")
             finish_btn.connect("clicked", self._on_finish_qc)
             finish_btn.set_size_request(160, 55)
