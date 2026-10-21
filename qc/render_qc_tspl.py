@@ -343,7 +343,12 @@ def _without_bench_position(elements):
 # HyperDrive (14/10/2026) : l'étiquette YMS (Nicolas : « on garde la même
 # étiquette, YMS -> HyperDrive » ; {qc_model} = HYPERDRIVE, {code} = UID STM32),
 # sans la case position banc : une seule carte à la fois sur le banc.
-DEFAULTS["hyperdrive"] = {sec: _without_bench_position(els) for sec, els in DEFAULTS["yms"].items()}
+# The HyperDrive board takes 24 V 4 A (Nicolas 21/10), the YMS PRO 2 A: same edit in the live
+# qc-label-hyperdrive.json.
+HD_INPUT_CURRENT = "4A"
+DEFAULTS["hyperdrive"] = {
+    sec: [dict(el, c=HD_INPUT_CURRENT) if el.get("c") == "2A" else el for el in _without_bench_position(els)]
+    for sec, els in DEFAULTS["yms"].items()}
 
 
 def render_qc_label(kind, section, data):
