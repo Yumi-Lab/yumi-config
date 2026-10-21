@@ -250,6 +250,11 @@ QC_TESTS_YMS12 = [
 # its motor. A head has no serial number: like an ADXL, every test is one head. The heater
 # stays on until the end (the DD extrusion needs it): QC_CLEANUP turns it off. ──
 HOTEND_TEMP = 220
+# The operator's external probe on the heater block wall reads ~10 C below the nozzle sensor
+# (Nicolas 21/10: 220 measured for 230, 210 for 220). A reading more than 8 C away from that is
+# not conform (210 and 215 pass, 200 fails).
+HOTEND_WALL_READING = HOTEND_TEMP - 10
+HOTEND_WALL_TOLERANCE_C = 8
 HOTEND_EXTRUDE_MM = 30         # DD: its own motor, the filament already at the nozzle
 HOTEND_X12_EXTRUDE_MM = 60     # X12: YMS-3 pushes from the head switch out of the nozzle (the
                                # machine QC cutter purge, 21/10)
@@ -288,8 +293,10 @@ _HOTEND_TEMP = {
     "type": "visual",
     "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
     # The operator only types the reading on a keypad (whole degrees, 3 digits: the wall reading
-    # moves too much for a decimal, 21/10) and presses OK; it goes into the report (measures + test details). No yes/no (21/10).
+    # moves too much for a decimal, 21/10) and presses OK; the bench judges it (measure_verdict)
+    # and it goes into the report (measures + test details). No yes/no (21/10).
     "measure": "hotend_wall_c",
+    "expect": (HOTEND_WALL_READING, HOTEND_WALL_TOLERANCE_C),
     "prompt": "外部测温仪读数？\nExternal thermometer reading?",
     "timeout": 300,
 }
@@ -332,6 +339,13 @@ MEASURE_DIGITS_MAX = 3
 def measure_value(digits):
     """Keypad entry -> whole degrees ("211" -> 211), or None when nothing was typed."""
     return int(digits) if digits else None
+
+
+def measure_verdict(test, value):
+    """(passed, details) of a typed value against the test's expected (value, tolerance)."""
+    expected, tolerance = test["expect"]
+    details = "%s=%d (expected %d +-%d)" % (test["measure"], value, expected, tolerance)
+    return abs(value - expected) <= tolerance, details
 
 
 def hotend_plugged(temperature):

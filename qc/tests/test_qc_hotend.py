@@ -6,6 +6,7 @@ from datetime import datetime
 
 from qc.qc_engine import (HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
                           MEASURE_DIGITS_MAX, QCEngine, hotend_plugged, hotend_report, measure_value,
+                          measure_verdict,
                           tests_for_model)
 
 QC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +50,15 @@ class TestSequences(unittest.TestCase):
         temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
         self.assertEqual((temp["type"], temp["measure"]), ("visual", "hotend_wall_c"))
         self.assertTrue(temp["macro"].endswith("TEMP=%d" % HOTEND_TEMP))
+
+    def test_reading_tolerance(self):
+        """Nicolas 21/10: 220 C asked, the wall reads ~210; 210 and 215 pass, 200 fails, more than
+        8 C away is not conform."""
+        temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
+        verdict = {v: measure_verdict(temp, v)[0] for v in (210, 215, 200, 202, 218, 201, 219)}
+        self.assertEqual(verdict, {210: True, 215: True, 200: False, 202: True, 218: True,
+                                   201: False, 219: False})
+        self.assertEqual(measure_verdict(temp, 200)[1], "hotend_wall_c=200 (expected 210 +-8)")
 
     def test_keypad_value_in_whole_degrees(self):
         self.assertEqual(measure_value("211"), 211)
@@ -180,14 +190,15 @@ class TestRun(unittest.TestCase):
                 engine.process_gcode_response("QC:%s:VISUAL" % tid)
                 if tid == "HOTEND_TEMP":       # what the wizard does with the keypad entry
                     engine.record_measure("hotend_wall_c", measure_value("211"))
-                    engine.record_visual_result(True, "hotend_wall_c=211")
+                    temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
+                    engine.record_visual_result(*measure_verdict(temp, 211))
                 else:
                     engine.record_visual_result(True)
         report = hotend_report(engine.generate_report(), "X12", datetime(2026, 10, 21, 9, 30, 5))
         self.assertEqual(report["overall_result"], "PASS")
         self.assertEqual(report["measures"], {"hotend_wall_c": 211})
         temp = next(t for t in report["tests"] if t["id"] == "hotend_temp")
-        self.assertEqual(temp["details"], "hotend_wall_c=211")
+        self.assertEqual(temp["details"], "hotend_wall_c=211 (expected 210 +-8)")
         self.assertEqual(report["printer_id"], "HOTEND-X12-02810E28F273-20261021-093005")
         self.assertEqual((report["yumi_config"], report["machine_uid"]), ("device=HOTEND-X12", ""))
         self.assertNotIn("machine_uid_missing", report)
