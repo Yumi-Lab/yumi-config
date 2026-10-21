@@ -256,7 +256,8 @@ class TestHyperdriveLabel(unittest.TestCase):
     def test_no_bench_position_box(self, _m):
         for sec, els in render_qc_tspl.DEFAULTS["hyperdrive"].items():
             self.assertNotIn("{bench_position}", [e.get("c") for e in els])
-            self.assertEqual(len(els), len(render_qc_tspl.DEFAULTS["yms"][sec]) - 2)
+            always = [e for e in els if "if" not in e]   # the USB badge is drawn on USB boards only
+            self.assertEqual(len(always), len(render_qc_tspl.DEFAULTS["yms"][sec]) - 2)
         self.assertIn("hyperdrive", render_qc_tspl.TEMPLATE_URL)
 
     def test_board_input_current(self, _m):
@@ -379,4 +380,14 @@ class TestHyperdriveUsb(unittest.TestCase):
         self.assertIn("conn=USB", rep["firmware"])
         from qc.qc_yms import _label_kind_section_data
         kind, _section, data = _label_kind_section_data(rep)
-        self.assertEqual((kind, data["qc_model"]), ("hyperdrive", "HD-USB"))   # fits the 50 mm label
+        self.assertEqual((kind, data["qc_model"], data["usb"]), ("hyperdrive", HD_MODEL, "USB"))
+        uart = dict(rep, qc_model=HD_MODEL)
+        self.assertEqual(_label_kind_section_data(uart)[2]["usb"], "")
+
+    def test_usb_badge_only_on_usb_boards(self):
+        """One HyperDrive template: the badge elements carry "if": "{usb}"."""
+        badge = [e for e in render_qc_tspl.DEFAULTS["hyperdrive"]["pass"] if e.get("if") == "{usb}"]
+        self.assertEqual([e["t"] for e in badge], ["frame", "text"])
+        dark = lambda usb: sum(255 - p for p in render_qc_tspl.render_image(badge, {"usb": usb}, 50, 30).getdata())
+        self.assertEqual(dark(""), 0)
+        self.assertGreater(dark("USB"), 0)

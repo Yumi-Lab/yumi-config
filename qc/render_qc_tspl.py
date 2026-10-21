@@ -148,6 +148,10 @@ def render_image(section_elements, data, w_mm, h_mm):
     d = ImageDraw.Draw(img)
 
     for e in section_elements:
+        # "if": a placeholder; the element is drawn only when it is not empty (21/10: the USB
+        # badge of the HyperDrive label, one template for the UART and USB boards).
+        if "if" in e and not _subst(e["if"], data).strip():
+            continue
         t = e.get("t")
         if t == "frame":
             x1, y1 = DOT(e["x"]), DOT(e["y"])
@@ -346,8 +350,19 @@ def _without_bench_position(elements):
 # The HyperDrive board takes 24 V 4 A (Nicolas 21/10), the YMS PRO 2 A: same edit in the live
 # qc-label-hyperdrive.json.
 HD_INPUT_CURRENT = "4A"
+# HyperDrive USB (21/10, Nicolas): the same HYPERDRIVE name, plus a "USB" badge in a rounded frame
+# (like the Smart P1 and Active Pen logos), top right on PASS, right under the title on FAIL
+# (the title line is full there). Drawn only when {usb} is set (USB boards).
+def _usb_badge(x, y):
+    return [{"t": "frame", "x": x, "y": y, "w": 8.4, "h": 4.6, "radius": 1.2, "thick": 0.4, "if": "{usb}"},
+            {"t": "text", "x": x + 4.2, "y": y + 0.6, "sz": 3.0, "weight": "bold", "align": "center",
+             "c": "{usb}", "if": "{usb}"}]
+
+
+HD_USB_BADGE = {"pass": _usb_badge(39.55, 2.0), "fail": _usb_badge(38.375, 7.0)}   # Nicolas 21/10: 10 / 5 dots left
 DEFAULTS["hyperdrive"] = {
     sec: [dict(el, c=HD_INPUT_CURRENT) if el.get("c") == "2A" else el for el in _without_bench_position(els)]
+    + HD_USB_BADGE[sec]
     for sec, els in DEFAULTS["yms"].items()}
 
 
