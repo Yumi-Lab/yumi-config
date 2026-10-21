@@ -64,8 +64,7 @@ path: ~/printer_data/gcodes
 
 [printer]
 kinematics: none
-max_velocity: 1
-max_accel: 1
+%(limits)s
 
 """
 
@@ -122,7 +121,7 @@ gcode:
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE=0
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=maxd VALUE={params.MAXD|int}
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=speed VALUE={params.SPEED|float}
-        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.1
     {% endif %}
 
 # One chunk per step, the switch read between chunks (same loop as the machine _qc_head_step).
@@ -146,8 +145,23 @@ gcode:
         G1 E{v.chunk|int} F{v.speed|float * 60}
         M400
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE={pushed + v.chunk|int}
-        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.1
     {% endif %}
+
+[gcode_macro QC_HOTEND_CUT]
+description: QC hot end - the operator cuts the filament; the answer runs QC_HOTEND_RETRACT
+gcode:
+    RESPOND MSG="QC:FILAMENT_CUT:START"
+    RESPOND MSG="QC:FILAMENT_CUT:VISUAL"
+
+[gcode_macro QC_HOTEND_RETRACT]
+description: QC hot end - YMS-3 pulls the cut filament back MM mm
+gcode:
+    M83
+    SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=extruder
+    G1 E-{params.MM|float} F{params.SPEED|float * 60}
+    M400
+    SYNC_EXTRUDER_MOTION EXTRUDER=extruder2 MOTION_QUEUE=
 
 """
 
@@ -160,17 +174,28 @@ def _section(text):
     return "\n".join(lines) + "\n\n"
 
 
-def _copy(path, names):
+def _sections(path, names):
     with open(path) as f:
         sections = dict(parse_sections(f.read()))
     missing = [n for n in names if n not in sections]
     if missing:
         raise SystemExit("Missing in %s: %s" % (os.path.basename(path), ", ".join(missing)))
-    return "".join(_section(sections[n]) for n in names)
+    return [sections[n] for n in names]
+
+
+def _copy(path, names):
+    return "".join(_section(text) for text in _sections(path, names))
+
+
+def _printer_limits():
+    """The C235 speed and acceleration limits. Klipper derives the extrude-only acceleration from
+    max_accel: a placeholder 1 made every 25 mm feed step last ~20 s (21/10)."""
+    printer = _sections(SRC, ["printer"])[0].splitlines()
+    return "\n".join(l for l in printer if l.split(":")[0].strip() in ("max_velocity", "max_accel"))
 
 
 def build(model):
-    cfg = HEADER % {"model": model} + _copy(SRC, C235_SECTIONS)
+    cfg = HEADER % {"model": model, "limits": _printer_limits()} + _copy(SRC, C235_SECTIONS)
     if any(t["id"] == "head_switch" for t in HOTEND_TESTS[model]):
         cfg += _copy(SRC, SWITCH_C235_SECTIONS) + _copy(HD_SRC, SWITCH_HD_SECTIONS) + SWITCH_MACROS
     return cfg + MACROS

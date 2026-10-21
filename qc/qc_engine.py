@@ -257,7 +257,8 @@ HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> rep
 HOTEND_PLUGGED_MIN_C = 0
 
 HOTEND_FEED_MAX_MM = 800      # same budget as the machine QC feed (_QC_HEAD_FEED maxd)
-HOTEND_FEED_MM_S = 10
+HOTEND_FEED_MM_S = 50          # the HyperDrive bench stresses the YMS feeders up to 100 mm/s
+HOTEND_RETRACT_MM = 40         # after the operator cuts the filament (21/10)
 
 _HEAT_START = {
     # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
@@ -294,9 +295,20 @@ _HOTEND_EXTRUDE = {
     "prompt": "电机转动，喷嘴出料了吗？\nDid the motor turn and filament come out of the nozzle?",
     "timeout": 120,
 }
+_FILAMENT_CUT = {
+    # Last step: the operator cuts the filament fed by head_switch; the answer runs the cleanup,
+    # YMS-3 pulls the cut filament back so the next head can go on.
+    "id": "filament_cut",
+    "name": "剪断耗材 / Cut the filament",
+    "type": "visual",
+    "macro": "QC_HOTEND_CUT",
+    "prompt": "剪断耗材后按“是”\nCut the filament, then press YES",
+    "cleanup": "QC_HOTEND_RETRACT MM=%d SPEED=%s" % (HOTEND_RETRACT_MM, HOTEND_FEED_MM_S),
+    "timeout": 30,
+}
 _FANS = [_QC_BY_ID["fan_hotend"], _QC_BY_ID["fan_part"]]
 HOTEND_TESTS = {
-    "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP],
+    "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP, _FILAMENT_CUT],
     "DD": [_HEAT_START] + _FANS + [_HOTEND_TEMP, _HOTEND_EXTRUDE],
 }
 
