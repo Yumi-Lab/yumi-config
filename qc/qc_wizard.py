@@ -80,7 +80,8 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 # Import QC engine from ks_includes (symlinked there by install.sh)
 try:
     from ks_includes.qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
-                                       HOTEND_DEVICES, hotend_plugged, hotend_report)
+                                       HOTEND_DEVICES, MEASURE_DIGITS_MAX, hotend_plugged,
+                                       hotend_report, measure_value)
     from ks_includes.qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                                      ADXL345_DEVID, axis_stdevs, build_adxl_report,
                                      devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -132,7 +133,8 @@ except ImportError:
     import os
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
-                           HOTEND_DEVICES, hotend_plugged, hotend_report)
+                           HOTEND_DEVICES, MEASURE_DIGITS_MAX, hotend_plugged,
+                           hotend_report, measure_value)
     from qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                          ADXL345_DEVID, axis_stdevs, build_adxl_report,
                          devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -206,6 +208,7 @@ class Panel(ScreenPanel):
             on_qc_complete=self._on_qc_complete,
         )
         self._visual_dialog = None
+        self._measure_digits = ""   # keypad entry of a "measure" test (digits, one implied decimal)
         self._current_report = None
         self._timeout_id = None
         self._restart_retries = 0
@@ -833,6 +836,7 @@ class Panel(ScreenPanel):
             self._visual_dialog = None
 
         prompt = test.get("prompt", f"Test {test['name']} OK ?")
+        measure = test.get("measure")
 
         # Build dialog content
         content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
@@ -849,7 +853,7 @@ class Panel(ScreenPanel):
         question_label = Gtk.Label()
         question_label.set_markup(f"<span size='xx-large'>{prompt}</span>")
         question_label.set_line_wrap(True)
-        question_label.set_max_width_chars(40)
+        question_label.set_max_width_chars(24 if measure else 40)
         question_label.set_justify(Gtk.Justification.CENTER)
         content_box.pack_start(question_label, False, False, 20)
 
@@ -859,6 +863,20 @@ class Panel(ScreenPanel):
             {"name": _("否 / NO"), "response": Gtk.ResponseType.NO,
              "style": "color2"},
         ]
+        if measure:
+            # The operator only types the reading (21/10): digits, one implied decimal (2113 ->
+            # 211.3), then OK. Question and value on the left, keypad on the right.
+            self._measure_digits = ""
+            self.labels["measure"] = Gtk.Label()
+            content_box.pack_start(self.labels["measure"], False, False, 10)
+            self._show_measure()
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=30)
+            row.set_halign(Gtk.Align.CENTER)
+            row.set_valign(Gtk.Align.CENTER)
+            row.pack_start(content_box, False, False, 0)
+            row.pack_start(self._measure_pad(), False, False, 0)
+            content_box = row
+            buttons = [{"name": _("确认 / OK"), "response": Gtk.ResponseType.YES, "style": "color3"}]
 
         self._visual_dialog = self._gtk.Dialog(
             _("Visual Check"),
@@ -867,16 +885,53 @@ class Panel(ScreenPanel):
             self._on_visual_dialog_response,
         )
 
+    def _measure_pad(self):
+        """Digits 1-9, backspace, 0 (no decimal key: the last digit is the decimal)."""
+        grid = Gtk.Grid(row_spacing=6, column_spacing=6)
+        for i, key in enumerate(["1", "2", "3", "4", "5", "6", "7", "8", "9", "B", "0"]):
+            if key == "B":
+                btn = self._gtk.Button("backspace", scale=0.66, style="numpad_key")
+            else:
+                btn = self._gtk.Button(label=key, style="numpad_key")
+            btn.set_size_request(76, 62)
+            btn.connect("clicked", self._on_measure_key, key)
+            grid.attach(btn, i % 3, i // 3, 1, 1)
+        return grid
+
+    def _on_measure_key(self, widget, key):
+        if key == "B":
+            self._measure_digits = self._measure_digits[:-1]
+        elif len(self._measure_digits) < MEASURE_DIGITS_MAX and (self._measure_digits or key != "0"):
+            self._measure_digits += key
+        self._show_measure()
+
+    def _show_measure(self, missing=False):
+        value = measure_value(self._measure_digits)
+        if missing:
+            text = "<span size='x-large' foreground='#E14D5C'>请输入温度 / Tapez la température</span>"
+        else:
+            text = "<span size='xx-large' weight='bold'>%s °C</span>" % (
+                "%.1f" % value if value is not None else "—")
+        self.labels["measure"].set_markup(text)
+
     def _on_visual_dialog_response(self, dialog, response_id):
+        # Capture BEFORE recording (recording advances to next test)
+        test = self.engine.get_current_test()
+        measure = test.get("measure") if test else None
+        value = measure_value(self._measure_digits) if measure else None
+        if measure and value is None:
+            self._show_measure(missing=True)   # OK without a reading: the dialog stays open
+            return
         self._gtk.remove_dialog(dialog)
         self._visual_dialog = None
-
-        # Capture cleanup BEFORE recording (recording advances to next test)
-        test = self.engine.get_current_test()
         cleanup = test.get("cleanup") if test else None
 
         passed = (response_id == Gtk.ResponseType.YES)
-        self.engine.record_visual_result(passed)
+        details = ""
+        if value is not None:
+            self.engine.record_measure(measure, value)
+            details = "%s=%.1f" % (measure, value)
+        self.engine.record_visual_result(passed, details)
 
         if cleanup:
             self._screen._ws.klippy.gcode_script(cleanup)
