@@ -569,6 +569,14 @@ class Panel(ScreenPanel):
         header.pack_end(self.labels["progress"], False, False, 5)
         main_box.pack_start(header, False, False, 5)
 
+        # Hot end benches: the head temperature, big and live, so the operator sees it rise and gets
+        # the thermometer ready (21/10).
+        if self._selected_size in HOTEND_DEVICES:
+            self.labels["hotend_temp"] = Gtk.Label()
+            main_box.pack_start(self.labels["hotend_temp"], False, False, 5)
+            self._show_hotend_temp()
+            GLib.timeout_add_seconds(1, self._show_hotend_temp)
+
         # Progress bar
         self.labels["progress_bar"] = Gtk.ProgressBar()
         self.labels["progress_bar"].set_fraction(0)
@@ -1479,6 +1487,18 @@ class Panel(ScreenPanel):
         if test:
             self._run_test(test)
         return False
+
+    def _show_hotend_temp(self):
+        """Every second while the running screen is up: head temperature and target."""
+        label = self.labels["hotend_temp"]
+        temp = self._screen.printer.get_stat("extruder", "temperature")
+        target = self._screen.printer.get_stat("extruder", "target")
+        if isinstance(temp, (int, float)):
+            text = "喷头 / Tête  %.0f °C" % temp
+            if isinstance(target, (int, float)) and target > 0:
+                text += "  →  %.0f °C" % target
+            label.set_markup("<span size='xx-large' weight='bold'>%s</span>" % text)
+        return label.get_mapped() and self.engine.state not in (QCState.COMPLETED, QCState.ABORTED)
 
     def _on_abort_clicked(self, widget):
         # Confirm abort
