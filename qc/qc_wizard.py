@@ -191,6 +191,7 @@ ADXL_COLORS = {"wait": "#3a3a3a", "rest": "#c46a00", "busy": "#1f4e8c", "pass": 
 # Bench state at module level: a Klipper restart makes KlipperScreen re-initialise this panel, the
 # bench must come back by itself (operator hands-free) with a single worker thread.
 _adxl_bench = {"active": False, "thread": None, "count": 0}
+REOPEN_WAIT_S = 60   # after a Klipper restart, how long to wait for the main menu to put the panel back
 
 class Panel(ScreenPanel):
     def __init__(self, screen, title):
@@ -1319,13 +1320,19 @@ class Panel(ScreenPanel):
                         break
             except (urllib.error.URLError, ValueError, KeyError):
                 continue   # Moonraker answers 503 while Klippy restarts
-        time.sleep(3)      # let KlipperScreen show its main menu first, then take the screen back
-        GLib.idle_add(self._reopen_panel)
+        self._reopen_until = time.time() + REOPEN_WAIT_S
+        GLib.timeout_add_seconds(1, self._reopen_panel)
 
     def _reopen_panel(self):
-        """Main thread: put the QC panel back on screen after a Klipper restart."""
-        if self._screen._cur_panels[-1:] != ["qc_wizard"]:
-            self._screen.show_panel("qc_wizard", _("质量检测 / Quality Control"))
+        """Main thread, every second after a Klipper restart: KlipperScreen drops every panel and
+        shows its main menu once it has handled the ready state, late when its main loop was busy
+        (a report upload, 21/10: the panel came back too early and the main menu replaced it).
+        Put the QC panel back once the main menu is up."""
+        if time.time() > self._reopen_until:
+            return False
+        if getattr(self._screen.printer, "state", "") != "ready" or self._screen._cur_panels[-1:] != ["main_menu"]:
+            return True
+        self._screen.show_panel("qc_wizard", _("质量检测 / Quality Control"))
         return False
 
     def _adxl_measure(self, name, seconds):
