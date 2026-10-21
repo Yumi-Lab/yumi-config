@@ -216,3 +216,18 @@ class TestRun(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPresentHyperdrive(unittest.TestCase):
+    """21/10: X12 stayed down on the UART serial while the USB HyperDrive carried the YMS."""
+
+    def test_usb_hyperdrive_when_plugged(self):
+        from qc.qc_yms import HD_MCU, HD_MODEL, HD_SERIAL, HD_USB_MODEL, with_present_hyperdrive
+        cfg = _generator().build("X12")
+        usb = with_present_hyperdrive(cfg, True)
+        self.assertIn("[mcu %s]\nserial: %s " % (HD_MCU, HD_SERIAL[HD_USB_MODEL]), usb)
+        self.assertIn("[mcu]\n", usb)
+        self.assertEqual(usb.replace(HD_SERIAL[HD_USB_MODEL], HD_SERIAL[HD_MODEL]), cfg)
+        self.assertEqual(with_present_hyperdrive(cfg, False), cfg)
+        dd = _generator().build("DD")
+        self.assertEqual(with_present_hyperdrive(dd, True), dd)

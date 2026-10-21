@@ -109,6 +109,9 @@ try:
         HD_LED,
         HD_LED_TEST_ID,
         HD_MODELS,
+        HD_SERIAL,
+        HD_USB_MODEL,
+        with_present_hyperdrive,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
         LED_ON_RGB,
@@ -162,6 +165,9 @@ except ImportError:
         HD_LED,
         HD_LED_TEST_ID,
         HD_MODELS,
+        HD_SERIAL,
+        HD_USB_MODEL,
+        with_present_hyperdrive,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
         LED_ON_RGB,
@@ -527,6 +533,11 @@ class Panel(ScreenPanel):
             if not os.path.exists(BACKUP_CFG):
                 self._copy_cfg_content(PROD_CFG, BACKUP_CFG)
             self._copy_cfg_content(qc_cfg, PROD_CFG)
+            if self._selected_size in HOTEND_DEVICES:   # YMS-3 on the HyperDrive plugged now
+                with open(PROD_CFG) as f:
+                    text = f.read()
+                with open(PROD_CFG, "w") as f:
+                    f.write(with_present_hyperdrive(text, os.path.exists(HD_SERIAL[HD_USB_MODEL])))
         except Exception as e:
             logger.error(f"QC: cfg swap failed: {e}")
             self._screen.show_popup_message(f"配置切换失败 / cfg swap failed: {e}", level=3)

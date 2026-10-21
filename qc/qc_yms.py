@@ -868,6 +868,20 @@ HD_USB_FIRMWARE_DESCRIPTOR = (
     "e10=SMART_TMC2209_V2;e11=SMART_TMC2209_V2;lot=20260811;uid=AD57CD" % HD_DEVICE)
 HD_MODELS = (HD_MODEL, HD_USB_MODEL)
 HD_FIRMWARE = {HD_MODEL: HD_FIRMWARE_DESCRIPTOR, HD_USB_MODEL: HD_USB_FIRMWARE_DESCRIPTOR}
+# Serial of the HyperDrive under test per bench model. /dev/hyperdrive_usb is the udev link to the
+# Klipper USB board plugged now (system/99-hyperdrive-usb.rules): its ttyACM number moves on a
+# hot swap. The MCU keeps the HD_MCU name on both, macros/LED/UID/panel are shared.
+HD_SERIAL = {HD_MODEL: "/dev/ttyS2", HD_USB_MODEL: "/dev/hyperdrive_usb"}
+
+
+def with_present_hyperdrive(cfg_text, usb_present):
+    """A hot end cfg feeds with YMS-3 on the bench's HyperDrive (HD_MCU, UART by default): use the
+    USB HyperDrive when it is plugged (21/10: X12 stayed down on the UART serial while the USB
+    board carried the YMS)."""
+    if not usb_present:
+        return cfg_text
+    return re.sub(r"(\[mcu %s\]\nserial: )%s" % (HD_MCU, re.escape(HD_SERIAL[HD_MODEL])),
+                  lambda m: m.group(1) + HD_SERIAL[HD_USB_MODEL], cfg_text, count=1)
 # Chauffe : on valide la SORTIE MOSFET de la carte, pas le plateau du YMS --
 # monter à 40 °C suffit (Nicolas 14/10 : « si ça monte à 40 degrés, tu peux
 # couper, c'est validé »). _qc_heat_all_step tranche à TARGET - 2 °C.

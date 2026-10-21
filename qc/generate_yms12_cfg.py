@@ -949,13 +949,7 @@ gcode:
 # constantes vivent dans qc_yms.py (lues aussi par le panel).
 from qc_yms import (HD_FIRMWARE, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
                     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
-                    HD_POSITIONS, HD_USB_MODEL, LED_ON_RGB)
-
-# Serial of the tested board per bench model. HYPERDRIVE-USB (21/10): the same board on the pad
-# USB; /dev/hyperdrive_usb is the udev link to the Klipper USB board plugged now
-# (system/99-hyperdrive-usb.rules), its ttyACM number moves on a hot swap. The MCU keeps its
-# name (HD_MCU) so the macros, the LED, the UID and the panel are shared with the UART bench.
-HD_SERIAL = {HD_MODEL: "/dev/ttyS2", HD_USB_MODEL: "/dev/hyperdrive_usb"}
+                    HD_POSITIONS, HD_SERIAL, LED_ON_RGB)
 # Sortie NeoPixel de la carte SMART MAKER 1.1 (connecteur « Neopixel » 12V/GND/PC12).
 HD_LED_PIN = "PC12"
 HD_LED_COUNT = 1
