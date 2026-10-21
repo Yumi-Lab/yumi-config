@@ -1299,10 +1299,12 @@ class Panel(ScreenPanel):
             return False
         return devid_from_messages([g.get("message", "") for g in store]) == ADXL345_DEVID
 
-    def _adxl_restart(self):
-        """FIRMWARE_RESTART and wait for Klipper: a hot-swapped board gives no samples until then.
-        KlipperScreen drops every panel on the restart; _adxl_reopen brings the bench back."""
-        logger.warning("QC ADXL: chip answers but no samples (hot swap) -> FIRMWARE_RESTART")
+    def _restart_klipper(self, emergency=False):
+        """Thread: FIRMWARE_RESTART (after an emergency stop when asked) and wait for Klipper.
+        KlipperScreen drops every panel on the restart; _reopen_panel brings the QC panel back."""
+        if emergency:
+            urllib.request.urlopen(urllib.request.Request(
+                "http://localhost:7125/printer/emergency_stop", method="POST"), timeout=10).read()
         urllib.request.urlopen(urllib.request.Request(
             "http://localhost:7125/printer/firmware_restart", method="POST"), timeout=10).read()
         end = time.time() + 30
@@ -1316,11 +1318,11 @@ class Panel(ScreenPanel):
             except (urllib.error.URLError, ValueError, KeyError):
                 continue   # Moonraker answers 503 while Klippy restarts
         time.sleep(3)      # let KlipperScreen show its main menu first, then take the screen back
-        GLib.idle_add(self._adxl_reopen)
+        GLib.idle_add(self._reopen_panel)
 
-    def _adxl_reopen(self):
-        """Main thread: put the bench panel back on screen after a Klipper restart."""
-        if _adxl_bench["active"] and self._screen._cur_panels[-1:] != ["qc_wizard"]:
+    def _reopen_panel(self):
+        """Main thread: put the QC panel back on screen after a Klipper restart."""
+        if self._screen._cur_panels[-1:] != ["qc_wizard"]:
             self._screen.show_panel("qc_wizard", _("质量检测 / Quality Control"))
         return False
 
@@ -1357,7 +1359,8 @@ class Panel(ScreenPanel):
             try:
                 rest = self._adxl_measure("qcrest", REST_S)
                 if not rest:   # chip id fine but no samples: hot swap, Klipper must restart
-                    self._adxl_restart()
+                    logger.warning("QC ADXL: chip answers but no samples (hot swap) -> FIRMWARE_RESTART")
+                    self._restart_klipper()
                     continue
                 ok, reason = rest_check(rest)
                 logger.info("QC ADXL: rest %d samples, mean %s -> %s", len(rest),
@@ -1483,8 +1486,10 @@ class Panel(ScreenPanel):
     def _on_abort_confirmed(self, dialog, response_id):
         self._gtk.remove_dialog(dialog)
         if response_id == Gtk.ResponseType.YES:
-            # Stop fans/heaters before aborting
-            self._screen._ws.klippy.gcode_script("QC_CLEANUP")
+            # Stop now (21/10): a QC_CLEANUP waited behind the running step (M109 at the target, a
+            # feed step...). The emergency stop cuts heaters and motors at once, the hotend fan goes
+            # to its shutdown speed; then Klipper restarts and the panel comes back.
+            threading.Thread(target=self._restart_klipper, args=(True,), daemon=True).start()
             self.engine.abort()
 
     def _on_skip_clicked(self, widget):
@@ -1623,8 +1628,9 @@ class Panel(ScreenPanel):
             report["yumi_config"] = "device=YMS-BENCH-SESSION"
             self.engine.printer_id = report["printer_id"]
         self._current_report = report
-        # Cleanup: stop heaters/fans/motors
-        self._screen._ws.klippy.gcode_script("QC_CLEANUP")
+        # Cleanup: stop heaters/fans/motors (an abort already did it with the emergency stop)
+        if self.engine.state != QCState.ABORTED:
+            self._screen._ws.klippy.gcode_script("QC_CLEANUP")
         GLib.idle_add(self._build_summary_screen, report)
         if self._selected_size.upper().startswith("YMS"):
             # Résumé de session : sauvegarde locale SEULEMENT, marqué .sent
