@@ -259,6 +259,13 @@ class TestHyperdriveLabel(unittest.TestCase):
             self.assertEqual(len(els), len(render_qc_tspl.DEFAULTS["yms"][sec]) - 2)
         self.assertIn("hyperdrive", render_qc_tspl.TEMPLATE_URL)
 
+    def test_board_input_current(self, _m):
+        """24 V 4 A on the HyperDrive label, the YMS PRO keeps 2 A (Nicolas 21/10)."""
+        texts = lambda kind: [e.get("c") for e in render_qc_tspl.DEFAULTS[kind]["pass"]]
+        self.assertIn("4A", texts("hyperdrive"))
+        self.assertNotIn("2A", texts("hyperdrive"))
+        self.assertIn("2A", texts("yms"))
+
 
 class TestGeneratedCfg(unittest.TestCase):
     """La cfg HyperDrive vient du même générateur que YMS12 ; YMS12 ne bouge pas."""
