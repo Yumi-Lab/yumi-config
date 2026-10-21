@@ -4,8 +4,8 @@ import sys
 import unittest
 from datetime import datetime
 
-from qc.qc_engine import (HOTEND_DEVICES, HOTEND_TEMP, HOTEND_TESTS, QCEngine, hotend_plugged,
-                          hotend_report, tests_for_model)
+from qc.qc_engine import (HOTEND_DEVICES, HOTEND_TEMP, HOTEND_TESTS, HOTEND_WALL_READING, QCEngine,
+                          hotend_plugged, hotend_report, tests_for_model)
 
 QC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -46,7 +46,7 @@ class TestSequences(unittest.TestCase):
     def test_operator_reads_the_target_temperature(self):
         temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
         self.assertEqual(temp["type"], "visual")
-        self.assertIn("%d" % HOTEND_TEMP, temp["prompt"])
+        self.assertIn("about %d °C" % HOTEND_WALL_READING, temp["prompt"])   # read on the block wall
         self.assertTrue(temp["macro"].endswith("TEMP=%d" % HOTEND_TEMP))
 
 
