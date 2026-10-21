@@ -4,7 +4,7 @@ import sys
 import unittest
 from datetime import datetime
 
-from qc.qc_engine import (HOTEND_DEVICES, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
+from qc.qc_engine import (HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
                           HOTEND_WALL_READING, QCEngine, hotend_plugged, hotend_report,
                           tests_for_model)
 
@@ -141,7 +141,7 @@ class TestHeadSwitch(unittest.TestCase):
         self.assertEqual((cut["id"], cut["type"]), ("filament_cut", "visual"))
         macro, mm, speed = re.match(r"(\w+) MM=(\d+) SPEED=(\S+)", cut["cleanup"]).groups()
         out = _render(_macro_body(self.cfg, macro), False, params={"MM": mm, "SPEED": speed})
-        self.assertIn("G1 E-%.1f F3000.0" % HOTEND_RETRACT_MM, out)
+        self.assertIn("G1 E-%.1f F%.1f" % (HOTEND_RETRACT_MM, HOTEND_FEED_MM_S * 60), out)
         self.assertIn("MOTION_QUEUE=extruder\n", out)
         self.assertTrue(out.rstrip().endswith("MOTION_QUEUE="))
 
