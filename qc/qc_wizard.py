@@ -208,7 +208,7 @@ class Panel(ScreenPanel):
             on_qc_complete=self._on_qc_complete,
         )
         self._visual_dialog = None
-        self._measure_digits = ""   # keypad entry of a "measure" test (digits, one implied decimal)
+        self._measure_digits = ""   # keypad entry of a "measure" test (whole degrees)
         self._current_report = None
         self._timeout_id = None
         self._restart_retries = 0
@@ -864,8 +864,8 @@ class Panel(ScreenPanel):
              "style": "color2"},
         ]
         if measure:
-            # The operator only types the reading (21/10): digits, one implied decimal (2113 ->
-            # 211.3), then OK. Question and value on the left, keypad on the right.
+            # The operator only types the reading in whole degrees (21/10), then OK. Question and
+            # value on the left, keypad on the right.
             self._measure_digits = ""
             self.labels["measure"] = Gtk.Label()
             content_box.pack_start(self.labels["measure"], False, False, 10)
@@ -886,7 +886,7 @@ class Panel(ScreenPanel):
         )
 
     def _measure_pad(self):
-        """Digits 1-9, backspace, 0 (no decimal key: the last digit is the decimal)."""
+        """Digits 1-9, backspace, 0: whole degrees, no decimal key."""
         grid = Gtk.Grid(row_spacing=6, column_spacing=6)
         for i, key in enumerate(["1", "2", "3", "4", "5", "6", "7", "8", "9", "B", "0"]):
             if key == "B":
@@ -911,7 +911,7 @@ class Panel(ScreenPanel):
             text = "<span size='x-large' foreground='#E14D5C'>请输入温度 / Tapez la température</span>"
         else:
             text = "<span size='xx-large' weight='bold'>%s °C</span>" % (
-                "%.1f" % value if value is not None else "—")
+                value if value is not None else "—")
         self.labels["measure"].set_markup(text)
 
     def _on_visual_dialog_response(self, dialog, response_id):
@@ -930,7 +930,7 @@ class Panel(ScreenPanel):
         details = ""
         if value is not None:
             self.engine.record_measure(measure, value)
-            details = "%s=%.1f" % (measure, value)
+            details = "%s=%d" % (measure, value)
         self.engine.record_visual_result(passed, details)
 
         if cleanup:

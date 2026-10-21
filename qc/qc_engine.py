@@ -287,8 +287,8 @@ _HOTEND_TEMP = {
     "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
     "type": "visual",
     "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
-    # The operator only types the reading on a keypad (4 digits, one decimal: 2113 -> 211.3) and
-    # presses OK; it goes into the report (measures + test details). No yes/no (21/10).
+    # The operator only types the reading on a keypad (whole degrees, 3 digits: the wall reading
+    # moves too much for a decimal, 21/10) and presses OK; it goes into the report (measures + test details). No yes/no (21/10).
     "measure": "hotend_wall_c",
     "prompt": "外部测温仪读数？\nExternal thermometer reading?",
     "timeout": 300,
@@ -326,12 +326,12 @@ HOTEND_TESTS = {
 }
 
 
-MEASURE_DIGITS_MAX = 4
+MEASURE_DIGITS_MAX = 3
 
 
 def measure_value(digits):
-    """Keypad entry -> value: 4 digits at most, one implied decimal ("2113" -> 211.3), or None."""
-    return int(digits) / 10.0 if digits else None
+    """Keypad entry -> whole degrees ("211" -> 211), or None when nothing was typed."""
+    return int(digits) if digits else None
 
 
 def hotend_plugged(temperature):

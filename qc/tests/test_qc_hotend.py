@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime
 
 from qc.qc_engine import (HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
-                          QCEngine, hotend_plugged, hotend_report, measure_value,
+                          MEASURE_DIGITS_MAX, QCEngine, hotend_plugged, hotend_report, measure_value,
                           tests_for_model)
 
 QC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -50,9 +50,9 @@ class TestSequences(unittest.TestCase):
         self.assertEqual((temp["type"], temp["measure"]), ("visual", "hotend_wall_c"))
         self.assertTrue(temp["macro"].endswith("TEMP=%d" % HOTEND_TEMP))
 
-    def test_keypad_value_has_one_implied_decimal(self):
-        self.assertEqual(measure_value("2113"), 211.3)
-        self.assertEqual(measure_value("5"), 0.5)
+    def test_keypad_value_in_whole_degrees(self):
+        self.assertEqual(measure_value("211"), 211)
+        self.assertEqual(MEASURE_DIGITS_MAX, 3)
         self.assertIsNone(measure_value(""))
 
 
@@ -179,15 +179,15 @@ class TestRun(unittest.TestCase):
             else:
                 engine.process_gcode_response("QC:%s:VISUAL" % tid)
                 if tid == "HOTEND_TEMP":       # what the wizard does with the keypad entry
-                    engine.record_measure("hotend_wall_c", measure_value("2113"))
-                    engine.record_visual_result(True, "hotend_wall_c=211.3")
+                    engine.record_measure("hotend_wall_c", measure_value("211"))
+                    engine.record_visual_result(True, "hotend_wall_c=211")
                 else:
                     engine.record_visual_result(True)
         report = hotend_report(engine.generate_report(), "X12", datetime(2026, 10, 21, 9, 30, 5))
         self.assertEqual(report["overall_result"], "PASS")
-        self.assertEqual(report["measures"], {"hotend_wall_c": 211.3})
+        self.assertEqual(report["measures"], {"hotend_wall_c": 211})
         temp = next(t for t in report["tests"] if t["id"] == "hotend_temp")
-        self.assertEqual(temp["details"], "hotend_wall_c=211.3")
+        self.assertEqual(temp["details"], "hotend_wall_c=211")
         self.assertEqual(report["printer_id"], "HOTEND-X12-02810E28F273-20261021-093005")
         self.assertEqual((report["yumi_config"], report["machine_uid"]), ("device=HOTEND-X12", ""))
         self.assertNotIn("machine_uid_missing", report)
