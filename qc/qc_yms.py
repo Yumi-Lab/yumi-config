@@ -724,7 +724,8 @@ def _label_kind_section_data(report):
     # 22/08 : "YMS-LIGHT-V1.0", pas juste "YMS-LIGHT") -- calculé UNIQUEMENT
     # ici pour l'affichage, on ne touche pas report["qc_model"] lui-même
     # (utilisé tel quel côté serveur/dashboard, aucune raison de le changer).
-    display_model = HD_USB_LABEL if qc_model.upper() == HD_USB_MODEL else qc_model
+    # HyperDrive USB: the same HYPERDRIVE name on the label plus the USB badge ({usb}), Nicolas 21/10.
+    display_model = HD_MODEL if is_hd else qc_model
     if is_yms and report.get("yms_version"):
         display_model = "%s-V%s" % (qc_model, report["yms_version"])
 
@@ -752,6 +753,7 @@ def _label_kind_section_data(report):
         # Carte seule sur le banc : pas de case position ; raison = slots/tests
         # en échec, déjà résumés par build_hyperdrive_report.
         data["bench_position"] = ""
+        data["usb"] = "USB" if qc_model.upper() == HD_USB_MODEL else ""
         if section == "fail":
             # 50 mm de large : la 1re raison + le nombre des autres (liste
             # complète dans le rapport, derrière le QR).
@@ -865,9 +867,6 @@ HD_USB_FIRMWARE_DESCRIPTOR = (
     "e7=SMART_TMC2209_V2;e8=SMART_TMC2209_V2;e9=SMART_TMC2209_V2;"
     "e10=SMART_TMC2209_V2;e11=SMART_TMC2209_V2;lot=20260811;uid=AD57CD" % HD_DEVICE)
 HD_MODELS = (HD_MODEL, HD_USB_MODEL)
-# On the label "HYPERDRIVE-USB" runs into the WEEE logo (PASS) and off the 50 mm label (FAIL),
-# rendered on the bench pad 21/10: the label shows this shorter name, the report keeps the model.
-HD_USB_LABEL = "HD-USB"
 HD_FIRMWARE = {HD_MODEL: HD_FIRMWARE_DESCRIPTOR, HD_USB_MODEL: HD_USB_FIRMWARE_DESCRIPTOR}
 # Chauffe : on valide la SORTIE MOSFET de la carte, pas le plateau du YMS --
 # monter à 40 °C suffit (Nicolas 14/10 : « si ça monte à 40 degrés, tu peux
