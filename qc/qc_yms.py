@@ -841,11 +841,11 @@ def build_label_png_job(report, qty=1, seq=None):
 # clé USB de référence sur le pad. Identité = UID STM32 de la carte (pas
 # d'allocation serveur), un rapport par carte, PASS seulement si TOUT passe.
 HD_MODEL = "HYPERDRIVE"            # bouton du panel, _QC_MODE, qc_printer_HYPERDRIVE.cfg
-HD_DEVICE = "HYPERDRIVE_3P2L"      # device= gravé par firmware.yumi-lab.com
+HD_DEVICE = "HYPERDRIVE_3P2L"      # device= gravé par le builder firmware Yumi
 HD_MCU = "hyperdrive_uart"
 HD_POSITIONS = (3, 4, 5, 6, 7)     # slots 1..5 de la carte = extruder2..6
 HD_HEAT_POSITIONS = (3, 4, 5)      # sorties chauffe = slots 1..3
-# Firmware de référence (firmware.yumi-lab.com, firmware_FF65D9.bin) : on ne
+# Firmware de référence (builder firmware Yumi, firmware_FF65D9.bin) : on ne
 # recompile pas, toutes les cartes portent CE descripteur à l'identique (même
 # firmware que les machines, décision Nicolas 14/10).
 HD_FIRMWARE_DESCRIPTOR = (

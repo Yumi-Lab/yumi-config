@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_plaque
 
 # ── Tension secteur gravée → libellé imprimé + tension de calcul du courant ──────────────
-# La tension secteur est CHOISIE au build du firmware (firmware.yumi-lab.com, catalog.json
+# La tension secteur est CHOISIE au build du firmware (builder firmware Yumi, catalog.json
 # `mains_voltages` = 220V | 110V) et gravée dans YUMI_CONFIG (`mains=110V`). Le libellé imprimé
 # est la plage nominale correspondante ; le courant nominal est calculé à la borne BASSE de la
 # plage (courant le plus élevé) et arrondi au 1 A SUPÉRIEUR (sécurité). SEULE table à toucher
@@ -210,7 +210,7 @@ def electrical_rating(mains, bedw, psu=PSU_WATTS, power=None, voltage=None):
     rating = mains_rating(mains)
     if not rating:
         problems.append('tension secteur inconnue (mains=%r absent de YUMI_CONFIG ou hors table %s) '
-                        '-- reflasher via firmware.yumi-lab.com ou passer --mains'
+                        '-- reflasher via le builder firmware Yumi ou passer --mains'
                         % (mains, '/'.join(MAINS_RATINGS)))
     if power and re.search(r'\d+', str(power)):                  # override manuel --power
         watts = int(re.search(r'\d+', str(power)).group())
@@ -219,7 +219,7 @@ def electrical_rating(mains, bedw, psu=PSU_WATTS, power=None, voltage=None):
     else:
         watts = 0
         problems.append('puissance plateau inconnue (bedw= absent de YUMI_CONFIG) -- courant non '
-                        'calculable, reflasher via firmware.yumi-lab.com ou passer --power')
+                        'calculable, reflasher via le builder firmware Yumi ou passer --power')
     amps = rated_amps(watts, rating['vmin']) if (watts and rating) else 0
     out = {
         'voltage': voltage or (rating['voltage'] if rating else '?'),
