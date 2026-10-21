@@ -261,7 +261,7 @@ HOTEND_PLUGGED_MIN_C = 0
 
 HOTEND_FEED_MAX_MM = 800      # same budget as the machine QC feed (_QC_HEAD_FEED maxd)
 HOTEND_FEED_MM_S = 50          # the HyperDrive bench stresses the YMS feeders up to 100 mm/s
-HOTEND_RETRACT_MM = 40         # after the operator cuts the filament (21/10)
+HOTEND_RETRACT_MM = 80         # after the operator cuts the filament (21/10: 40 mm too short)
 
 _HEAT_START = {
     # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
