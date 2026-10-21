@@ -1,0 +1,5 @@
+# QC HyperDrive USB bench (21/10/2026): one HyperDrive at a time on the pad USB. Its by-id name
+# carries the board's chip id and its ttyACM number moves on a hot swap; /dev/hyperdrive_usb
+# always points at the Klipper USB board plugged now (qc_printer_HYPERDRIVE-USB.cfg).
+# Klipper USB boards enumerate as 1d50:614e. Elsewhere the link is unused.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="614e", SYMLINK+="hyperdrive_usb"

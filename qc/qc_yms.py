@@ -716,7 +716,7 @@ def _label_kind_section_data(report):
     qc_model = report.get("qc_model", "")
     date = (report.get("date_end") or "")[:16].replace("T", " ")
     is_yms = qc_model.upper().startswith("YMS")
-    is_hd = qc_model.upper() == HD_MODEL
+    is_hd = qc_model.upper() in HD_MODELS
     kind = "yms" if is_yms else ("hyperdrive" if is_hd else "machine")
     section = "pass" if overall == "PASS" else "fail"
 
@@ -724,7 +724,7 @@ def _label_kind_section_data(report):
     # 22/08 : "YMS-LIGHT-V1.0", pas juste "YMS-LIGHT") -- calculé UNIQUEMENT
     # ici pour l'affichage, on ne touche pas report["qc_model"] lui-même
     # (utilisé tel quel côté serveur/dashboard, aucune raison de le changer).
-    display_model = qc_model
+    display_model = HD_USB_LABEL if qc_model.upper() == HD_USB_MODEL else qc_model
     if is_yms and report.get("yms_version"):
         display_model = "%s-V%s" % (qc_model, report["yms_version"])
 
@@ -855,6 +855,20 @@ HD_FIRMWARE_DESCRIPTOR = (
 # Version Klipper de ce même binaire (registre du builder, 14/10) : le descripteur
 # ne change pas si on recompile sur un Klipper plus récent, la version oui.
 HD_FIRMWARE_VERSION = "v0.13.0-693-g5ac7c301"
+# HyperDrive USB (21/10/2026): the same board and the same QC, plugged into the pad USB instead of
+# the UART. It carries the USB build of the firmware (builder registry AD57CD, same Klipper
+# version); the model shows on the label and in the report, the counter keeps one HyperDrive
+# family (device=HD_DEVICE).
+HD_USB_MODEL = "HYPERDRIVE-USB"
+HD_USB_FIRMWARE_DESCRIPTOR = (
+    "board=SMART_MAKER_1_X;cpu=STM32F401;conn=USB;device=%s;"
+    "e7=SMART_TMC2209_V2;e8=SMART_TMC2209_V2;e9=SMART_TMC2209_V2;"
+    "e10=SMART_TMC2209_V2;e11=SMART_TMC2209_V2;lot=20260811;uid=AD57CD" % HD_DEVICE)
+HD_MODELS = (HD_MODEL, HD_USB_MODEL)
+# On the label "HYPERDRIVE-USB" runs into the WEEE logo (PASS) and off the 50 mm label (FAIL),
+# rendered on the bench pad 21/10: the label shows this shorter name, the report keeps the model.
+HD_USB_LABEL = "HD-USB"
+HD_FIRMWARE = {HD_MODEL: HD_FIRMWARE_DESCRIPTOR, HD_USB_MODEL: HD_USB_FIRMWARE_DESCRIPTOR}
 # Chauffe : on valide la SORTIE MOSFET de la carte, pas le plateau du YMS --
 # monter à 40 °C suffit (Nicolas 14/10 : « si ça monte à 40 degrés, tu peux
 # couper, c'est validé »). _qc_heat_all_step tranche à TARGET - 2 °C.
@@ -1017,7 +1031,7 @@ def _hd_test_reason(test):
     return HD_TEST_REASONS.get(tid, tid)
 
 
-def build_hyperdrive_report(report, test_log, bench_mark=""):
+def build_hyperdrive_report(report, test_log, bench_mark="", model=HD_MODEL):
     """Rapport UNIQUE d'une carte HyperDrive depuis le rapport moteur
     (qc_engine.generate_report : tests groupés, machine_uid = UID STM32 de la
     carte testée, lu par QC_HD_FIRMWARE). Ajoute un test par slot (verdict
@@ -1062,7 +1076,7 @@ def build_hyperdrive_report(report, test_log, bench_mark=""):
         "tests": tests,
         "failed_tests": failed,
         "overall_result": overall,
-        "qc_model": HD_MODEL,
+        "qc_model": model,
         # La famille se lit sur device= côté compteur : imposée par le banc, pas
         # par le firmware (une carte flashée C235 par erreur ne doit jamais
         # compter comme une machine) ; le descripteur réel reste dans firmware.

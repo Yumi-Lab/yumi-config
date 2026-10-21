@@ -622,6 +622,12 @@ run_privileged udevadm trigger --subsystem-match=video4linux
 echo "Webcam udev symlinks installed"
 echo "Webcam udev rules ...[Done]"
 
+# === HyperDrive USB QC bench: stable /dev/hyperdrive_usb link to the Klipper USB board ===
+run_privileged ln -sf "$PROJECT_DIR/system/99-hyperdrive-usb.rules" /etc/udev/rules.d/99-hyperdrive-usb.rules
+run_privileged udevadm control --reload-rules
+run_privileged udevadm trigger --subsystem-match=tty
+echo "HyperDrive USB udev rule ...[Done]"
+
 # === Bed mesh persist sans reboot (RUN_SHELL_COMMAND -> scripts/save_mesh.py) ===
 # Persiste le profil bed_mesh dans le bloc #*# de printer.cfg comme SAVE_CONFIG,
 # mais sans redemarrer Klipper. Deploye en symlink pour suivre les mises a jour git.
