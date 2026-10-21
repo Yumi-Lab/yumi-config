@@ -81,7 +81,7 @@ YMS_BENCH_SLOTS = (["main:E0", "main:E1"]
 try:
     from ks_includes.qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
                                        HOTEND_DEVICES, MEASURE_DIGITS_MAX, hotend_plugged,
-                                       hotend_report, measure_value)
+                                       hotend_report, measure_value, measure_verdict)
     from ks_includes.qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                                      ADXL345_DEVID, axis_stdevs, build_adxl_report,
                                      devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -134,7 +134,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     from qc_engine import (QCEngine, QCState, QCResult, QC_TESTS, plaque_feedback,
                            HOTEND_DEVICES, MEASURE_DIGITS_MAX, hotend_plugged,
-                           hotend_report, measure_value)
+                           hotend_report, measure_value, measure_verdict)
     from qc_adxl import (ADXL_MODEL, MEASURE_CSV, REST_S, TEXT as ADXL_TEXT, WINDOW_S,
                          ADXL345_DEVID, axis_stdevs, build_adxl_report,
                          devid_from_messages, read_measure_csv, rest_check, shake_step)
@@ -928,9 +928,9 @@ class Panel(ScreenPanel):
 
         passed = (response_id == Gtk.ResponseType.YES)
         details = ""
-        if value is not None:
+        if value is not None:   # a typed reading: the bench judges it, not the OK button
             self.engine.record_measure(measure, value)
-            details = "%s=%d" % (measure, value)
+            passed, details = measure_verdict(test, value)
         self.engine.record_visual_result(passed, details)
 
         if cleanup:
