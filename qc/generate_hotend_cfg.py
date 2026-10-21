@@ -3,7 +3,8 @@
 Generates the hot end bench cfgs (qc_printer_X12.cfg, qc_printer_DD.cfg) from qc_printer_C235.cfg.
 
 Bench = a C-series board alone, one print head plugged at a time: no axes (kinematics none), only
-what a head carries (heater, thermistor, hotend fan, part fan, extruder motor for a DD head).
+what a head carries (heater, thermistor, hotend fan, part fan, head switch, extruder motor for a
+DD head).
 The C235 cfg stays the single source of the pins: its sections are copied verbatim. The two
 files differ only by the model of the _QC_MODE marker (the panel button); the test sequences
 live in qc_engine.HOTEND_TESTS.
@@ -29,6 +30,7 @@ C235_SECTIONS = [
     "verify_heater extruder",
     "fan",
     "fan_generic hotend_fan",
+    "filament_switch_sensor head_sensor",
     "gcode_macro QC_FAN_HOTEND",
     "gcode_macro QC_FAN_PART",
 ]
@@ -72,6 +74,32 @@ gcode:
     M104 S{params.TEMP}
     RESPOND MSG="QC:HEAT_START:PASS"
 
+[gcode_macro QC_HOTEND_SWITCH]
+description: QC hot end - the head switch is free, then triggers within WAIT s when a filament is pushed in
+variable_left: 0
+gcode:
+    RESPOND MSG="QC:HEAD_SWITCH:START"
+    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
+        RESPOND TYPE=error MSG="QC HEAD_SWITCH: switch triggered before any filament (stuck switch)"
+        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
+    {% else %}
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=left VALUE={params.WAIT|int * 2}
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5
+    {% endif %}
+
+[delayed_gcode _qc_hotend_switch]
+gcode:
+    {% set left = printer["gcode_macro QC_HOTEND_SWITCH"].left|int %}
+    {% if printer["filament_switch_sensor head_sensor"].filament_detected %}
+        RESPOND MSG="QC:HEAD_SWITCH:PASS"
+    {% elif left <= 0 %}
+        RESPOND TYPE=error MSG="QC HEAD_SWITCH: no trigger while waiting for the filament"
+        RESPOND MSG="QC:HEAD_SWITCH:FAIL"
+    {% else %}
+        SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=left VALUE={left - 1}
+        UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5
+    {% endif %}
+
 [gcode_macro QC_HOTEND_TEMP]
 description: QC hot end - M109 returns once the PID has settled (within 1 C, slope under 0.1 C/s)
 gcode:
@@ -92,6 +120,7 @@ gcode:
 description: QC hot end - heater, part fan and motor off. The hotend fan keeps cooling the head
 gcode:
     RESPOND MSG="QC:CLEANUP:START"
+    UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0
     M104 S0
     M106 S0
     M84

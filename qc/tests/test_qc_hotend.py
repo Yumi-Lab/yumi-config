@@ -17,18 +17,30 @@ def _generator():
     return generate_hotend_cfg
 
 
+def _body(cfg, section):
+    return cfg.split("[%s]\n" % section, 1)[1].split("gcode:\n", 1)[1].split("\n\n", 1)[0]
+
+
 def _macro_body(cfg, name):
-    return cfg.split("[gcode_macro %s]\n" % name, 1)[1].split("\ngcode:\n", 1)[1].split("\n\n", 1)[0]
+    return _body(cfg, "gcode_macro " + name)
+
+
+def _render(body, detected, left=0, params=None):
+    import jinja2
+    tpl = jinja2.Environment("{%", "%}", "{", "}").from_string(body)   # = gcode_macro.py
+    return tpl.render(params=params or {}, printer={
+        "filament_switch_sensor head_sensor": {"filament_detected": detected},
+        "gcode_macro QC_HOTEND_SWITCH": {"left": left}})
 
 
 class TestSequences(unittest.TestCase):
     def test_x12_heats_and_checks_the_fans(self):
         self.assertEqual([t["id"] for t in tests_for_model("X12")],
-                         ["heat_start", "fan_hotend", "fan_part", "hotend_temp"])
+                         ["heat_start", "head_switch", "fan_hotend", "fan_part", "hotend_temp"])
 
     def test_dd_also_extrudes(self):
-        self.assertEqual([t["id"] for t in tests_for_model("DD")][-1], "hotend_extrude")
-        self.assertEqual(tests_for_model("DD")[:-1], tests_for_model("X12"))
+        self.assertEqual([t["id"] for t in tests_for_model("DD")],
+                         ["heat_start", "fan_hotend", "fan_part", "hotend_temp", "hotend_extrude"])
 
     def test_operator_reads_the_target_temperature(self):
         temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
@@ -58,10 +70,9 @@ class TestCfg(unittest.TestCase):
             self.assertIn('variable_model: "%s"' % model, cfg)
             self.assertIn("kinematics: none", cfg)
             for t in tests:
-                body = _macro_body(cfg, t["macro"].split()[0])
+                self.assertIn('"QC:%s:START"' % t["id"].upper(), _macro_body(cfg, t["macro"].split()[0]))
                 last = "PASS" if t["type"] == "automated" else "VISUAL"
-                for status in ("START", last):
-                    self.assertIn('"QC:%s:%s"' % (t["id"].upper(), status), body)
+                self.assertIn('"QC:%s:%s"' % (t["id"].upper(), last), cfg)   # the switch loop sends PASS
 
     def test_macros_render(self):
         import jinja2
@@ -74,14 +85,41 @@ class TestCfg(unittest.TestCase):
         self.assertIn("M109 S230", out)
 
 
+class TestHeadSwitch(unittest.TestCase):
+    """Same check as the machine QC feed: free first, then triggered by the filament."""
+
+    def setUp(self):
+        self.cfg = _generator().build("X12")
+
+    def test_stuck_switch_fails_at_once(self):
+        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), True, params={"WAIT": "60"})
+        self.assertIn("QC:HEAD_SWITCH:FAIL", out)
+        self.assertNotIn("UPDATE_DELAYED_GCODE", out)
+
+    def test_free_switch_starts_the_wait(self):
+        out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), False, params={"WAIT": "60"})
+        self.assertIn("VARIABLE=left VALUE=120", out)
+        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.5", out)
+
+    def test_loop(self):
+        loop = _body(self.cfg, "delayed_gcode _qc_hotend_switch")
+        self.assertIn("QC:HEAD_SWITCH:PASS", _render(loop, True, left=40))
+        self.assertIn("VALUE=39", _render(loop, False, left=40))
+        self.assertIn("QC:HEAD_SWITCH:FAIL", _render(loop, False, left=0))
+
+    def test_cleanup_stops_the_loop(self):
+        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0\n",
+                      _macro_body(self.cfg, "QC_CLEANUP"))
+
+
 class TestRun(unittest.TestCase):
     def test_x12_pass_gives_one_head_report(self):
         engine = QCEngine()
         engine.start("02810E28F273", model="X12")
-        for tid in ("HEAT_START", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP"):
+        for tid in ("HEAT_START", "HEAD_SWITCH", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP"):
             engine.process_gcode_response("QC:%s:START" % tid)
-            if tid == "HEAT_START":
-                engine.process_gcode_response("QC:HEAT_START:PASS")
+            if tid in ("HEAT_START", "HEAD_SWITCH"):
+                engine.process_gcode_response("QC:%s:PASS" % tid)
             else:
                 engine.process_gcode_response("QC:%s:VISUAL" % tid)
                 engine.record_visual_result(True)
