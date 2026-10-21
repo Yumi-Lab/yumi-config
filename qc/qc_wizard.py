@@ -108,7 +108,7 @@ try:
         HD_HEAT_POSITIONS,
         HD_LED,
         HD_LED_TEST_ID,
-        HD_MODEL,
+        HD_MODELS,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
         LED_ON_RGB,
@@ -161,7 +161,7 @@ except ImportError:
         HD_HEAT_POSITIONS,
         HD_LED,
         HD_LED_TEST_ID,
-        HD_MODEL,
+        HD_MODELS,
         HD_USB_TEST_ID,
         LED_CAM_SEQUENCE,
         LED_ON_RGB,
@@ -183,7 +183,8 @@ except ImportError:
 
 
 # Banc HyperDrive (14/10/2026) : une carte HyperDrive à la fois sur le banc YMS PRO.
-QC_SIZES.append(HD_MODEL)
+# HyperDrive USB (21/10/2026): the same board and QC, plugged into the pad USB.
+QC_SIZES.extend(HD_MODELS)
 # ADXL bench (19/10/2026): one accelerometer at a time on the pad GPIO, hands-free loop.
 QC_SIZES.append(ADXL_MODEL)
 # Hot end bench (21/10/2026): one print head at a time, X12 or DD (direct drive).
@@ -804,7 +805,7 @@ class Panel(ScreenPanel):
 
         # Banc HyperDrive : réimprimer l'étiquette de la carte (14/10, étiquette
         # sortie décalée) -- même rapport, même chemin d'impression, sans retester.
-        if self._selected_size == HD_MODEL and report.get("machine_uid"):
+        if self._selected_size in HD_MODELS and report.get("machine_uid"):
             reprint_btn = self._gtk.Button("print", "重印标签 / Réimprimer", "color1")
             reprint_btn.connect("clicked", self._on_hd_reprint)
             reprint_btn.set_size_request(160, 55)
@@ -962,7 +963,7 @@ class Panel(ScreenPanel):
             self._screen.show_popup_message(
                 "未检测到喷头 / Tête non branchée (sonde de température) -- QC non lancé", level=3)
             return
-        if self._selected_size == HD_MODEL:
+        if self._selected_size in HD_MODELS:
             if not self._hd_checking:  # contrôle LED en cours : pas de second lancement
                 self._hd_start_sequence(printer_id)
             return
@@ -1221,7 +1222,7 @@ class Panel(ScreenPanel):
             os.path.join(CONFIG_DIR, "qc_bench_config.json"))
         self._box_started = {}
         self._build_running_screen()
-        test = self.engine.start(printer_id, model=HD_MODEL, tests=build_hyperdrive_tests())
+        test = self.engine.start(printer_id, model=self._selected_size, tests=build_hyperdrive_tests())
         self._start_gcode_poller()
         if test:
             self._run_test(test)
@@ -1681,11 +1682,12 @@ class Panel(ScreenPanel):
         # au même instant réel, l'impression séquentielle qui suit n'est que
         # de la paperasse, pas une nouvelle mesure.
         self._batch_ended = datetime.now(timezone.utc)
-        if self._selected_size == HD_MODEL:
+        if self._selected_size in HD_MODELS:
             # Un rapport par carte : verdict des 5 slots ajouté, device imposé.
             report = build_hyperdrive_report(
                 report, self.engine._test_log,
-                bench_mark=(self._bench_config or {}).get("bench_mark", ""))
+                bench_mark=(self._bench_config or {}).get("bench_mark", ""),
+                model=self._selected_size)
             if not report.get("machine_uid"):
                 self._hd_unidentified(report)
                 return

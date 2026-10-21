@@ -187,7 +187,7 @@ branchés sur ses 5 slots.
 
 | Test | Ce qu'il valide |
 |------|-----------------|
-| `mcu_check` (`QC_HD_FIRMWARE`) | descripteur `YUMI_CONFIG` **identique** au firmware de référence (`qc_yms.HD_FIRMWARE_DESCRIPTOR`, firmware.yumi-lab.com `FF65D9`) + lecture de l'UID STM32 |
+| `mcu_check` (`QC_HD_FIRMWARE`) | descripteur `YUMI_CONFIG` **identique** au firmware de référence (`qc_yms.HD_FIRMWARE_DESCRIPTOR`, builder firmware Yumi `FF65D9`) + lecture de l'UID STM32 |
 | `heat_start` / `heat_wait` | sorties chauffe MOSFET des slots 1-3 (positions 3/4/5), mêmes macros et même verdict sur le pic que le YMS PRO |
 | `usb_ref` | le périphérique USB de référence est vu par le pad (`usb_ref` de `qc_bench_config.json` : `"vvvv:pppp"` ou numéro de série USB ; sur le banc, la caméra `0c50:2090`) |
 | `hd_led` | sortie NeoPixel (`PC12`, bande en `BRG`) vérifiée par la caméra du banc, une LED collée sur l'objectif : image noire éteinte, lumineuse et changeante en rouge/vert/bleu (~2,5 s, pas de question opérateur) |

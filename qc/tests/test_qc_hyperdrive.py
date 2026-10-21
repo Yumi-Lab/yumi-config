@@ -11,7 +11,7 @@ from qc.qc_engine import QC_TESTS, QCEngine, QCResult
 from qc.qc_yms import (
     HD_CAMERA_ERR, HD_DEVICE, HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
-    HD_POSITIONS, HD_USB_TEST_ID, LED_PREFLIGHT_SEQUENCE, box_verdict, build_hyperdrive_report,
+    HD_POSITIONS, HD_USB_FIRMWARE_DESCRIPTOR, HD_USB_MODEL, HD_USB_TEST_ID, LED_PREFLIGHT_SEQUENCE, box_verdict, build_hyperdrive_report,
     build_hyperdrive_tests, build_label_png_job, find_usb_device, led_cam_verdict, led_frame_settled,
     test_id_for_position)
 from qc import render_qc_tspl
@@ -330,3 +330,46 @@ class TestGeneratedCfg(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHyperdriveUsb(unittest.TestCase):
+    """HyperDrive USB (21/10/2026): the same board and QC on the pad USB. Only the connection and
+    the reference firmware change; the label and the report carry the model."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.gen = _generator()
+        cls.uart, cls.usb = cls.gen.build_hyperdrive(HD_MODEL), cls.gen.build_hyperdrive(HD_USB_MODEL)
+
+    def test_committed_cfg_is_generated(self):
+        with open(os.path.join(QC_DIR, "qc_printer_%s.cfg" % HD_USB_MODEL), encoding="utf-8") as f:
+            self.assertEqual(f.read(), self.usb)
+
+    def test_only_connection_and_firmware_change(self):
+        diff = [(a, b) for a, b in zip(self.uart.splitlines(), self.usb.splitlines()) if a != b]
+        self.assertEqual(len(self.uart.splitlines()), len(self.usb.splitlines()))
+        usb_lines = [b for _a, b in diff]
+        self.assertEqual(len(usb_lines), 5, usb_lines)
+        self.assertIn('variable_model: "%s"' % HD_USB_MODEL, usb_lines)
+        self.assertIn("[mcu %s]\nserial: %s " % (HD_MCU, self.gen.HD_SERIAL[HD_USB_MODEL]), self.usb)
+        self.assertIn('{% if got != "' + HD_USB_FIRMWARE_DESCRIPTOR + '" %}', self.usb)
+        self.assertIn("conn=USB", HD_USB_FIRMWARE_DESCRIPTOR)
+
+    def test_udev_link_is_the_cfg_serial(self):
+        with open(os.path.join(os.path.dirname(QC_DIR), "system", "99-hyperdrive-usb.rules")) as f:
+            rule = f.read()
+        link = os.path.basename(self.gen.HD_SERIAL[HD_USB_MODEL])
+        self.assertIn('ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="614e", SYMLINK+="%s"' % link, rule)
+
+    @_NO_LIVE_TEMPLATE
+    def test_label_and_report_say_usb(self, _m):
+        rep = build_hyperdrive_report(
+            {"printer_id": UID, "machine_uid": UID, "overall_result": "PASS", "failed_tests": [],
+             "yumi_config": HD_USB_FIRMWARE_DESCRIPTOR, "tests": []},
+            {test_id_for_position(p): list(STRESS_OK) + (list(HEAT_OK) if p in HD_HEAT_POSITIONS else [])
+             for p in HD_POSITIONS}, model=HD_USB_MODEL)
+        self.assertEqual((rep["qc_model"], rep["yumi_config"]), (HD_USB_MODEL, "device=%s" % HD_DEVICE))
+        self.assertIn("conn=USB", rep["firmware"])
+        from qc.qc_yms import _label_kind_section_data
+        kind, _section, data = _label_kind_section_data(rep)
+        self.assertEqual((kind, data["qc_model"]), ("hyperdrive", "HD-USB"))   # fits the 50 mm label

@@ -947,12 +947,15 @@ gcode:
 # Meme banc que le YMS PRO mais UN SEUL HyperDrive, celui qu'on teste, sur
 # l'UART : ses 5 slots = YMS-3..YMS-7, ses 3 sorties chauffe = YMS-3/4/5. Les
 # constantes vivent dans qc_yms.py (lues aussi par le panel).
-from qc_yms import (HD_FIRMWARE_DESCRIPTOR, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
+from qc_yms import (HD_FIRMWARE, HD_FIRMWARE_VERSION, HD_FW_BUILD_ERR,
                     HD_FW_VERSION_ERR, HD_HEAT_POSITIONS, HD_LED, HD_MCU, HD_MODEL,
-                    HD_POSITIONS, LED_ON_RGB)
+                    HD_POSITIONS, HD_USB_MODEL, LED_ON_RGB)
 
-HD_DST = os.path.join(HERE, "qc_printer_%s.cfg" % HD_MODEL)
-HD_HYPERDRIVES = [(HD_MCU, "/dev/ttyS2", HD_POSITIONS[0] - 1)]
+# Serial of the tested board per bench model. HYPERDRIVE-USB (21/10): the same board on the pad
+# USB; /dev/hyperdrive_usb is the udev link to the Klipper USB board plugged now
+# (system/99-hyperdrive-usb.rules), its ttyACM number moves on a hot swap. The MCU keeps its
+# name (HD_MCU) so the macros, the LED, the UID and the panel are shared with the UART bench.
+HD_SERIAL = {HD_MODEL: "/dev/ttyS2", HD_USB_MODEL: "/dev/hyperdrive_usb"}
 # Sortie NeoPixel de la carte SMART MAKER 1.1 (connecteur « Neopixel » 12V/GND/PC12).
 HD_LED_PIN = "PC12"
 HD_LED_COUNT = 1
@@ -967,17 +970,18 @@ HD_HEADER = """\
 # — NE PAS éditer à la main.
 #
 # Banc = une C235 de test + LE HyperDrive 3P2L testé sur %(mcu)s
-# (/dev/ttyS2), 5 YMS PRO de référence branchés sur ses 5 slots :
+# (%(serial)s), 5 YMS PRO de référence branchés sur ses 5 slots :
 #   YMS-%(p0)d..YMS-%(p1)d -> slots 1..5 (moteur + capteur)
 #   YMS-%(heat)s -> sorties chauffe MOSFET (slots 1..3)
 # + firmware de référence + UID STM32 (QC_HD_FIRMWARE, [mcu_uid] sur la
 # carte testée = son numéro de série), NeoPixel (vérifié par la caméra du banc).
 #####################################################################
-""" % dict(mcu=HD_MCU, p0=HD_POSITIONS[0], p1=HD_POSITIONS[-1],
-           heat="/".join(str(p) for p in HD_HEAT_POSITIONS))
+"""
+HD_HEADER_VALUES = dict(mcu=HD_MCU, p0=HD_POSITIONS[0], p1=HD_POSITIONS[-1],
+                        heat="/".join(str(p) for p in HD_HEAT_POSITIONS))
 
 
-def hyperdrive_macros():
+def hyperdrive_macros(descriptor):
     return """\
 # =====================================================================
 # BANC HYPERDRIVE — firmware + UID de la carte testee, NeoPixel (verifie par la
@@ -1016,7 +1020,7 @@ gcode:
 # descripteur ne passe JAMAIS dans une ligne gcode (RESPOND) : ";" y ouvre un
 # commentaire ; action_respond_info est un appel Python, sans ce piege.
 [gcode_macro QC_HD_FIRMWARE]
-description: QC banc HyperDrive — firmware de la carte testee IDENTIQUE a la reference (descripteur YUMI_CONFIG grave par firmware.yumi-lab.com ET version Klipper) + UID STM32 = numero de serie.
+description: QC banc HyperDrive — firmware de la carte testee IDENTIQUE a la reference (descripteur YUMI_CONFIG grave par le builder firmware Yumi ET version Klipper) + UID STM32 = numero de serie.
 gcode:
     RESPOND MSG="QC:MCU_CHECK:START"
     {%% set m = printer["mcu %(mcu)s"] %%}
@@ -1025,7 +1029,7 @@ gcode:
     {action_respond_info("[mcu %(mcu)s] version: " ~ m.mcu_version)}
     QUERY_MCU_UID
     {%% if got != "%(fw)s" %%}
-        RESPOND TYPE=error MSG="QC: %(build_err)s (descriptor above, reference = firmware.yumi-lab.com %(uid)s)"
+        RESPOND TYPE=error MSG="QC: %(build_err)s (descriptor above, reference firmware %(uid)s)"
         RESPOND MSG="QC:MCU_CHECK:FAIL"
     {%% elif m.mcu_version != "%(ver)s" %%}
         RESPOND TYPE=error MSG="QC: %(ver_err)s {m.mcu_version}, expected %(ver)s"
@@ -1035,13 +1039,18 @@ gcode:
     {%% endif %%}
 """ % dict(led=HD_LED, mcu=HD_MCU, pin=HD_LED_PIN, count=HD_LED_COUNT,
            on_r=LED_ON_RGB[0], on_g=LED_ON_RGB[1], on_b=LED_ON_RGB[2],
-           order=HD_LED_ORDER, fw=HD_FIRMWARE_DESCRIPTOR, ver=HD_FIRMWARE_VERSION,
+           order=HD_LED_ORDER, fw=descriptor, ver=HD_FIRMWARE_VERSION,
            build_err=HD_FW_BUILD_ERR, ver_err=HD_FW_VERSION_ERR,
-           uid=HD_FIRMWARE_DESCRIPTOR.rsplit("uid=", 1)[1])
+           uid=descriptor.rsplit("uid=", 1)[1])
 
 
-def build_hyperdrive():
-    cfg = build(HD_HYPERDRIVES, HD_HEADER, HD_MODEL)
+def hd_dst(model):
+    return os.path.join(HERE, "qc_printer_%s.cfg" % model)
+
+
+def build_hyperdrive(model=HD_MODEL):
+    hds = [(HD_MCU, HD_SERIAL[model], HD_POSITIONS[0] - 1)]
+    cfg = build(hds, HD_HEADER % dict(HD_HEADER_VALUES, serial=HD_SERIAL[model]), model)
     # Numero de serie = UID STM32 de la CARTE TESTEE, pas de la C235 du banc.
     cfg = replace(cfg, "[mcu_uid]\n# mcu: mcu ",
                   "[mcu_uid]\nmcu: %s   # banc HyperDrive : UID de la carte testee\n# mcu: mcu " % HD_MCU, 1)
@@ -1055,11 +1064,12 @@ def build_hyperdrive():
     cfg = replace(cfg, "            G1 E-300 F1200\n",
                   "            # banc HyperDrive : retour a la position de depart, pas d'ejection\n"
                   "            G1 E-{ns.maxpush} F1200\n", 1)
-    return cfg + "\n" + hyperdrive_macros()
+    return cfg + "\n" + hyperdrive_macros(HD_FIRMWARE[model])
 
 
 def main():
-    for dst, cfg in ((DST, build()), (HD_DST, build_hyperdrive())):
+    builds = [(DST, build())] + [(hd_dst(m), build_hyperdrive(m)) for m in HD_SERIAL]
+    for dst, cfg in builds:
         with open(dst, "w") as f:
             f.write(cfg)
         print("OK ->", dst)

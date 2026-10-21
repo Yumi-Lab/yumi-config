@@ -27,7 +27,7 @@ ROUTED_TEMPLATE = {"version": 1, "label": {"w_mm": 75, "h_mm": 120}, "elements":
 
 class TestMainsRatings(unittest.TestCase):
     def test_table_covers_the_firmware_catalog(self):
-        # firmware.yumi-lab.com catalog.json mains_voltages = ["220V", "110V"]
+        # builder firmware Yumi, catalog.json mains_voltages = ["220V", "110V"]
         self.assertEqual(set(print_plaque.MAINS_RATINGS), {"220V", "110V"})
 
     def test_220v_is_the_european_range(self):
