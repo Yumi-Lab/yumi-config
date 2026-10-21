@@ -299,23 +299,25 @@ class Panel(ScreenPanel):
         # un modèle est l'action (charge sa cfg, ou lance le QC si déjà chargé).
         # Pas de titre « 机型 / Model » au-dessus (14/10) : les boutons parlent
         # d'eux-mêmes et la hauteur manquait pour la rangée du bas.
-        # Every mode button shares the content width (19/10: with ADXL, 6 fixed 120 px buttons
-        # ran off the right edge of the 800 px screen).
+        # Mode buttons on two rows sharing the content width (19/10: 6 fixed 120 px buttons ran off
+        # the 800 px screen; 21/10: 8 modes no longer fit on one row).
         spacing = 8
-        btn_w = min(120, (self._gtk.content_width - 40 - spacing * (len(QC_SIZES) - 1)) // len(QC_SIZES))
-        size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=spacing)
-        size_row.set_halign(Gtk.Align.CENTER)
-        for size in QC_SIZES:
-            avail = os.path.exists(self._qc_cfg_path(size))
-            selected = (size == self._selected_size)
-            label = size if avail else f"{size}\n待生成/TBD"
-            style = "color3" if selected else ("color1" if avail else "color2")
-            sbtn = self._gtk.Button(None, label, style)
-            sbtn.set_size_request(btn_w, 58)
-            sbtn.set_sensitive(avail)
-            sbtn.connect("clicked", self._on_size_selected, size)
-            size_row.pack_start(sbtn, False, False, 0)
-        box.pack_start(size_row, False, False, 2)
+        per_row = -(-len(QC_SIZES) // 2)
+        btn_w = min(120, (self._gtk.content_width - 40 - spacing * (per_row - 1)) // per_row)
+        for first in range(0, len(QC_SIZES), per_row):
+            size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=spacing)
+            size_row.set_halign(Gtk.Align.CENTER)
+            for size in QC_SIZES[first:first + per_row]:
+                avail = os.path.exists(self._qc_cfg_path(size))
+                selected = (size == self._selected_size)
+                label = size if avail else f"{size}\n待生成/TBD"
+                style = "color3" if selected else ("color1" if avail else "color2")
+                sbtn = self._gtk.Button(None, label, style)
+                sbtn.set_size_request(btn_w, 50)
+                sbtn.set_sensitive(avail)
+                sbtn.connect("clicked", self._on_size_selected, size)
+                size_row.pack_start(sbtn, False, False, 0)
+            box.pack_start(size_row, False, False, 2)
 
         # Aide : un APPUI sur le modèle LANCE directement (entre en QC / START).
         hint = Gtk.Label()
