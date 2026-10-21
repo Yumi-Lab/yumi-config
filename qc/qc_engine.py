@@ -256,37 +256,46 @@ HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> rep
 # An unplugged thermistor reads about -87 C (open circuit, min_temp -200 in the C-series cfg).
 HOTEND_PLUGGED_MIN_C = 0
 
-_HOTEND_TESTS = [
-    {
-        # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
-        "id": "heat_start",
-        "name": "开始加热 / Start heating",
-        "type": "automated",
-        "macro": "QC_HOTEND_HEAT_START TEMP=%d" % HOTEND_TEMP,
-        "timeout": 30,
-    },
-    _QC_BY_ID["fan_hotend"],
-    _QC_BY_ID["fan_part"],
-    {
-        "id": "hotend_temp",
-        "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
-        "type": "visual",
-        "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
-        "prompt": "测温仪读数约 %d°C 吗？\nDoes the thermometer read about %d °C?"
-                  % (HOTEND_TEMP, HOTEND_TEMP),
-        "timeout": 300,
-    },
-]
+HOTEND_SWITCH_WAIT_S = 60
+
+_HEAT_START = {
+    # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
+    "id": "heat_start",
+    "name": "开始加热 / Start heating",
+    "type": "automated",
+    "macro": "QC_HOTEND_HEAT_START TEMP=%d" % HOTEND_TEMP,
+    "timeout": 30,
+}
+_HEAD_SWITCH = {
+    # Same check as the machine QC feed (QC_HEAD_FEED): the switch is free first (else stuck),
+    # then triggers when the operator pushes a filament in (done while the head heats).
+    "id": "head_switch",
+    "name": "插入耗材 / Insert a filament: head switch",
+    "type": "automated",
+    "macro": "QC_HOTEND_SWITCH WAIT=%d" % HOTEND_SWITCH_WAIT_S,
+    "timeout": HOTEND_SWITCH_WAIT_S + 30,
+}
+_HOTEND_TEMP = {
+    "id": "hotend_temp",
+    "name": "喷头 %d°C / Hot end %d °C" % (HOTEND_TEMP, HOTEND_TEMP),
+    "type": "visual",
+    "macro": "QC_HOTEND_TEMP TEMP=%d" % HOTEND_TEMP,
+    "prompt": "测温仪读数约 %d°C 吗？\nDoes the thermometer read about %d °C?"
+              % (HOTEND_TEMP, HOTEND_TEMP),
+    "timeout": 300,
+}
+_HOTEND_EXTRUDE = {
+    "id": "hotend_extrude",
+    "name": "挤出电机 / Extruder motor",
+    "type": "visual",
+    "macro": "QC_HOTEND_EXTRUDE MM=%d SPEED=%s" % (HOTEND_EXTRUDE_MM, HOTEND_EXTRUDE_MM_S),
+    "prompt": "电机转动，喷嘴出料了吗？\nDid the motor turn and filament come out of the nozzle?",
+    "timeout": 120,
+}
+_FANS = [_QC_BY_ID["fan_hotend"], _QC_BY_ID["fan_part"]]
 HOTEND_TESTS = {
-    "X12": _HOTEND_TESTS,
-    "DD": _HOTEND_TESTS + [{
-        "id": "hotend_extrude",
-        "name": "挤出电机 / Extruder motor",
-        "type": "visual",
-        "macro": "QC_HOTEND_EXTRUDE MM=%d SPEED=%s" % (HOTEND_EXTRUDE_MM, HOTEND_EXTRUDE_MM_S),
-        "prompt": "电机转动，喷嘴出料了吗？\nDid the motor turn and filament come out of the nozzle?",
-        "timeout": 120,
-    }],
+    "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP],
+    "DD": [_HEAT_START] + _FANS + [_HOTEND_TEMP, _HOTEND_EXTRUDE],
 }
 
 
