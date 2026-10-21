@@ -36,7 +36,8 @@ def _render(body, detected, pushed=0, params=None):
 class TestSequences(unittest.TestCase):
     def test_x12_heats_and_checks_the_fans(self):
         self.assertEqual([t["id"] for t in tests_for_model("X12")],
-                         ["heat_start", "head_switch", "fan_hotend", "fan_part", "hotend_temp"])
+                         ["heat_start", "head_switch", "fan_hotend", "fan_part", "hotend_temp",
+                          "filament_cut"])
 
     def test_dd_also_extrudes(self):
         self.assertEqual([t["id"] for t in tests_for_model("DD")],
@@ -74,6 +75,17 @@ class TestCfg(unittest.TestCase):
                 last = "PASS" if t["type"] == "automated" else "VISUAL"
                 self.assertIn('"QC:%s:%s"' % (t["id"].upper(), last), cfg)   # the switch loop sends PASS
 
+    def test_real_acceleration(self):
+        """Klipper derives the extrude-only acceleration from max_accel: the C235 limits, never a
+        placeholder (max_accel 1 made each 25 mm feed step last ~20 s, 21/10)."""
+        with open(os.path.join(QC_DIR, "qc_printer_C235.cfg")) as f:
+            c235 = f.read()
+        for model in HOTEND_DEVICES:
+            cfg = _generator().build(model)
+            for opt in ("max_velocity", "max_accel"):
+                self.assertEqual(re.search(r"\n%s: (\d+)" % opt, cfg).group(1),
+                                 re.search(r"\n%s: (\d+)" % opt, c235).group(1))
+
     def test_macros_render(self):
         import jinja2
         cfg = _generator().build("DD")
@@ -100,7 +112,7 @@ class TestHeadSwitch(unittest.TestCase):
     def test_free_switch_starts_the_feed(self):
         out = _render(_macro_body(self.cfg, "QC_HOTEND_SWITCH"), False, params={"MAXD": "800", "SPEED": "10"})
         self.assertIn("VARIABLE=maxd VALUE=800", out)
-        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.3", out)
+        self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.1", out)
 
     def test_feed_loop(self):
         loop = _body(self.cfg, "delayed_gcode _qc_hotend_switch")
@@ -122,6 +134,16 @@ class TestHeadSwitch(unittest.TestCase):
         self.assertNotIn("hyperdrive_uart", dd)
         self.assertNotIn("QC_HOTEND_SWITCH", dd)
 
+    def test_cut_then_retract(self):
+        """The operator's answer to the cut prompt runs the retract (visual test cleanup)."""
+        cut = HOTEND_TESTS["X12"][-1]
+        self.assertEqual((cut["id"], cut["type"]), ("filament_cut", "visual"))
+        macro, mm, speed = re.match(r"(\w+) MM=(\d+) SPEED=(\S+)", cut["cleanup"]).groups()
+        out = _render(_macro_body(self.cfg, macro), False, params={"MM": mm, "SPEED": speed})
+        self.assertIn("G1 E-40.0 F3000.0", out)
+        self.assertIn("MOTION_QUEUE=extruder\n", out)
+        self.assertTrue(out.rstrip().endswith("MOTION_QUEUE="))
+
     def test_cleanup_stops_the_loop(self):
         self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0\n",
                       _macro_body(self.cfg, "QC_CLEANUP"))
@@ -131,7 +153,7 @@ class TestRun(unittest.TestCase):
     def test_x12_pass_gives_one_head_report(self):
         engine = QCEngine()
         engine.start("02810E28F273", model="X12")
-        for tid in ("HEAT_START", "HEAD_SWITCH", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP"):
+        for tid in ("HEAT_START", "HEAD_SWITCH", "FAN_HOTEND", "FAN_PART", "HOTEND_TEMP", "FILAMENT_CUT"):
             engine.process_gcode_response("QC:%s:START" % tid)
             if tid in ("HEAT_START", "HEAD_SWITCH"):
                 engine.process_gcode_response("QC:%s:PASS" % tid)
