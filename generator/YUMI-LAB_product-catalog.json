@@ -572,14 +572,16 @@
       "z_tap": {
         "travel_speed": 70,
         "compression_offset": 0.0,
-        "max_probe_times": 200,
+        "max_probe_times": 15,
         "probe_delay": 2,
         "z_hop": 3,
         "samples": 5,
         "samples_tolerance": 0.01,
         "safe_z": 10,
+        "tap_current": 0.7,
         "_comments": {
-          "max_probe_times": "最大探测次数",
+          "max_probe_times": "taps before giving up without a stable contact. A good tap validates in 6-8 (C335 07/11); a Z stalled against the bed fired the sensor 32 times in 30 s at heights 1.2 mm apart, never stable",
+          "tap_current": "Z current during the tap: the motor gives way on a crash instead of pressing the nozzle into the bed. C335 07/11: 0.5 A taps fine (5 within 0.0025 mm), 0.4 A stalls without the impact the sensor needs",
           "probe_delay": "探测延迟（ms）",
           "samples_tolerance": "precision"
         }
@@ -816,7 +818,7 @@
         {
           "id": "motion_sensor_init",
           "condition": "yms_count > 0",
-          "gcode": "[gcode_macro MOTION_SENSOR_INIT]\ndescription: Initialize YMS filament sensors\ngcode:\n    M82\n    G92 E0\n    G1 E50 F4000\n    G92 E0\n    M18"
+          "gcode": "[gcode_macro MOTION_SENSOR_INIT]\ndescription: Initialize YMS filament sensors\ngcode:\n    M82\n    G92 E0\n    G1 E50 F4000\n    G92 E0\n    # release the extrusion motors only: switching every motor off here also unhomed X/Y/Z, so a G28 run in the\n    # 10 s after a Klipper start (INIT_YMS -> T0 -> here) was undone right after it ended\n    {% for name in printer.stepper_enable.steppers if not name.startswith('stepper_') %}\n    SET_STEPPER_ENABLE STEPPER=\"{name}\" ENABLE=0\n    {% endfor %}"
         },
         {
           "id": "yms_heater_limit",

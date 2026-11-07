@@ -137,6 +137,9 @@ class QCReference(unittest.TestCase):
         ("extruder", "enable_pin"): "same",
         ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
         ("autotune_tmc stepper_y", "motor"): "same",
+        ("yumi_z_tap", "max_probe_times"): "15 in the trunk: a Z stalled against the bed fired the sensor 32 times in "
+                                           "30 s without a stable contact (C335 07/11); the factory QC keeps 200 until "
+                                           "a QC bench validates the bounded tap",
         ("yumi_sensorless_homing", "run_sgthrs_y"): "QC still re-applies 150 after the home; the trunk sets 0: re-applied "
                                                     "on aborted homes too, it poisoned the register and looped on "
                                                     "'aucun contact' (C235 06/09, sensorless-homing journal test 8)",
@@ -535,6 +538,15 @@ class MacrosMatchHardware(unittest.TestCase):
         self.assertNotIn("SET_KINEMATIC_POSITION", t0)
         self.assertIn("MOTION_SENSOR_INIT", t0)
 
+    def test_yms_sensor_init_never_unhomes_the_axes(self):
+        """MOTION_SENSOR_INIT ran M18 (all motors off, X/Y/Z unhomed) 10 s after every Klipper
+        start: a G28 run in that window was undone as soon as it ended (C335 07/11)."""
+        cfg = generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG)
+        init = cfg.split("[gcode_macro MOTION_SENSOR_INIT]", 1)[1].split("\n[", 1)[0]
+        for unhoming in ("M18", "M84", "SET_KINEMATIC_POSITION"):
+            self.assertNotIn(unhoming, init)
+        self.assertIn("if not name.startswith('stepper_')", init)
+
 
 class ParkPositions(unittest.TestCase):
     """Every park position of the macros fits the machine's X axis (Orca: bed+7 approach, bed+20 pop tool)."""
@@ -669,7 +681,7 @@ class FilamentAtHead(unittest.TestCase):
 class Comments(unittest.TestCase):
     def test_catalog_comments_reach_the_cfg(self):
         cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
-        self.assertIn("max_probe_times: 200  # 最大探测次数", cfg)
+        self.assertIn("max_probe_times: 15  # taps before giving up", cfg)
         self.assertIn("[motor_constants BJ42D29-28V31]  # MOTOR X/Y C SERIES", cfg)
         self.assertIn("#interpolate: True", cfg)
         self.assertIn("beta: 4300  # 4190 #4460 pour descendre de 20°", cfg)
