@@ -2,6 +2,11 @@ import logging
 
 
 class ZTap:
+    # Extra descent allowed once the declared travel is used up without a contact: covers
+    # the slack between position_max and the real top of the Z axis, bounded so a dead
+    # switch never drives the nozzle far into the bed.
+    SEARCH_EXTENSION_MM = 20.0
+
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
@@ -26,6 +31,10 @@ class ZTap:
         # Nb max de dwell pour attendre que le switch repasse OUVERT avant de
         # relancer une descente (anti "Probe triggered prior to movement").
         self.settle_retries = config.getint("settle_retries", 10)
+        # Z run current during the whole tap (the Z position is unknown until the contact):
+        # a dead pressure switch then makes the motor give way instead of pressing the
+        # nozzle into the bed. 0 = keep the [tmc2209 stepper_z] current.
+        self.tap_current = config.getfloat("tap_current", 0., minval=0.)
         # Tolerance de validation Z=0/maillage : a la fin du tap, on verifie
         # que le maillage charge vaut ~0 a la coordonnee du tap (sinon Z=0 et
         # le mesh sont decales). 0 = desactive la verif.
@@ -188,12 +197,25 @@ class ZTap:
         saved_max_z_accel = kin.max_z_accel
         if self.active_accel > 0:
             kin.max_z_accel = self.active_accel
+        tap_current = gcmd.get_float('CURRENT', self.tap_current, minval=0.)
+        tmc_z = self.printer.lookup_object('tmc2209 stepper_z', None)
+        saved_current = None
+        if tap_current > 0 and tmc_z is not None:
+            st = tmc_z.get_status(self.printer.get_reactor().monotonic())
+            saved_current = (st['run_current'], st['hold_current'])
+            gcode.run_script_from_command(
+                "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                % (tap_current, tap_current))
         try:
             self._probe_with_pressure_switch(gcmd)
         finally:
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
             kin.max_z_accel = saved_max_z_accel
+            if saved_current is not None:
+                gcode.run_script_from_command(
+                    "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                    % saved_current)
 
         # Validation : le maillage charge doit valoir ~0 a la coordonnee du tap
         self._validate_mesh_zero(gcmd)
@@ -347,11 +369,36 @@ class ZTap:
         stable_count = 0
         zendstop_p = None
         spurious = 0
+        extended = False
         for attempt in range(self.max_probe_times):
             # Palpage tolerant : attend que le switch se rouvre s'il est encore
             # declenche (vibration/maintien), au lieu de planter en
             # "Probe triggered prior to movement".
-            zcur = self._run_probe_settled(gcmd, probe_pressure, gcode)
+            try:
+                zcur = self._run_probe_settled(gcmd, probe_pressure, gcode)
+            except self.printer.command_error as e:
+                if "No trigger" not in str(e):
+                    raise
+                if extended:
+                    raise gcmd.error(
+                        "ZTap: pressure switch never triggered over the whole Z travel + "
+                        "%.0f mm -> check the pressure sensor (wiring, [probe_pressure] pin)"
+                        % self.SEARCH_EXTENSION_MM)
+                # The search starts from a declared Z (z_max - z_hop - 1): a head parked at
+                # the very top is farther than that from the bed (C335 2026-11-07: 400 mm
+                # down, stopped just above the plate). Go on for a bounded extra distance.
+                extended = True
+                stable_count = 0
+                zendstop_p = None
+                z_min = self.printer.lookup_object('configfile').get_status(0)[
+                    'settings']['stepper_z']['position_min']
+                gcode.run_script_from_command(
+                    "SET_KINEMATIC_POSITION Z=%.3f SET_HOMED=Z"
+                    % (z_min + self.SEARCH_EXTENSION_MM))
+                gcmd.respond_info(
+                    "ZTap: no contact over the declared travel -> searching %.0f mm further"
+                    % self.SEARCH_EXTENSION_MM)
+                continue
 
             if _is_false_positive(zcur[2]):
                 spurious += 1
