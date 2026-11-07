@@ -170,8 +170,32 @@ class YumiSensorless:
         return kin.rails[ai]
 
     def _set_kin(self, axis, value):
+        # SET_HOMED defaults to xyz: a bare call marked the two OTHER axes homed too (C335
+        # 2026-11-07: after a G28 X, Klipper reported xyz homed with Y and Z never measured).
         self.printer.lookup_object('gcode').run_script_from_command(
-            "SET_KINEMATIC_POSITION %s=%.4f" % (axis, value))
+            "SET_KINEMATIC_POSITION %s=%.4f SET_HOMED=%s" % (axis, value, axis))
+
+    def _reset_saturated_stealth_tuning(self, st, gcmd):
+        """StealthChop learns PWM_OFS_AUTO and keeps it while the driver is powered. Learned
+        with the motor unplugged it saturates at 255: once the motor is back, the homing move
+        (StealthChop) puts full voltage on the coils and the driver trips on a fake
+        short-to-supply (C335 2026-11-07, X). Toggling pwm_autoscale restarts the learning
+        from PWM_OFS (measured: 255 -> 27, then 67 learned on the next home)."""
+        obj = self.printer.lookup_object('tmc2209 stepper_%s' % st, None)
+        if obj is None:
+            return
+        reg = obj.mcu_tmc.get_register('PWM_AUTO')
+        if obj.fields.get_field('pwm_ofs_auto', reg, 'PWM_AUTO') < 255:
+            return
+        autoscale = obj.fields.get_field('pwm_autoscale')
+        gcode = self.printer.lookup_object('gcode')
+        gcode.run_script_from_command(
+            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=pwm_autoscale VALUE=0" % st)
+        gcode.run_script_from_command(
+            "SET_TMC_FIELD STEPPER=stepper_%s FIELD=pwm_autoscale VALUE=%d" % (st, autoscale))
+        gcmd.respond_info(
+            "YUMI_SENSORLESS_HOME %s: StealthChop tuning saturated (pwm_ofs_auto=255, learned "
+            "with the motor unplugged) -> restarted from pwm_ofs" % st.upper())
 
     def _handle_motor_off(self, *args):
         # stepper_enable sends "stepper_enable:motor_off" with NO argument in this Klipper
@@ -396,6 +420,7 @@ class YumiSensorless:
         tcool0 = self._read_field(st, 'tcoolthrs')
         sg0 = self._read_field(st, 'sgthrs')
 
+        self._reset_saturated_stealth_tuning(st, gcmd)
         # Ouvre la fenetre StallGuard (tcoolthrs=0 + CoolStep coupe).
         self._open_sg_window(st)
 
