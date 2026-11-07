@@ -539,7 +539,7 @@
           "center_dy": "centre Y = plateau + dy, coordonnees BUSE (sonde a +30 derriere) ; mesure : C235 -25, C335 -21",
           "z_floor": "le nez reste au-dessus du plateau pendant que la sonde est derriere : jamais sous ce Z (repere tap)",
           "planes": "plans scannes a partir du 1er contact (le champ inductif s'elargit en descendant)",
-          "plate_probe_floor": "lowest Z of the print-plate tab probe, Z=0 = trigger level on the reference strip. C335 07/11: down to position_min (5 mm under) the nozzle reached the bare bed and Z skipped steps at full current; 3 mm under, at the tap current, to be confirmed on the machine",
+          "plate_probe_floor": "lowest Z of the print-plate tab probe, Z=0 = trigger level on the reference strip. C335 07/11: down to position_min (5 mm under) the nozzle reached the bare bed and Z skipped steps at full current; measured at -3: print plate tab triggers at -0.37 to -0.40 mm (4 runs), no plate = nothing down to -3 and no end-stop contact",
           "accel": "acceleration pendant le balayage (20000 = a-coups bruyants sur des mouvements de 2 mm)"
         }
       },
