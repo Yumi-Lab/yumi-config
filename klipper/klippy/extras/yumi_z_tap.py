@@ -549,8 +549,13 @@ class ZTap:
             self._restore_z_current()
         lifted = toolhead.get_position()[2] - (target - dist)
         if stalled:
-            gcmd.respond_info("YUMI_Z_LIFT: top end stop reached after %.1f of %.1f mm, stopped there"
-                              % (lifted, dist))
+            gcmd.respond_info("YUMI_Z_LIFT: top end stop reached after %.1f of %.1f mm (motor "
+                              "stall), stopped there" % (lifted, dist))
+        elif lifted < dist - 0.01:
+            # the carriage knocking the top of the frame fires the pressure switch first (C335
+            # 08/11: stopped after 14.4 mm from Z395), as it does at the bottom stop
+            gcmd.respond_info("YUMI_Z_LIFT: stopped after %.1f of %.1f mm (pressure switch: top end "
+                              "stop knock or vibration)" % (lifted, dist))
         else:
             gcmd.respond_info("YUMI_Z_LIFT: lifted %.1f mm" % lifted)
 
