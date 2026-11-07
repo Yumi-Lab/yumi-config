@@ -97,6 +97,8 @@ class CommonTrunk(unittest.TestCase):
         ("resonance_tester", "probe_points"),
         # the C435 Y axis has its own motor (MOTOR Y C435)
         ("autotune_tmc stepper_x", "motor"), ("autotune_tmc stepper_y", "motor"),
+        # the bed rides on Y: its weight sets the Y cap per size (C335 08/11, belt teeth skipped)
+        ("printer", "kinematics"), ("printer", "max_y_accel"),
     }
 
     def _check_pair(self, product_a, product_b):
@@ -131,6 +133,8 @@ class QCReference(unittest.TestCase):
                 "motor_constants BJ42D29-28V03", "motor_constants BJ42D07-06V02", "motor_constants BJ42D07-03V05")
     # (section, option): why the generated value legitimately differs from the QC file
     KNOWN = {
+        ("printer", "kinematics"): "limited_cartesian caps Y for the heavy C335 bed (08/11, belt teeth skipped at "
+                                   "20000); the factory QC cfgs keep cartesian until validated on a QC bench",
         ("extruder", "step_pin"): "QC declares [extruder] on the fictive pins (CHROMAX-style cfg on a DD head); "
                                   "the direct drive product wires the real motor on E0",
         ("extruder", "dir_pin"): "same",
@@ -177,11 +181,11 @@ class QCReference(unittest.TestCase):
         self._compare("C435")
 
     def test_known_differences_still_differ(self):
-        """A KNOWN entry that no longer differs is stale: remove it."""
-        qc = parse((QC_DIR / "qc_printer_C235.cfg").read_text(encoding="utf-8"))
-        gen = parse(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        """A KNOWN entry that no longer differs on any machine is stale: remove it."""
+        pairs = [(parse((QC_DIR / ("qc_printer_%s.cfg" % m)).read_text(encoding="utf-8")),
+                  parse(generator.generate("%s_DD_LW_04" % m, catalog=CATALOG))) for m in MACHINES]
         for sec, opt in self.KNOWN:
-            self.assertNotEqual(norm(qc[sec].get(opt)), norm(gen[sec].get(opt)), (sec, opt))
+            self.assertTrue(any(norm(qc[sec].get(opt)) != norm(gen[sec].get(opt)) for qc, gen in pairs), (sec, opt))
 
 
 class MachineMacro(unittest.TestCase):
@@ -667,6 +671,17 @@ class CancelSequence(unittest.TestCase):
         self.assertLess(start.index("SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z"), lift)
         self.assertLess(lift, start.index("SET_KINEMATIC_POSITION CLEAR=Z"))
         self.assertNotRegex(start, r"M10[49]|M1[49]0", "PRINT_START heats nothing: the slicer does, after it")
+
+    def test_c335_caps_y_not_x(self):
+        """C335 08/11: the heavy Y bed skipped teeth at 20000; X keeps 20000 for the pop tool."""
+        cfg = generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG)
+        printer = cfg[cfg.index("[printer]"):]
+        printer = printer[:printer.index("\n[")]
+        self.assertIn("kinematics: limited_cartesian", printer)
+        self.assertIn("max_y_accel: 4000", printer)
+        self.assertIn("max_accel: 20000", printer)
+        self.assertNotIn("max_x_accel", printer)
+        self.assertIn("kinematics: cartesian", generator.generate("C235_DD_LW_04", catalog=CATALOG))
 
     def test_g28_z_alone_keeps_an_xy_really_found(self):
         """The start G-code homes XY while the bed heats, then G28 Z taps on the hot bed: G28 Z

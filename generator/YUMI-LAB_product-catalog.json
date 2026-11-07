@@ -907,6 +907,11 @@
         "position_endstop": 357,
         "position_max": 357
       },
+      "printer": {
+        "_comment": "Y carries the heavy C335 plate: belt teeth skipped at 500 mm/s / 20000 on Y (08/11); Y capped, X keeps 20000 for the pop tool. 4000 = Nicolas 08/11, test value until the per-machine calibration",
+        "kinematics": "limited_cartesian",
+        "max_y_accel": 4000
+      },
       "stepper_y": {
         "position_max": 345
       },

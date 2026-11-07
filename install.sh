@@ -259,6 +259,26 @@ for module in "${YUMI_EXTRAS[@]}"; do
 done
 echo "Klippy extras symlinked ...[Done]"
 
+# Kinematics additions, same rule as the extras (new files only, symlinked): limited_cartesian
+# caps Y for the C-series bed (generator: kinematics: limited_cartesian on the machines that need it)
+YUMI_KINEMATICS=(
+  "limited_cartesian.py"
+)
+KLIPPER_KINEMATICS_DIR="$KLIPPER_DIR/klippy/kinematics"
+echo "Symlinking klippy kinematics..."
+for module in "${YUMI_KINEMATICS[@]}"; do
+  SOURCE_FILE="$PROJECT_DIR/klipper/klippy/kinematics/$module"
+  TARGET_FILE="$KLIPPER_KINEMATICS_DIR/$module"
+  if [ -f "$SOURCE_FILE" ]; then
+    rm -f "$TARGET_FILE"
+    ln -sf "$SOURCE_FILE" "$TARGET_FILE"
+    echo "✅ $module -> symlinked"
+  else
+    echo "⚠ $module not found in yumi-config, skipping"
+  fi
+done
+echo "Klippy kinematics symlinked ...[Done]"
+
 # NOTE: extruder.py / motion_queuing.py are NO LONGER copied over here. The
 # extruder lead_time patch now ships as real commits in the Yumi-Lab/klipper fork
 # (rebased on upstream), so the pad receives it through the normal klipper git
