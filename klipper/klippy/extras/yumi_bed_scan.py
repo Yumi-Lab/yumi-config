@@ -46,9 +46,12 @@
 #   miss, lift, unhome Z and stop (BED_DETECTION phase 1).
 # Command: BED_PLATE_PRESENT X= Y= — PROBE on the print plate tab at the tap current, bounded at
 #   plate_probe_floor; no trigger = no print plate, clear error (BED_DETECTION phase 2).
+# Command: BED_MESH_PERSISTED — after scripts/save_mesh.py, drops from the SAVE_CONFIG pending
+#   list the mesh profiles printer.cfg holds point for point (no more "save config?" prompt).
 # Status (printer.yumi_bed_scan): found, x, y, z, points.
 import logging
 import math
+import re
 
 
 def serpentine(cx, cy, rx, ry, sx, sy):
@@ -134,6 +137,8 @@ class YumiBedScan:
                                     desc=self.cmd_BED_PLATE_PRESENT_help)
         self.gcode.register_command('BED_REF_PROBE', self.cmd_BED_REF_PROBE,
                                     desc=self.cmd_BED_REF_PROBE_help)
+        self.gcode.register_command('BED_MESH_PERSISTED', self.cmd_BED_MESH_PERSISTED,
+                                    desc=self.cmd_BED_MESH_PERSISTED_help)
 
     def get_status(self, eventtime):
         return dict(self.last)
@@ -316,6 +321,36 @@ class YumiBedScan:
                              "plate on the bed, check it lies flat" % (x, y, self.plate_probe_floor))
         gcmd.respond_info("BED_PLATE_PRESENT: print plate tab at X%.1f Y%.1f, trigger %.3f mm above "
                           "the reference trigger level" % (x, y, toolhead.get_position()[2] - shift))
+
+
+    cmd_BED_MESH_PERSISTED_help = ("After scripts/save_mesh.py: drop from the SAVE_CONFIG pending list "
+                                   "the mesh profiles that printer.cfg now holds, point for point")
+
+    def cmd_BED_MESH_PERSISTED(self, gcmd):
+        """save_mesh.py writes the mesh profiles into printer.cfg without a restart, but Klipper
+        still listed them as unsaved and every screen asked to SAVE_CONFIG after each mesh. A
+        profile leaves the pending list only when printer.cfg holds the very same points; any
+        other pending change (an offset...) stays pending."""
+        autosave = self.printer.lookup_object('configfile').autosave
+        with open(self.printer.get_start_args()['config_file'], encoding='utf-8') as f:
+            on_disk = f.read()
+        pending = dict(autosave.status_save_pending)
+        for section, values in list(pending.items()):
+            if not section.startswith("bed_mesh ") or not values:
+                continue
+            m = re.search(r"^#\*# \[%s\]\n((?:#\*#(?! \[).*\n?)*)" % re.escape(section), on_disk, re.M)
+            numbers = r"-?\d+\.\d+"
+            if m and re.findall(numbers, m.group(1)) and \
+                    re.findall(numbers, values.get('points', '')) == \
+                    re.findall(numbers, m.group(1).split("points =", 1)[-1].split("x_count", 1)[0]):
+                del pending[section]
+                gcmd.respond_info("BED_MESH_PERSISTED: [%s] is in printer.cfg, no SAVE_CONFIG needed"
+                                  % section)
+            else:
+                gcmd.respond_info("BED_MESH_PERSISTED: [%s] not found as such in printer.cfg, still "
+                                  "pending for SAVE_CONFIG" % section)
+        autosave.status_save_pending = pending
+        autosave.save_config_pending = bool(pending)
 
 
 def load_config(config):
