@@ -13,6 +13,7 @@ class ZTap:
         self.printer = config.get_printer()
         self.name = config.get_name()
         self._sampler = None
+        self.stall_stopped = False
         self._normal_current = None
         self._normal_mode = None
 
@@ -353,12 +354,7 @@ class ZTap:
             except self.printer.command_error as e:
                 if self._stalled():
                     # the host ended the descent: the probe only says 'no trigger'
-                    self._lift_and_unhome_z()
-                    raise gcmd.error(
-                        "ZTap: Z motor stalled during the descent (driver load under %d %d times "
-                        "in %.1f s) -> stopped at once, nozzle lifted %.0f mm, Z unhomed. Check "
-                        "what blocks Z and the Z current (tap_current)"
-                        % (self.STALL_SG, self.STALL_SAMPLES, self.STALL_WINDOW_S, self.safe_z))
+                    raise self._stall_error(gcmd)
                 if "prior to movement" not in str(e):
                     raise
                 # Nettoie un eventuel etat multi-probe laisse en suspens
@@ -627,19 +623,52 @@ class ZTap:
     def _stop_descent(self):
         """End the running probing move from the host, as Klipper does for a homing that times
         out: the MCU stops the Z steppers at once and the probe reports no trigger."""
-        trsync = self.printer.lookup_object('probe_pressure').mcu_probe.mcu_endstop._dispatch._trsyncs[0]
+        endstop = self._sampler.get("endstop") or self.printer.lookup_object('probe_pressure').mcu_probe
+        trsync = endstop.mcu_endstop._dispatch._trsyncs[0]
         trsync._trsync_trigger_cmd.send([trsync.get_oid(), trsync.REASON_HOST_REQUEST])
         logging.info("[ZTap] Z stall detected, descent stopped from the host")
         self._trace_mark("stall")
 
-    def _arm_stall(self, armed, direction=-1):
-        """direction: -1 watches descents (tap), +1 lifts (YUMI_Z_LIFT)."""
+    def _arm_stall(self, armed, direction=-1, endstop=None):
+        """direction: -1 watches descents, +1 lifts. endstop: the one whose homing/probing move
+        runs (its trsync is what the host triggers), the pressure switch by default."""
         sp = self._sampler
         if sp is not None:
             sp["armed"] = armed
             sp["dir"] = direction
+            sp["endstop"] = endstop
             sp["low"] = []
             sp["prev_z"] = None
+
+    def _stall_error(self, gcmd):
+        """Lift away, forget Z, and the error every watched move raises on a stall."""
+        self._lift_and_unhome_z()
+        self.stall_stopped = True
+        return gcmd.error(
+            "Z motor stalled (driver load under %d %d times in %.1f s) -> stopped at once, nozzle "
+            "lifted %.0f mm, Z unhomed. Check what blocks Z and the Z current (tap_current)"
+            % (self.STALL_SG, self.STALL_SAMPLES, self.STALL_WINDOW_S, self.safe_z))
+
+    def run_watched(self, gcmd, endstop, action, direction=-1):
+        """Run action() -- a probing or homing move on `endstop` -- in stealthChop with the stall
+        watch (BED_DETECTION's probes, C335 08/11). The Z current is the caller's. On a stall the
+        move is ended from the host, the nozzle lifted, Z unhomed, and stall_stopped is set so
+        the caller lets the error through as it is."""
+        self.stall_stopped = False
+        self._normal_current = None
+        self._stealth_on()
+        self._sampler_start('', gcmd)
+        try:
+            self._arm_stall(True, direction, endstop)
+            try:
+                return action()
+            except self.printer.command_error:
+                if self._stalled():
+                    raise self._stall_error(gcmd)
+                raise
+        finally:
+            self._sampler_stop(gcmd)
+            self._restore_z_current()
 
     def _stalled(self):
         return self._sampler is not None and self._sampler["stalled"]

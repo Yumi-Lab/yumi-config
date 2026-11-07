@@ -252,11 +252,13 @@ class YumiBedScan:
         logging.info("yumi_bed_scan: %s", self.last)
 
 
-    def _probe_at_tap_current(self):
+    def _probe_at_tap_current(self, gcmd):
         """PROBE with the Z motor at the [yumi_z_tap] tap_current: until the probe triggers the Z
         position is not trusted, so a miss makes the motor give way instead of forcing (C335
         07/11: the plate-tab probe went 5 mm under the reference on a bare bed and the Z motor
-        skipped steps at full current). Run/hold current restored whatever happens."""
+        skipped steps at full current). Run/hold current restored whatever happens. The descent
+        also runs under yumi_z_tap's stall watch: a Z that stalls is stopped from the host at
+        once, lifted and unhomed (C335 08/11)."""
         settings = self.printer.lookup_object('configfile').get_status(0)['settings']
         tap_current = settings.get('yumi_z_tap', {}).get('tap_current', 0.)
         tmc = settings.get('tmc2209 stepper_z', {})
@@ -264,13 +266,23 @@ class YumiBedScan:
             self.gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
+        ztap = self.printer.lookup_object('yumi_z_tap', None)
+        probe = self.printer.lookup_object('probe')
         try:
-            self.gcode.run_script_from_command("PROBE")
+            if ztap is None:
+                self.gcode.run_script_from_command("PROBE")
+            else:
+                ztap.run_watched(gcmd, probe.mcu_probe,
+                                 lambda: self.gcode.run_script_from_command("PROBE"))
         finally:
             if tap_current:
                 self.gcode.run_script_from_command(
                     "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                     % (tmc.get('run_current'), tmc.get('hold_current', tmc.get('run_current'))))
+
+    def _stall_stopped(self):
+        ztap = self.printer.lookup_object('yumi_z_tap', None)
+        return ztap is not None and ztap.stall_stopped
 
     cmd_BED_REF_PROBE_help = ("Probe the reference plate at X Y with the inductive probe at the Z tap "
                               "current ([yumi_z_tap] tap_current); on a miss, lift and stop")
@@ -281,8 +293,10 @@ class YumiBedScan:
         x, y = gcmd.get_float('X'), gcmd.get_float('Y')
         toolhead.manual_move([x, y, None], self.speed)
         try:
-            self._probe_at_tap_current()
+            self._probe_at_tap_current(gcmd)
         except self.printer.command_error as e:
+            if self._stall_stopped():
+                raise   # already lifted and unhomed by the stall watch
             self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z")
             toolhead.manual_move([None, None, self.lift], self.z_speed)
             toolhead.wait_moves()
@@ -308,9 +322,9 @@ class YumiBedScan:
         self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=%.3f SET_HOMED=Z"
                                            % (toolhead.get_position()[2] + shift))
         try:
-            self._probe_at_tap_current()
+            self._probe_at_tap_current(gcmd)
         except self.printer.command_error as e:
-            if "No trigger" not in str(e):
+            if self._stall_stopped() or "No trigger" not in str(e):
                 raise
             pos = toolhead.get_position()
             pos[2] += self.lift
