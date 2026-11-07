@@ -90,6 +90,8 @@ class ZTap:
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('YUMI_Z_TAP', self.cmd_Z_TAP,
                               desc="Set Z=0 at nozzle contact via pressure switch")
+        gcode.register_command('YUMI_Z_TRACE', self.cmd_Z_TRACE,
+                              desc="Record the Z driver load outside a tap: ACTION=START [PATH=] | MARK TEXT= | STOP")
 
     def _check_homed(self, gcmd):
         toolhead = self.printer.lookup_object('toolhead')
@@ -500,6 +502,21 @@ class ZTap:
     # 0.002 s (~140 reads/s) starved Klipper's own TMC checks: 'Timeout on wait for
     # tmcuart_response', Klipper down (C335 08/11)
     TRACE_PERIOD_S = 0.025
+
+    def cmd_Z_TRACE(self, gcmd):
+        """Same recording as YUMI_Z_TAP TRACE, driven by hand: a stall provoked on purpose
+        (Z carriage driven into its end stop, nozzle off the bed) to learn its pattern."""
+        action = gcmd.get('ACTION').upper()
+        if action == 'START':
+            if self._trace is not None:
+                raise gcmd.error("YUMI_Z_TRACE: a trace is already running")
+            self._trace_start(gcmd.get('PATH', self.TRACE_DEFAULT_PATH), gcmd)
+        elif action == 'MARK':
+            self._trace_mark(gcmd.get('TEXT'))
+        elif action == 'STOP':
+            self._trace_stop(gcmd)
+        else:
+            raise gcmd.error("YUMI_Z_TRACE: ACTION=%s unknown, START / MARK / STOP" % action)
 
     def _trace_start(self, path, gcmd):
         reactor = self.printer.get_reactor()
