@@ -39,12 +39,13 @@
 #   speed, z_speed        XY and Z speeds of the sweep in mm/s (defaults 150, 10)
 #   lift                  Z clearance before an XY travel (default 5)
 #   accel                 acceleration during the sweep, restored afterwards (default 1000)
+#   plate_probe_floor     lowest Z of the BED_PLATE_PRESENT probe, Z=0 = reference trigger (default 0)
 # Command: BED_SCAN_ZERO [CENTER_X= CENTER_Y=] [RANGE_X= RANGE_Y=] [STEP_X= STEP_Y=] [Z_CLEAR=]
 #   [Z_STEP=] [Z_FLOOR=] [PLANES=] — homes, scans, saves bed_detect_x/y/z/bed in save_variables.
 # Command: BED_REF_PROBE X= Y= — PROBE on the reference at the [yumi_z_tap] tap_current; on a
 #   miss, lift, unhome Z and stop (BED_DETECTION phase 1).
-# Command: BED_PLATE_PRESENT X= Y= — PROBE on the print plate tab (nozzle past the bed edge);
-#   no trigger down to position_min = no print plate, clear error (BED_DETECTION phase 2).
+# Command: BED_PLATE_PRESENT X= Y= — PROBE on the print plate tab at the tap current, bounded at
+#   plate_probe_floor; no trigger = no print plate, clear error (BED_DETECTION phase 2).
 # Status (printer.yumi_bed_scan): found, x, y, z, points.
 import logging
 import math
@@ -123,6 +124,9 @@ class YumiBedScan:
         self.z_speed = config.getfloat('z_speed', 10.0, above=0.)
         self.lift = config.getfloat('lift', 5.0, above=0.)            # clearance before XY travel
         self.accel = config.getfloat('accel', 1000.0, above=0.)       # during the sweep
+        # BED_PLATE_PRESENT never probes lower than this, in the frame BED_DETECTION leaves
+        # (Z=0 = trigger level on the reference plate, a height the scan never touched at).
+        self.plate_probe_floor = config.getfloat('plate_probe_floor', 0.0)
         self.last = {"found": False, "x": None, "y": None, "z": None, "points": 0}
         self.gcode.register_command('BED_SCAN_ZERO', self.cmd_BED_SCAN_ZERO,
                                     desc=self.cmd_BED_SCAN_ZERO_help)
@@ -243,25 +247,36 @@ class YumiBedScan:
         logging.info("yumi_bed_scan: %s", self.last)
 
 
-    cmd_BED_REF_PROBE_help = ("Probe the reference plate at X Y with the inductive probe at the Z tap "
-                              "current ([yumi_z_tap] tap_current); on a miss, lift and stop")
-
-    def cmd_BED_REF_PROBE(self, gcmd):
-        """The Z position is fake until the probe triggers: a missed plate would drive the
-        nozzle into the bed. Reduced current makes the motor give way; a failed probe lifts
-        the nozzle from where it really is, forgets Z and stops."""
-        toolhead = self.printer.lookup_object('toolhead')
-        x, y = gcmd.get_float('X'), gcmd.get_float('Y')
+    def _probe_at_tap_current(self):
+        """PROBE with the Z motor at the [yumi_z_tap] tap_current: until the probe triggers the Z
+        position is not trusted, so a miss makes the motor give way instead of forcing (C335
+        07/11: the plate-tab probe went 5 mm under the reference on a bare bed and the Z motor
+        skipped steps at full current). Run/hold current restored whatever happens."""
         settings = self.printer.lookup_object('configfile').get_status(0)['settings']
         tap_current = settings.get('yumi_z_tap', {}).get('tap_current', 0.)
         tmc = settings.get('tmc2209 stepper_z', {})
-        toolhead.manual_move([x, y, None], self.speed)
         if tap_current:
             self.gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
         try:
             self.gcode.run_script_from_command("PROBE")
+        finally:
+            if tap_current:
+                self.gcode.run_script_from_command(
+                    "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                    % (tmc.get('run_current'), tmc.get('hold_current', tmc.get('run_current'))))
+
+    cmd_BED_REF_PROBE_help = ("Probe the reference plate at X Y with the inductive probe at the Z tap "
+                              "current ([yumi_z_tap] tap_current); on a miss, lift and stop")
+
+    def cmd_BED_REF_PROBE(self, gcmd):
+        """A failed probe lifts the nozzle from where it really is, forgets Z and stops."""
+        toolhead = self.printer.lookup_object('toolhead')
+        x, y = gcmd.get_float('X'), gcmd.get_float('Y')
+        toolhead.manual_move([x, y, None], self.speed)
+        try:
+            self._probe_at_tap_current()
         except self.printer.command_error as e:
             self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z")
             toolhead.manual_move([None, None, self.lift], self.z_speed)
@@ -270,31 +285,38 @@ class YumiBedScan:
             raise gcmd.error("BED_DETECTION: reference plate not found at X%.1f Y%.1f (%s) -> nozzle "
                              "lifted %.0f mm, Z unhomed; run BED_SCAN_ZERO"
                              % (x, y, str(e).split('\n')[0], self.lift))
-        finally:
-            if tap_current:
-                self.gcode.run_script_from_command(
-                    "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
-                    % (tmc.get('run_current'), tmc.get('hold_current', tmc.get('run_current'))))
 
-    cmd_BED_PLATE_PRESENT_help = ("Is the print plate on the bed? Probe its tab at X Y (the nozzle is "
-                                  "past the bed edge there); no trigger down to position_min = no plate")
+    cmd_BED_PLATE_PRESENT_help = ("Is the print plate on the bed? Probe its tab at X Y, never lower than "
+                                  "plate_probe_floor in the reference frame; no trigger = no plate")
 
     def cmd_BED_PLATE_PRESENT(self, gcmd):
-        """Vanilla probe on the plate tab: at x_max - inset the nozzle is past the bed edge, so
-        a descent down to position_min touches nothing; reaching it without a trigger means no
-        print plate. Only the message changes: the probe's 'No trigger' becomes the cause."""
+        """Probe on the print plate tab. The descent is bounded: Z is re-declared so that
+        stepper_z position_min falls on plate_probe_floor (Z=0 = trigger level on the reference
+        plate, where the scan never touched anything), and it runs at the tap current. No
+        trigger down to that floor = no print plate, a clear error instead of 'No trigger'."""
         toolhead = self.printer.lookup_object('toolhead')
         x, y = gcmd.get_float('X'), gcmd.get_float('Y')
+        z_min = self.printer.lookup_object('configfile').get_status(0)['settings'][
+            'stepper_z']['position_min']
         toolhead.manual_move([x, y, None], self.speed)
+        shift = z_min - self.plate_probe_floor
+        self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=%.3f SET_HOMED=Z"
+                                           % (toolhead.get_position()[2] + shift))
         try:
-            self.gcode.run_script_from_command("PROBE")
+            self._probe_at_tap_current()
         except self.printer.command_error as e:
             if "No trigger" not in str(e):
                 raise
-            toolhead.manual_move([None, None, self.lift], self.z_speed)
+            pos = toolhead.get_position()
+            pos[2] += self.lift
+            toolhead.manual_move(pos, self.z_speed)
             toolhead.wait_moves()
-            raise gcmd.error("BED_DETECTION: print plate absent (no metal at its tab X%.1f Y%.1f) "
-                             "-> put the print plate on the bed" % (x, y))
+            raise gcmd.error("BED_DETECTION: print plate absent or far out of level (no metal at its "
+                             "tab X%.1f Y%.1f down to Z%.2f above the reference) -> put the print "
+                             "plate on the bed, check it lies flat" % (x, y, self.plate_probe_floor))
+        gcmd.respond_info("BED_PLATE_PRESENT: print plate tab at X%.1f Y%.1f, trigger %.3f mm above "
+                          "the reference trigger level" % (x, y, toolhead.get_position()[2] - shift))
+
 
 def load_config(config):
     return YumiBedScan(config)
