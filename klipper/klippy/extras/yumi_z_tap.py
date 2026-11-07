@@ -501,7 +501,7 @@ class ZTap:
     TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
     # 0.002 s (~140 reads/s) starved Klipper's own TMC checks: 'Timeout on wait for
     # tmcuart_response', Klipper down (C335 08/11)
-    TRACE_PERIOD_S = 0.025
+    TRACE_PERIOD_S = 0.03   # two UART reads per sample
 
     def cmd_Z_TRACE(self, gcmd):
         """Same recording as YUMI_Z_TAP TRACE, driven by hand: a stall provoked on purpose
@@ -526,7 +526,7 @@ class ZTap:
                        "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
                        "stepper": kin.rails[2].get_steppers()[0],
                        "mcu": kin.rails[2].get_steppers()[0].get_mcu()}
-        self._trace["f"].write("t,sg_result,z,event\n")
+        self._trace["f"].write("t,sg_result,z,event,drv_status\n")
         self._trace["timer"] = reactor.register_timer(self._trace_sample, reactor.NOW)
         gcmd.respond_info("ZTap: TRACE -> %s" % path)
 
@@ -537,6 +537,9 @@ class ZTap:
         try:
             tmc = tr["tmc"]
             sg = tmc.fields.get_field('sg_result', tmc.mcu_tmc.get_register('SG_RESULT'), 'SG_RESULT')
+            # every other driver flag too (cs_actual, stealth, ola/olb...): what shows a stall
+            # in spreadCycle, where the TMC2209 computes no SG_RESULT
+            drv = tmc.mcu_tmc.get_register('DRV_STATUS')
             st = tr["stepper"]
             pt = tr["mcu"].estimated_print_time(eventtime)
             z = st.mcu_to_commanded_position(st.get_past_mcu_position(pt))
@@ -547,7 +550,7 @@ class ZTap:
             # the tap ended while this UART read was in flight: the file is closed (writing
             # to it raised in a reactor timer and shut Klipper down, C335 08/11)
             return self.printer.get_reactor().NEVER
-        tr["f"].write("%.4f,%d,%.4f,\n" % (eventtime - tr["t0"], sg, z))
+        tr["f"].write("%.4f,%d,%.4f,,%08x\n" % (eventtime - tr["t0"], sg, z, drv))
         tr["rows"] += 1
         if eventtime - tr["flushed"] > 0.5:
             tr["f"].flush()  # an emergency stop must not lose the samples
@@ -558,7 +561,7 @@ class ZTap:
         tr = self._trace
         if tr is not None:
             t = self.printer.get_reactor().monotonic() - tr["t0"]
-            tr["f"].write("%.4f,,,%s\n" % (t, event))
+            tr["f"].write("%.4f,,,%s,\n" % (t, event))
 
     def _trace_stop(self, gcmd):
         tr, self._trace = self._trace, None
