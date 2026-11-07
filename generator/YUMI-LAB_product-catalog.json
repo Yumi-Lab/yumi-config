@@ -211,7 +211,7 @@
         },
         "autotune": {
           "motor": "BJ42D07-06V02",
-          "tuning_goal": "auto",
+          "tuning_goal": "performance",
           "toff": 3,
           "tbl": 2,
           "voltage": 24,
@@ -219,7 +219,7 @@
           "extra_hysteresis": 0,
           "pwm_freq_target": 25000,
           "_comments": {
-            "tuning_goal": "silent"
+            "tuning_goal": "spreadCycle on Z: in stealthChop (auto) the C335 Z (42BYGH2216, T8 leadscrew) stalled from 20 mm/s at 1.2 A; in performance it lifted 20 to 50 mm/s cleanly (07/11). Z needs torque, not silence"
           }
         }
       },

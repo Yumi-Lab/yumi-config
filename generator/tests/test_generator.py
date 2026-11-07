@@ -137,6 +137,9 @@ class QCReference(unittest.TestCase):
         ("extruder", "enable_pin"): "same",
         ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
         ("autotune_tmc stepper_y", "motor"): "same",
+        ("autotune_tmc stepper_z", "tuning_goal"): "performance in the trunk: in stealthChop the C335 Z stalled "
+                                                   "from 20 mm/s (07/11); the factory QC keeps auto until a QC "
+                                                   "bench validates it",
         ("yumi_z_tap", "max_probe_times"): "15 in the trunk: a Z stalled against the bed fired the sensor 32 times in "
                                            "30 s without a stable contact (C335 07/11); the factory QC keeps 200 until "
                                            "a QC bench validates the bounded tap",
