@@ -17,6 +17,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -75,15 +76,24 @@ def main():
     catalog = generator.load_catalog()
     ports = catalog_uart_ports(catalog) + [p for p in a.ports if p not in catalog_uart_ports(catalog)]
 
+    if a.boot and klipper_active():
+        # the ports are Klipper's: the scan would find no board and record an empty composition
+        sys.stderr.write("--boot while Klipper runs: its serial ports are busy, the scan would find no "
+                         "board. Run without --boot: Klipper is then stopped and started around the scan\n")
+        return 2
     manage = not a.boot and klipper_active()
     how = service("stop") if manage else "none (klipper not running)"
     if manage:
         time.sleep(2)  # let klippy release the ports
     try:
-        detect = subprocess.run([sys.executable, str(HERE / "yumi-detect.py"), *ports],
+        # a dry run writes nothing: the composition goes to a scratch file compose reads back
+        scratch = ["--out", tempfile.mkstemp(suffix=".json")[1]] if a.dry_run else []
+        detect = subprocess.run([sys.executable, str(HERE / "yumi-detect.py"), *ports, *scratch],
                                 capture_output=True, text=True, timeout=240)
         sys.stderr.write(detect.stdout + detect.stderr)
         compose_cmd = [sys.executable, str(HERE / "compose.py")]
+        if scratch:
+            compose_cmd += ["--composition", scratch[1]]
         for flag in ("dry_run", "factory", "minimal"):
             if getattr(a, flag):
                 compose_cmd.append("--" + flag.replace("_", "-"))
