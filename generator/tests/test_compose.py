@@ -59,6 +59,18 @@ class BenchPadIsNeverComposed(unittest.TestCase):
             self.assertEqual(Path(d, "printer.cfg").read_text(encoding="utf-8"),
                              "[mcu hyperdrive_uart]\nserial: /dev/ttyS2\n")
 
+    def test_qc_mode_cfg_is_left_untouched_without_the_bench_marker(self):
+        qc_cfg = Path(compose.__file__).resolve().parent.parent.joinpath(
+            "qc", "qc_printer_C235.cfg").read_text(encoding="utf-8")
+        with self._bench_dir() as d:
+            Path(d, compose.BENCH_MARKER).unlink()
+            Path(d, "printer.cfg").write_text(qc_cfg, encoding="utf-8")
+            for kw in ({}, {"factory": True}, {"minimal": True}):
+                code, summary, cfg = compose.build(C235, CATALOG, d, **kw)
+                self.assertEqual(code, compose.EXIT_UNCHANGED, kw)
+                self.assertEqual(summary["mode"], "bench", kw)
+                self.assertIsNone(cfg, kw)
+
     def test_without_marker_the_same_dir_is_composed(self):
         with self._bench_dir() as d:
             Path(d, compose.BENCH_MARKER).unlink()

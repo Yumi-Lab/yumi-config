@@ -13,6 +13,9 @@ Type=oneshot
 User=pi
 Group=pi
 ExecStart=/usr/bin/python3 @PROJECT_DIR@/generator/autoconfig.py --boot
+# compose.py exit codes: 3 = minimal cfg written, 4 = printer.cfg left unchanged. Only 2 (alert)
+# is a failure; 4 alone made the unit show "failed" at every ordinary boot.
+SuccessExitStatus=3 4
 TimeoutStartSec=300
 StandardOutput=journal
 StandardError=journal

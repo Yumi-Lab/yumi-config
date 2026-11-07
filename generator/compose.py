@@ -59,6 +59,10 @@ EXIT_APPLIED, EXIT_ALERT, EXIT_MINIMAL, EXIT_UNCHANGED = 0, 2, 3, 4
 # and replaced the bench cfg with a plain C235 one -> Klipper down on the bench. Whatever
 # the flags, a bench pad is never composed.
 BENCH_MARKER = "qc_bench_config.json"
+# Every QC cfg (qc/qc_printer_*.cfg: factory machine QC, HyperDrive / ADXL / hot end benches)
+# carries this macro. Those pads follow main like the printers: once the generator ships there,
+# a QC pad in QC mode must keep its QC cfg, even without the bench marker.
+QC_MODE_MARKER = "[gcode_macro _QC_MODE]"
 
 # What decides the content of printer.cfg besides the boards. Recorded with the state: when
 # one of these changes (yumi-config update), the cfg is regenerated at the next boot even if
@@ -278,9 +282,12 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     except OSError:
         pass
 
-    if (config_dir / BENCH_MARKER).exists():
+    qc_mode = current is not None and QC_MODE_MARKER in current
+    if (config_dir / BENCH_MARKER).exists() or qc_mode:
+        reason = ("QC mode (%s in printer.cfg)" % QC_MODE_MARKER if qc_mode
+                  else "QC bench pad (%s present)" % BENCH_MARKER)
         summary = {"main": None, "smartbox": None, "others": [], "product": None, "chain": [],
-                   "reasons": ["QC bench pad (%s present): printer.cfg is never generated here" % BENCH_MARKER],
+                   "reasons": [reason + ": printer.cfg is never generated here"],
                    "mode": "bench", "alert": None, "minimal": False}
         return EXIT_UNCHANGED, summary, None
 
