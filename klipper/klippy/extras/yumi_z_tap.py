@@ -10,6 +10,7 @@ class ZTap:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
+        self._trace = None
 
         # Read parameters from config file
         # (pressure_switch_x/y sont lus plus bas, UNIQUEMENT en mode switch :
@@ -208,9 +209,14 @@ class ZTap:
             gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
+        trace = gcmd.get('TRACE', '')
+        self._trace = None
+        if trace:
+            self._trace_start(self.TRACE_DEFAULT_PATH if trace == '1' else trace, gcmd)
         try:
             self._probe_with_pressure_switch(gcmd)
         finally:
+            self._trace_stop(gcmd)
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
             kin.max_z_accel = saved_max_z_accel
@@ -377,7 +383,9 @@ class ZTap:
             # declenche (vibration/maintien), au lieu de planter en
             # "Probe triggered prior to movement".
             try:
+                self._trace_mark("descent")
                 zcur = self._run_probe_settled(gcmd, probe_pressure, gcode)
+                self._trace_mark("contact z=%.4f" % zcur[2])
             except self.printer.command_error as e:
                 if "No trigger" not in str(e):
                     raise
@@ -463,6 +471,7 @@ class ZTap:
             if self.z_hop:
                 pos = toolhead.get_position()
                 lift_z = min(pos[2] + self.z_hop, self.z_max)
+                self._trace_mark("lift")
                 toolhead.manual_move([None, None, lift_z], self.lift_speed)
 
         # No stable contact within max_probe_times: the measured signature of a Z stalling
@@ -474,6 +483,60 @@ class ZTap:
             "-> Z stalls against the bed or the pressure sensor is unreliable; nozzle lifted "
             "%.0f mm, Z unhomed. Check the Z current (tap_current) and the sensor"
             % (stable_count, self.samples, self.max_probe_times, spurious, self.safe_z))
+
+    # ── TRACE=1: the Z driver's load (SG_RESULT) during the tap, for the stall pattern ──
+    # Measurement aid (C335 07/11): a Z that skips steps at a known speed should show a
+    # periodic SG_RESULT pattern; a free descent stays flat (224-246 at 0.5 A). Read as fast
+    # as the TMC UART allows, with the live Z of the stepper and the tap events.
+    TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
+    TRACE_PERIOD_S = 0.002
+
+    def _trace_start(self, path, gcmd):
+        reactor = self.printer.get_reactor()
+        kin = self.printer.lookup_object('toolhead').get_kinematics()
+        self._trace = {"f": open(path, "w"), "path": path, "t0": reactor.monotonic(),
+                       "flushed": 0., "rows": 0,
+                       "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
+                       "stepper": kin.rails[2].get_steppers()[0],
+                       "mcu": kin.rails[2].get_steppers()[0].get_mcu()}
+        self._trace["f"].write("t,sg_result,z,event\n")
+        self._trace["timer"] = reactor.register_timer(self._trace_sample, reactor.NOW)
+        gcmd.respond_info("ZTap: TRACE -> %s" % path)
+
+    def _trace_sample(self, eventtime):
+        tr = self._trace
+        if tr is None:
+            return self.printer.get_reactor().NEVER
+        try:
+            tmc = tr["tmc"]
+            sg = tmc.fields.get_field('sg_result', tmc.mcu_tmc.get_register('SG_RESULT'), 'SG_RESULT')
+            st = tr["stepper"]
+            pt = tr["mcu"].estimated_print_time(eventtime)
+            z = st.mcu_to_commanded_position(st.get_past_mcu_position(pt))
+        except Exception as e:
+            logging.info("ZTap trace: sample failed: %s", e)
+            return eventtime + 0.05
+        tr["f"].write("%.4f,%d,%.4f,\n" % (eventtime - tr["t0"], sg, z))
+        tr["rows"] += 1
+        if eventtime - tr["flushed"] > 0.5:
+            tr["f"].flush()  # an emergency stop must not lose the samples
+            tr["flushed"] = eventtime
+        return eventtime + self.TRACE_PERIOD_S
+
+    def _trace_mark(self, event):
+        tr = self._trace
+        if tr is not None:
+            t = self.printer.get_reactor().monotonic() - tr["t0"]
+            tr["f"].write("%.4f,,,%s\n" % (t, event))
+
+    def _trace_stop(self, gcmd):
+        tr, self._trace = self._trace, None
+        if tr is None:
+            return
+        self.printer.get_reactor().unregister_timer(tr["timer"])
+        tr["f"].close()
+        gcmd.respond_info("ZTap: TRACE %d samples in %.1f s -> %s" % (
+            tr["rows"], self.printer.get_reactor().monotonic() - tr["t0"], tr["path"]))
 
     def _restore_z_current(self):
         """Back to the [tmc2209 stepper_z] current once the descents are over."""
