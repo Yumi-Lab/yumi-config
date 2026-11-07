@@ -533,13 +533,13 @@
         "z_speed": 10,
         "lift": 5,
         "accel": 1000,
-        "plate_probe_floor": 0.0,
+        "plate_probe_floor": -3.0,
         "_comments": {
           "center_dx": "centre X = plateau/2 + dx (mesure : C235 +7.5, C335 +8.5)",
           "center_dy": "centre Y = plateau + dy, coordonnees BUSE (sonde a +30 derriere) ; mesure : C235 -25, C335 -21",
           "z_floor": "le nez reste au-dessus du plateau pendant que la sonde est derriere : jamais sous ce Z (repere tap)",
           "planes": "plans scannes a partir du 1er contact (le champ inductif s'elargit en descendant)",
-          "plate_probe_floor": "lowest Z of the print-plate tab probe, Z=0 = trigger level on the reference strip (no contact there during the scans). C335 07/11: the unbounded probe went 5 mm lower on a bare bed and Z skipped steps",
+          "plate_probe_floor": "lowest Z of the print-plate tab probe, Z=0 = trigger level on the reference strip. C335 07/11: down to position_min (5 mm under) the nozzle reached the bare bed and Z skipped steps at full current; 3 mm under, at the tap current, to be confirmed on the machine",
           "accel": "acceleration pendant le balayage (20000 = a-coups bruyants sur des mouvements de 2 mm)"
         }
       },
