@@ -42,6 +42,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -265,6 +266,19 @@ def save_config_block(cfg_text):
     return cfg_text[i:] if i >= 0 else None
 
 
+def without_bed_meshes(block):
+    """The SAVE_CONFIG block minus its [bed_mesh <profile>] sections: a mesh belongs to one bed.
+    Without a profile, BED_MESH_PROFILE LOAD in the next print's start g-code meshes again."""
+    out, skip = [], False
+    for line in block.splitlines(keepends=True):
+        m = re.match(r"#\*# \[(.+)\]", line)
+        if m:
+            skip = m.group(1).startswith("bed_mesh ")
+        if not skip:
+            out.append(line)
+    return "".join(out)
+
+
 def with_save_config(cfg_text, block):
     """Replace the empty SAVE_CONFIG tail of a generated cfg with a preserved block."""
     i = cfg_text.find(SAVE_CONFIG_MARKER)
@@ -354,6 +368,13 @@ def build(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
     cfg = generator.generate(sel["product"], sel["overrides"])
     if mode == "preserve":
         block = save_config_block(current)
+        prev_device = (state.get("main") or {}).get("device")
+        if block and prev_device and prev_device != sel["main"].get("device"):
+            # C335 07/11: regenerated from a C235 pad, it kept the C235 mesh (X 15-220) and the
+            # tap zero sat 0.17 mm off it
+            block = without_bed_meshes(block)
+            sel["reasons"].append("machine changed (%s -> %s): bed mesh profiles dropped, the next "
+                                  "print meshes again" % (prev_device, sel["main"].get("device")))
         if block:
             cfg = with_save_config(cfg, block)
             sel["reasons"].append("SAVE_CONFIG block preserved")

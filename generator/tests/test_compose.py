@@ -168,6 +168,26 @@ class Build(unittest.TestCase):
         self.assertEqual(summary["mode"], "preserve")
         self.assertIn("z_offset = 1.234", cfg)
 
+    def test_machine_change_drops_the_bed_mesh_only(self):
+        """C335 07/11: regenerated from a C235 pad, it kept the C235 mesh. A mesh belongs to one
+        bed: dropped on a machine change, the other calibrations stay."""
+        mesh = ("#*# [bed_mesh default]\n#*# version = 1\n#*# points =\n#*# \t  0.1, 0.2\n"
+                "#*# min_x = 15.0\n#*# max_x = 219.96\n")
+        (self.dir / CATALOG["detection"]["state_file"]).write_text(
+            json.dumps({"main": {"uid": "aaaaaa", "device": "C235"}}))
+        (self.dir / "printer.cfg").write_text(SAVE_BLOCK + mesh)
+        c335 = {"boards": [board("/dev/ttyS1", "C335", "aaaaaa")], "cameras": []}
+        code, summary, cfg = compose.build(c335, CATALOG, self.dir)
+        self.assertEqual(summary["mode"], "preserve")
+        self.assertIn("z_offset = 1.234", cfg)
+        self.assertNotIn("bed_mesh default", cfg)
+        self.assertTrue(any("bed mesh profiles dropped" in r for r in summary["reasons"]))
+        # same machine: the mesh stays
+        (self.dir / CATALOG["detection"]["state_file"]).write_text(
+            json.dumps({"main": {"uid": "aaaaaa", "device": "C335"}}))
+        code, summary, cfg = compose.build(c335, CATALOG, self.dir)
+        self.assertIn("bed_mesh default", cfg)
+
     def test_other_board_is_factory(self):
         self._state("ffffff")
         (self.dir / "printer.cfg").write_text(SAVE_BLOCK)
