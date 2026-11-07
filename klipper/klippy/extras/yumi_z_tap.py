@@ -12,7 +12,7 @@ class ZTap:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
-        self._trace = None
+        self._sampler = None
         self._normal_current = None
         self._normal_mode = None
 
@@ -223,13 +223,11 @@ class ZTap:
                 gcode.run_script_from_command(
                     "SET_TMC_FIELD STEPPER=stepper_z FIELD=%s VALUE=%d" % (field, value))
         trace = gcmd.get('TRACE', '')
-        self._trace = None
-        if trace:
-            self._trace_start(self.TRACE_DEFAULT_PATH if trace == '1' else trace, gcmd)
+        self._sampler_start(self.TRACE_DEFAULT_PATH if trace == '1' else trace, gcmd)
         try:
             self._probe_with_pressure_switch(gcmd)
         finally:
-            self._trace_stop(gcmd)
+            self._sampler_stop(gcmd)
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
             kin.max_z_accel = saved_max_z_accel
@@ -340,6 +338,12 @@ class ZTap:
                      self.tap_x, self.tap_y)
 
     def _run_probe_settled(self, gcmd, probe_pressure, gcode):
+        try:
+            return self._run_probe_settled_inner(gcmd, probe_pressure, gcode)
+        finally:
+            self._arm_stall(False)
+
+    def _run_probe_settled_inner(self, gcmd, probe_pressure, gcode):
         # Lance un palpage. Si le switch est encore declenche au depart
         # (vibration du chassis pas retombee, ou maintien manuel), probing_move
         # ne bouge pas et leve "Probe triggered prior to movement"
@@ -348,9 +352,18 @@ class ZTap:
         # lieu de planter. La lecture query_endstop du capteur de pression
         # n'est pas fiable -> on reagit a l'echec reel du palpage.
         for i in range(self.settle_retries + 1):
+            self._arm_stall(True)
             try:
                 return probe_pressure.run_probe(gcmd)
             except self.printer.command_error as e:
+                if self._stalled():
+                    # the host ended the descent: the probe only says 'no trigger'
+                    self._lift_and_unhome_z()
+                    raise gcmd.error(
+                        "ZTap: Z motor stalled during the descent (driver load under %d %d times "
+                        "in %.1f s) -> stopped at once, nozzle lifted %.0f mm, Z unhomed. Check "
+                        "what blocks Z and the Z current (tap_current)"
+                        % (self.STALL_SG, self.STALL_SAMPLES, self.STALL_WINDOW_S, self.safe_z))
                 if "prior to movement" not in str(e):
                     raise
                 # Nettoie un eventuel etat multi-probe laisse en suspens
@@ -494,83 +507,116 @@ class ZTap:
             "%.0f mm, Z unhomed. Check the Z current (tap_current) and the sensor"
             % (stable_count, self.samples, self.max_probe_times, spurious, self.safe_z))
 
-    # ── TRACE=1: the Z driver's load (SG_RESULT) during the tap, for the stall pattern ──
-    # Measurement aid (C335 07/11): a Z that skips steps at a known speed should show a
-    # periodic SG_RESULT pattern; a free descent stays flat (224-246 at 0.5 A). Read as fast
-    # as the TMC UART allows, with the live Z of the stepper and the tap events.
+    # ── Z driver sampler: stall detection during the tap descents, optional TRACE recording ──
+    # One reader for both, so the TMC UART is never asked twice (two readers at 2 ms starved
+    # Klipper's own TMC checks: 'Timeout on wait for tmcuart_response', C335 08/11).
+    # Stall (C335 08/11, Z driven into its end stop, 6 mm/s, 0.7 A, stealthChop): the load
+    # (SG_RESULT) of a free descent stayed 212-244; at the stop it fell under 15 within 0.3 s and
+    # kept swinging 2-250. spreadCycle shows nothing (SG_RESULT 0, cs_actual fixed), which is
+    # why the descents run in stealthChop (TAP_MODE_FIELDS).
+    STALL_SG = 50               # 4x under the lowest free-descent reading
+    STALL_SAMPLES = 3           # readings under STALL_SG while Z goes down...
+    STALL_WINDOW_S = 0.3        # ...within this window: a single low reading never stops a tap
+    SAMPLE_PERIOD_S = 0.025
     TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
-    # 0.002 s (~140 reads/s) starved Klipper's own TMC checks: 'Timeout on wait for
-    # tmcuart_response', Klipper down (C335 08/11)
-    TRACE_PERIOD_S = 0.03   # two UART reads per sample
 
     def cmd_Z_TRACE(self, gcmd):
         """Same recording as YUMI_Z_TAP TRACE, driven by hand: a stall provoked on purpose
         (Z carriage driven into its end stop, nozzle off the bed) to learn its pattern."""
         action = gcmd.get('ACTION').upper()
         if action == 'START':
-            if self._trace is not None:
-                raise gcmd.error("YUMI_Z_TRACE: a trace is already running")
-            self._trace_start(gcmd.get('PATH', self.TRACE_DEFAULT_PATH), gcmd)
+            if self._sampler is not None:
+                raise gcmd.error("YUMI_Z_TRACE: a recording is already running")
+            self._sampler_start(gcmd.get('PATH', self.TRACE_DEFAULT_PATH), gcmd)
         elif action == 'MARK':
             self._trace_mark(gcmd.get('TEXT'))
         elif action == 'STOP':
-            self._trace_stop(gcmd)
+            self._sampler_stop(gcmd)
         else:
             raise gcmd.error("YUMI_Z_TRACE: ACTION=%s unknown, START / MARK / STOP" % action)
 
-    def _trace_start(self, path, gcmd):
+    def _sampler_start(self, path, gcmd):
+        """path: also record every sample (TRACE), else stall detection only."""
         reactor = self.printer.get_reactor()
         kin = self.printer.lookup_object('toolhead').get_kinematics()
-        self._trace = {"f": open(path, "w"), "path": path, "t0": reactor.monotonic(),
-                       "flushed": 0., "rows": 0,
-                       "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
-                       "stepper": kin.rails[2].get_steppers()[0],
-                       "mcu": kin.rails[2].get_steppers()[0].get_mcu()}
-        self._trace["f"].write("t,sg_result,z,event,drv_status\n")
-        self._trace["timer"] = reactor.register_timer(self._trace_sample, reactor.NOW)
-        gcmd.respond_info("ZTap: TRACE -> %s" % path)
+        stepper = kin.rails[2].get_steppers()[0]
+        sp = {"t0": reactor.monotonic(), "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
+              "stepper": stepper, "mcu": stepper.get_mcu(), "f": None, "path": path, "rows": 0,
+              "flushed": 0., "prev_z": None, "low": [], "armed": False, "stalled": False}
+        if path:
+            sp["f"] = open(path, "w")
+            sp["f"].write("t,sg_result,z,event,drv_status\n")
+            gcmd.respond_info("ZTap: TRACE -> %s" % path)
+        self._sampler = sp
+        sp["timer"] = reactor.register_timer(self._sample, reactor.NOW)
 
-    def _trace_sample(self, eventtime):
-        tr = self._trace
-        if tr is None:
-            return self.printer.get_reactor().NEVER
+    def _sample(self, eventtime):
+        sp = self._sampler
+        reactor = self.printer.get_reactor()
+        if sp is None:
+            return reactor.NEVER
         try:
-            tmc = tr["tmc"]
+            tmc = sp["tmc"]
             sg = tmc.fields.get_field('sg_result', tmc.mcu_tmc.get_register('SG_RESULT'), 'SG_RESULT')
-            # every other driver flag too (cs_actual, stealth, ola/olb...): what shows a stall
-            # in spreadCycle, where the TMC2209 computes no SG_RESULT
-            drv = tmc.mcu_tmc.get_register('DRV_STATUS')
-            st = tr["stepper"]
-            pt = tr["mcu"].estimated_print_time(eventtime)
-            z = st.mcu_to_commanded_position(st.get_past_mcu_position(pt))
+            drv = tmc.mcu_tmc.get_register('DRV_STATUS') if sp["f"] else 0
+            st = sp["stepper"]
+            z = st.mcu_to_commanded_position(
+                st.get_past_mcu_position(sp["mcu"].estimated_print_time(eventtime)))
         except Exception as e:
-            logging.info("ZTap trace: sample failed: %s", e)
+            logging.info("ZTap sampler: read failed: %s", e)
             return eventtime + 0.05
-        if self._trace is not tr:
-            # the tap ended while this UART read was in flight: the file is closed (writing
-            # to it raised in a reactor timer and shut Klipper down, C335 08/11)
-            return self.printer.get_reactor().NEVER
-        tr["f"].write("%.4f,%d,%.4f,,%08x\n" % (eventtime - tr["t0"], sg, z, drv))
-        tr["rows"] += 1
-        if eventtime - tr["flushed"] > 0.5:
-            tr["f"].flush()  # an emergency stop must not lose the samples
-            tr["flushed"] = eventtime
-        return eventtime + self.TRACE_PERIOD_S
+        if self._sampler is not sp:
+            # the tap ended while this UART read was in flight (writing to the closed trace
+            # file raised in a reactor timer and shut Klipper down, C335 08/11)
+            return reactor.NEVER
+        going_down = sp["prev_z"] is not None and z < sp["prev_z"] - 1e-4
+        sp["prev_z"] = z
+        if sp["armed"] and going_down and sg < self.STALL_SG and not sp["stalled"]:
+            sp["low"] = [t for t in sp["low"] if eventtime - t <= self.STALL_WINDOW_S] + [eventtime]
+            if len(sp["low"]) >= self.STALL_SAMPLES:
+                sp["stalled"] = True
+                self._stop_descent()
+        if sp["f"]:
+            sp["f"].write("%.4f,%d,%.4f,,%08x\n" % (eventtime - sp["t0"], sg, z, drv))
+            sp["rows"] += 1
+            if eventtime - sp["flushed"] > 0.5:
+                sp["f"].flush()  # an emergency stop must not lose the samples
+                sp["flushed"] = eventtime
+        return eventtime + self.SAMPLE_PERIOD_S
+
+    def _stop_descent(self):
+        """End the running probing move from the host, as Klipper does for a homing that times
+        out: the MCU stops the Z steppers at once and the probe reports no trigger."""
+        trsync = self.printer.lookup_object('probe_pressure').mcu_probe.mcu_endstop._dispatch._trsyncs[0]
+        trsync._trsync_trigger_cmd.send([trsync.get_oid(), trsync.REASON_HOST_REQUEST])
+        logging.info("[ZTap] Z stall detected, descent stopped from the host")
+        self._trace_mark("stall")
+
+    def _arm_stall(self, armed):
+        sp = self._sampler
+        if sp is not None:
+            sp["armed"] = armed
+            sp["low"] = []
+            sp["prev_z"] = None
+
+    def _stalled(self):
+        return self._sampler is not None and self._sampler["stalled"]
 
     def _trace_mark(self, event):
-        tr = self._trace
-        if tr is not None:
-            t = self.printer.get_reactor().monotonic() - tr["t0"]
-            tr["f"].write("%.4f,,,%s,\n" % (t, event))
+        sp = self._sampler
+        if sp is not None and sp["f"]:
+            t = self.printer.get_reactor().monotonic() - sp["t0"]
+            sp["f"].write("%.4f,,,%s,\n" % (t, event))
 
-    def _trace_stop(self, gcmd):
-        tr, self._trace = self._trace, None
-        if tr is None:
+    def _sampler_stop(self, gcmd):
+        sp, self._sampler = self._sampler, None
+        if sp is None:
             return
-        self.printer.get_reactor().unregister_timer(tr["timer"])
-        tr["f"].close()
-        gcmd.respond_info("ZTap: TRACE %d samples in %.1f s -> %s" % (
-            tr["rows"], self.printer.get_reactor().monotonic() - tr["t0"], tr["path"]))
+        self.printer.get_reactor().unregister_timer(sp["timer"])
+        if sp["f"]:
+            sp["f"].close()
+            gcmd.respond_info("ZTap: TRACE %d samples in %.1f s -> %s" % (
+                sp["rows"], self.printer.get_reactor().monotonic() - sp["t0"], sp["path"]))
 
     def _restore_z_current(self):
         """Back to the [tmc2209 stepper_z] current and chopper mode once the descents are over.
