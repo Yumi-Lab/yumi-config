@@ -460,6 +460,19 @@ class ModuleDocs(unittest.TestCase):
         self.assertNotIn("filament_yumi_smart_motion_sensor", dd)
 
 
+class PopToolAccelerationIsGivenBack(unittest.TestCase):
+    """The pop-tool run needs 20000 mm/s2 in X; the macros that raise it give back the
+    acceleration they came with (C335 07/11: after a print every Y move ran at 20000)."""
+
+    def test_macros_restore_the_acceleration(self):
+        cfg = generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG)
+        m = macros(cfg)
+        for name in ("YUMI_TOOL_CHANGE", "_YUMI_LEAVE_PART_AND_UNLOAD"):
+            body = m["gcode_macro %s" % name]
+            self.assertIn("{% set prev_accel = printer.toolhead.max_accel %}", body)
+            self.assertEqual(body.rstrip().splitlines()[-1].strip(), "SET_VELOCITY_LIMIT ACCEL={prev_accel}")
+
+
 class ZMovesCarryTheirSpeed(unittest.TestCase):
     """A Z move without F inherits the last XY feedrate (capped at max_z_velocity): on the C335
     (07/11) the mesh lift after BED_DETECTION stalled the leadscrew and Klipper believed Z=100."""
