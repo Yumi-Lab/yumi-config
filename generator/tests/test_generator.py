@@ -668,6 +668,27 @@ class CancelSequence(unittest.TestCase):
         self.assertLess(lift, start.index("SET_KINEMATIC_POSITION CLEAR=Z"))
         self.assertNotRegex(start, r"M10[49]|M1[49]0", "PRINT_START heats nothing: the slicer does, after it")
 
+    def test_yms_are_scanned_at_boot_and_at_print_start(self):
+        """Which YMS are plugged (C335 08/11: a print lost on an unplugged YMS cable): scanned
+        at boot for the screen, again by PRINT_START, the starting tool's YMS required there."""
+        m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
+        self.assertIn("YMS_SCAN", m["delayed_gcode welcome"])
+        start = m["gcode_macro PRINT_START"]
+        scan = start.index("YMS_SCAN{% if params.TOOL is defined %} REQUIRE={params.TOOL|int + 1}")
+        self.assertLess(start.index("SET_KINEMATIC_POSITION CLEAR=Z"), scan, "nozzle off the bed first")
+        self.assertLess(start.index("CANCEL_PRINT_DEFAULT"), scan, "a refused file never moves")
+
+    def test_resume_retries_what_paused_the_print_first(self):
+        """RESUME runs the pending load / YMS check before priming or moving back, and moves
+        nothing when the axes are not homed (a pause from PRINT_START, before G28)."""
+        resume = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro RESUME"]
+        retry = resume.index("YUMI_RETRY_PENDING")
+        self.assertLess(retry, resume.index("G1 X{x_park} F6000"))
+        self.assertLess(retry, resume.index("G1 E{prime|float}"))
+        self.assertIn("{% if homed %}\n        G1 X{x_park} F6000", resume)
+        self.assertIn("{% if homed and printer.extruder.can_extrude", resume)
+        self.assertLess(retry, resume.index("RESUME_BASE {get_params}"))
+
     def test_tip_sequence_is_one_source(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
         tip = m["gcode_macro _YUMI_TIP"]

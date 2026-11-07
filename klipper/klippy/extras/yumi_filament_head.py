@@ -57,8 +57,21 @@
 #   min_temp          degC the hotend must have reached before head_to_nozzle is fed (default 170)
 #   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
 # Status (printer.yumi_filament_head): present (live switch state, usable in macros: e.g. cut and
-# pull the previous filament before loading another tool), loaded_mm (last load), bypass.
+# pull the previous filament before loading another tool), loaded_mm (last load), bypass,
+# yms_connected (last YMS_SCAN), pending (the command RESUME will run again).
+#
+#   YMS_SCAN [REQUIRE=<n>]
+#       turns each YMS motor 0.1 mm back then forward (slowly, low current) and reads its
+#       driver: plugged or not, saved in save_variables `yms_connected` as [1, 0, ...] (YMS-1
+#       first, -1 = driver not readable). Run at boot and by PRINT_START. REQUIRE=n: YMS-n must
+#       be plugged.
+#   YUMI_RETRY_PENDING
+#       first line of RESUME: runs again the load / check that paused the print.
+# During a print a failed load or a required YMS unplugged no longer stops the print: alert,
+# PAUSE, and RESUME retries it (Nicolas 08/11: the YMS cable was unplugged, the print was lost).
+import json
 import logging
+import re
 
 
 class YumiFilamentHead:
@@ -81,9 +94,12 @@ class YumiFilamentHead:
         self.bypass_variable = config.get('bypass_variable', 'head_sensor_bypass')
         self.bypass = False
         self.loaded_mm = 0.
+        self.yms_connected = []
+        self.pending = None
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         for name, func in (("YUMI_LOAD_TO_HEAD", self.cmd_LOAD), ("YUMI_UNLOAD_CHECK", self.cmd_UNLOAD_CHECK),
-                           ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY)):
+                           ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY),
+                           ("YMS_SCAN", self.cmd_YMS_SCAN), ("YUMI_RETRY_PENDING", self.cmd_RETRY_PENDING)):
             self.gcode.register_command(name, func, desc=func.__doc__)
 
     # ── state ──────────────────────────────────────────────────────────
@@ -107,7 +123,8 @@ class YumiFilamentHead:
         return self.present
 
     def get_status(self, eventtime):
-        return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass}
+        return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass,
+                "yms_connected": list(self.yms_connected), "pending": self.pending is not None}
 
     # ── the feeding YMS ────────────────────────────────────────────────
     def _feeder(self, gcmd, step):
@@ -136,6 +153,79 @@ class YumiFilamentHead:
             raise self.printer.command_error(
                 "No filament coming from %s: its motion sensor saw nothing over %.0f mm of feed "
                 "(empty spool, or filament not inserted in that YMS)" % (feeder[0], fed))
+
+    # ── the YMS motors: plugged or not ─────────────────────────────────
+    # The TMC2209 flags an open coil (ola / olb) only while it drives the motor slowly (datasheet:
+    # not valid at standstill nor in fast motion), and the flags stay latched until it drives
+    # again. Measured on the C335 08/11, YMS-2 plugged and unplugged by hand: a 0.1 mm back and
+    # forth at 0.05 mm/s and 0.3 A flagged each coil of the unplugged motor at least once (B after
+    # the back move, A+B after the forward one) and none on the plugged one; 0.05 mm only ever
+    # flagged coil A. 0.1 mm stays in the tube's slack: a filament stuck cold in the head is not
+    # pulled, and the YMS ends where it started.
+    SCAN_MM = 0.1
+    SCAN_SPEED = 0.05
+    SCAN_CURRENT = 0.3
+    SCAN_VARIABLE = "yms_connected"
+
+    def _yms_motors(self):
+        """[(n, 'extruderK', extruder_stepper)] in YMS order: YMS-n is extruder{n-1} (E0 = YMS-1),
+        the mapping the generated T<n> macros sync."""
+        out = []
+        for name, obj in self.printer.lookup_objects('extruder_stepper'):
+            m = re.match(r"extruder_stepper (extruder(\d+))$", name)
+            if m:
+                out.append((int(m.group(2)) + 1, m.group(1), obj))
+        return sorted(out, key=lambda t: t[0])
+
+    def _yms_unplugged(self, short, obj):
+        """True / False, None when the YMS driver is not on UART (nothing to read)."""
+        tmc = self.printer.lookup_object('tmc2209 extruder_stepper ' + short, None)
+        if tmc is None:
+            return None
+        es = obj.extruder_stepper
+        stepper = es.stepper
+        force_move = self.printer.lookup_object('force_move')
+        enable = self.printer.lookup_object('stepper_enable')
+        toolhead = self.printer.lookup_object('toolhead')
+        cur = tmc.get_status(self.printer.get_reactor().monotonic())
+        was_enabled = enable.lookup_enable(stepper.get_name()).is_motor_enabled()
+        seen = set()
+        self.gcode.run_script_from_command("SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
+                                           % (short, self.SCAN_CURRENT, self.SCAN_CURRENT))
+        try:
+            enable.set_motors_enable([stepper.get_name()], True)
+            for dist in (-self.SCAN_MM, self.SCAN_MM):
+                force_move.manual_move(stepper, dist, self.SCAN_SPEED)
+                toolhead.wait_moves()
+                drv = tmc.mcu_tmc.get_register('DRV_STATUS')
+                seen.update(c for c in ('ola', 'olb') if tmc.fields.get_field(c, drv))
+        finally:
+            # force_move drove the stepper on its own position: back in step with the extruder
+            if es.motion_queue:
+                es.sync_to_extruder(es.motion_queue)
+            self.gcode.run_script_from_command("SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
+                                               % (short, cur['run_current'], cur['hold_current']))
+            if not was_enabled:
+                enable.set_motors_enable([stepper.get_name()], False)
+        return seen == {'ola', 'olb'}
+
+    def _unplugged_message(self, n):
+        return ("YMS-%d motor not connected (its driver reads both coils open): plug the YMS-%d "
+                "cable back in" % (n, n))
+
+    # ── a print is paused, not lost ────────────────────────────────────
+    def _printing(self):
+        ps = self.printer.lookup_object('print_stats', None)
+        return ps is not None and ps.get_status(self.printer.get_reactor().monotonic())['state'] == 'printing'
+
+    def _fail_or_pause(self, gcmd, message):
+        """During a print: alert, PAUSE, and keep this command for RESUME to run again. Outside a
+        print -- and while RESUME retries it, the print being paused then -- the error itself."""
+        if not self._printing():
+            raise gcmd.error(message)
+        self.pending = gcmd.get_commandline()
+        self.gcode.respond_raw("!! %s -> print paused: fix it, then press Resume" % message)
+        self.gcode.run_script_from_command("PAUSE")
 
     # ── moves ──────────────────────────────────────────────────────────
     def _stepped_feed(self, direction, max_mm, step, speed, want_present, feeder=None):
@@ -201,6 +291,20 @@ class YumiFilamentHead:
     # ── commands ───────────────────────────────────────────────────────
     def cmd_LOAD(self, gcmd):
         """Feed filament step by step until the head sensor sees it (PRELOAD= known mm first, in one move)"""
+        try:
+            self._load(gcmd)
+        except self.printer.command_error as e:
+            message = str(e)
+            m = re.match(r"No filament coming from YMS-(\d+)", message)
+            if m:
+                # nothing came: name an unplugged motor rather than an empty spool
+                n = int(m.group(1))
+                motor = {t[0]: t for t in self._yms_motors()}.get(n)
+                if motor is not None and self._yms_unplugged(motor[1], motor[2]):
+                    message = self._unplugged_message(n)
+            self._fail_or_pause(gcmd, message)
+
+    def _load(self, gcmd):
         speed = gcmd.get_float('SPEED', self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
         step = self.load_step(gcmd)
@@ -243,6 +347,38 @@ class YumiFilamentHead:
             fed += to_nozzle
         self.loaded_mm = fed
         self.gcode.run_script_from_command("M117 Filament loaded")
+
+    def cmd_YMS_SCAN(self, gcmd):
+        """Which YMS are plugged (0.1 mm back and forth each), saved as yms_connected; REQUIRE=<n>: YMS-n must be"""
+        flags, words = [], []
+        for n, short, obj in self._yms_motors():
+            unplugged = self._yms_unplugged(short, obj)
+            flags.append(-1 if unplugged is None else 0 if unplugged else 1)
+            words.append("YMS-%d %s" % (n, {1: "plugged", 0: "NOT plugged",
+                                            -1: "unknown (driver not on UART)"}[flags[-1]]))
+        self.yms_connected = flags
+        if self.printer.lookup_object('save_variables', None) is not None:
+            self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=%s"
+                                               % (self.SCAN_VARIABLE, json.dumps(flags).replace(" ", "")))
+        gcmd.respond_info("YMS scan: %s -> %s=%s" % (", ".join(words) or "no YMS declared",
+                                                     self.SCAN_VARIABLE, flags))
+        need = gcmd.get_int('REQUIRE', None, minval=1)
+        if need is None or not flags:
+            return  # no YMS declared: the head feeds itself, nothing to require
+        if need > len(flags):
+            self._fail_or_pause(gcmd, "YMS-%d required, this printer.cfg declares %d YMS (YMS-1..YMS-%d)"
+                                % (need, len(flags), len(flags)))
+        elif flags[need - 1] == 0:
+            self._fail_or_pause(gcmd, self._unplugged_message(need))
+
+    def cmd_RETRY_PENDING(self, gcmd):
+        """First line of RESUME: run again the load / check that paused the print (an error keeps it paused)"""
+        if self.pending is None:
+            return
+        gcmd.respond_info("retrying: %s" % self.pending)
+        # paused here, so a new failure raises: RESUME stops, the print stays paused
+        self.gcode.run_script_from_command(self.pending)
+        self.pending = None
 
     def cmd_UNLOAD_CHECK(self, gcmd):
         """After an unload: the head sensor must have released, pull more (one move) if not"""

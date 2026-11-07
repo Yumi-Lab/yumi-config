@@ -55,6 +55,9 @@ class Gcmd:
     def respond_info(self, msg):
         self.messages.append(msg)
 
+    def get_commandline(self):
+        return "YUMI_LOAD_TO_HEAD " + " ".join("%s=%s" % kv for kv in self.params.items())
+
     def error(self, msg):
         return CommandError(msg)
 
@@ -100,7 +103,8 @@ class Printer:
         toolhead = types.SimpleNamespace(manual_move=self._manual_move, wait_moves=lambda: None,
                                          get_position=lambda: list(self.pos))
         gcode = types.SimpleNamespace(register_command=lambda *a, **k: None,
-                                      run_script_from_command=self.scripts.append)
+                                      run_script_from_command=self.scripts.append,
+                                      respond_raw=self.scripts.append)
         self.objects = {
             "toolhead": toolhead, "gcode": gcode,
             "gcode_move": types.SimpleNamespace(reset_last_position=lambda: self.scripts.append("<resync>")),
@@ -116,8 +120,10 @@ class Printer:
             f.moved_to(self.pos[3])
         self.button_callback(0., 1 if self.pos[3] >= self.switch_at else 0)
 
-    def lookup_objects(self):
-        return list(self.objects.items()) + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+    def lookup_objects(self, module=None):
+        """Klipper's filter: every object, or those named `module` / `module <name>`."""
+        objs = list(self.objects.items()) + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+        return [(n, o) for n, o in objs if module is None or n == module or n.startswith(module + " ")]
 
     def lookup_object(self, name, default=KeyError):
         if name in self.objects:
@@ -212,6 +218,22 @@ class FeedingYms(unittest.TestCase):
             h.cmd_LOAD(Gcmd(SENSOR="YMS-3", MAX=2500))
         self.assertIn("No filament coming from YMS-3", str(cm.exception))
         self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps, not 2500")
+
+    def test_a_failed_load_during_a_print_pauses_it_and_resume_retries(self):
+        """C335 08/11: the YMS cable was unplugged and the print was lost. During a print the
+        failure is an alert + PAUSE, the load kept for RESUME (YUMI_RETRY_PENDING)."""
+        h, p = head(switch_at=10000.)
+        p.feeders["YMS-3"] = Feeder(has_filament=False, detection_length=50.)
+        state = {"state": "printing"}
+        p.objects["print_stats"] = types.SimpleNamespace(get_status=lambda t: state)
+        h.cmd_LOAD(Gcmd(SENSOR="YMS-3"))  # no exception: the print is not stopped
+        self.assertTrue(any(str(x).startswith("!! No filament coming from YMS-3") for x in p.scripts))
+        self.assertEqual(p.scripts[-1], "PAUSE")
+        self.assertTrue(h.get_status(0.)["pending"])
+        state["state"] = "paused"
+        h.cmd_RETRY_PENDING(Gcmd())
+        self.assertEqual(p.scripts[-1], "YUMI_LOAD_TO_HEAD SENSOR=YMS-3", "RESUME runs the same load again")
+        self.assertFalse(h.get_status(0.)["pending"])
 
     def test_yms_with_filament_loads_to_the_head_as_before(self):
         h, p = head(switch_at=147.)
