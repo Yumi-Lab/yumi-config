@@ -98,6 +98,9 @@ def main(out, paths):
         print("== %s: %d samples, %d events" % (path, len(samples), len(events)))
         for i, (t0, t1, how) in enumerate(descents(samples, events)):
             seg = samples[(samples[:, 0] >= t0) & (samples[:, 0] < t1)]
+            # only while Z moves: the probe_delay dwell before each descent is not a descent
+            if len(seg) > 2:
+                seg = seg[np.abs(np.gradient(seg[:, 2])) > 1e-4]
             if len(seg) < 3:
                 print("  descent %d: %d samples, too few" % (i + 1, len(seg)))
                 continue

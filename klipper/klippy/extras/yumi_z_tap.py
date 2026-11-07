@@ -6,11 +6,15 @@ class ZTap:
     # the slack between position_max and the real top of the Z axis, bounded so a dead
     # switch never drives the nozzle far into the bed.
     SEARCH_EXTENSION_MM = 20.0
+    # stealthChop at every speed during the tap descents (en_spreadcycle off, no TPWMTHRS ceiling)
+    TAP_MODE_FIELDS = {"en_spreadcycle": 0, "tpwmthrs": 0}
 
     def __init__(self, config):
         self.printer = config.get_printer()
         self.name = config.get_name()
         self._trace = None
+        self._normal_current = None
+        self._normal_mode = None
 
         # Read parameters from config file
         # (pressure_switch_x/y sont lus plus bas, UNIQUEMENT en mode switch :
@@ -200,15 +204,22 @@ class ZTap:
             kin.max_z_accel = self.active_accel
         tap_current = gcmd.get_float('CURRENT', self.tap_current, minval=0.)
         tmc_z = self.printer.lookup_object('tmc2209 stepper_z', None)
-        saved_current = None
         self._normal_current = None
+        self._normal_mode = None
         if tap_current > 0 and tmc_z is not None:
             st = tmc_z.get_status(self.printer.get_reactor().monotonic())
-            saved_current = (st['run_current'], st['hold_current'])
-            self._normal_current = saved_current
+            self._normal_current = (st['run_current'], st['hold_current'])
             gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
+        if tmc_z is not None:
+            # StallGuard4 (SG_RESULT) only exists in stealthChop: Z runs spreadCycle for its
+            # torque at speed (C335 07/11), so the slow tap descents switch to stealthChop at
+            # every speed and the normal mode comes back with the normal current.
+            self._normal_mode = {f: tmc_z.fields.get_field(f) for f in self.TAP_MODE_FIELDS}
+            for field, value in self.TAP_MODE_FIELDS.items():
+                gcode.run_script_from_command(
+                    "SET_TMC_FIELD STEPPER=stepper_z FIELD=%s VALUE=%d" % (field, value))
         trace = gcmd.get('TRACE', '')
         self._trace = None
         if trace:
@@ -220,10 +231,7 @@ class ZTap:
             probe_pressure.speed = saved_speed
             probe_pressure.sample_count = saved_samples
             kin.max_z_accel = saved_max_z_accel
-            if saved_current is not None:
-                gcode.run_script_from_command(
-                    "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
-                    % saved_current)
+            self._restore_z_current()
 
         # Validation : le maillage charge doit valoir ~0 a la coordonnee du tap
         self._validate_mesh_zero(gcmd)
@@ -489,7 +497,9 @@ class ZTap:
     # periodic SG_RESULT pattern; a free descent stays flat (224-246 at 0.5 A). Read as fast
     # as the TMC UART allows, with the live Z of the stepper and the tap events.
     TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
-    TRACE_PERIOD_S = 0.002
+    # 0.002 s (~140 reads/s) starved Klipper's own TMC checks: 'Timeout on wait for
+    # tmcuart_response', Klipper down (C335 08/11)
+    TRACE_PERIOD_S = 0.025
 
     def _trace_start(self, path, gcmd):
         reactor = self.printer.get_reactor()
@@ -539,11 +549,19 @@ class ZTap:
             tr["rows"], self.printer.get_reactor().monotonic() - tr["t0"], tr["path"]))
 
     def _restore_z_current(self):
-        """Back to the [tmc2209 stepper_z] current once the descents are over."""
+        """Back to the [tmc2209 stepper_z] current and chopper mode once the descents are over.
+        Runs before the final lift and again in the finally: idempotent."""
+        gcode = self.printer.lookup_object('gcode')
         if self._normal_current is not None:
-            self.printer.lookup_object('gcode').run_script_from_command(
+            gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % self._normal_current)
+            self._normal_current = None
+        if self._normal_mode is not None:
+            for field, value in self._normal_mode.items():
+                gcode.run_script_from_command(
+                    "SET_TMC_FIELD STEPPER=stepper_z FIELD=%s VALUE=%d" % (field, value))
+            self._normal_mode = None
 
     def _lift_and_unhome_z(self):
         """Lift away first (a hot nozzle must not stay on the bed), from where the nozzle really
