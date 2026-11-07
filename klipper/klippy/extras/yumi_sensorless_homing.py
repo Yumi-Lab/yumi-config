@@ -249,6 +249,50 @@ class YumiSensorless:
         except Exception:
             return None
 
+    # Motor-unplugged check, measured on a C335 on 2026-11-07 (X driver, 1 mm at 0.25 mm/s):
+    # unplugged -> DRV_STATUS ola AND olb on every reading of the move; plugged -> both clear
+    # after 0.8 s. At standstill both cases read the same (the TMC2209 datasheet says so too).
+    OPEN_LOAD_MOVE_MM = 1.0
+    OPEN_LOAD_SPEED = 0.25
+    OPEN_LOAD_SETTLE_S = 1.2
+    OPEN_LOAD_MIN_READINGS = 3
+
+    def _motor_unplugged(self, st, ai, away):
+        """Slow move away from the wall, reading the driver's open-load flags while it runs.
+        True only when both coils read open on every reading taken in motion."""
+        obj = self.printer.lookup_object('tmc2209 stepper_%s' % st, None)
+        if obj is None:
+            return False
+        toolhead = self.printer.lookup_object('toolhead')
+        reactor = self.printer.get_reactor()
+        cur = toolhead.get_position()
+        cur[ai] += away * self.OPEN_LOAD_MOVE_MM
+        toolhead.manual_move(cur, self.OPEN_LOAD_SPEED)
+        toolhead.get_last_move_time()  # flush the move to the MCU now, sample while it runs
+        start = reactor.monotonic()
+        end = start + self.OPEN_LOAD_MOVE_MM / self.OPEN_LOAD_SPEED
+        readings = []
+        now = reactor.pause(start + self.OPEN_LOAD_SETTLE_S)
+        while now < end - 0.2:
+            drv = obj.get_status(now).get('drv_status') or {}
+            if not drv.get('stst'):
+                readings.append(bool(drv.get('ola')) and bool(drv.get('olb')))
+            now = reactor.pause(now + 0.25)
+        toolhead.wait_moves()
+        return len(readings) >= self.OPEN_LOAD_MIN_READINGS and all(readings)
+
+    def _abort(self, gcmd, axis, ai, away, message):
+        """Every failed home ends here: name an unplugged motor instead of a vague
+        'no contact', then unhome (never a fake zero) and raise."""
+        st = axis.lower()
+        unplugged = self._motor_unplugged(st, ai, away)
+        self._unhome(ai)
+        if unplugged:
+            raise gcmd.error(
+                "YUMI_SENSORLESS_HOME %s: motor %s not connected (driver reports both coils "
+                "open while moving) -> check the %s motor cable" % (axis, axis, axis))
+        raise gcmd.error(message)
+
     def _full_step(self, axis, rail):
         # Taille d'un pas entier en mm : rotation_distance effective (gear_ratio
         # inclus, lue sur l'objet stepper) / full_steps_per_rotation. None si
@@ -476,8 +520,7 @@ class YumiSensorless:
                             # avant l'abort (jamais de faux zero). Avec
                             # SKIP_BASE=1 (bench, referentiel pose a la main)
                             # on n'impose JAMAIS un G28 natif surprise.
-                            self._unhome(ai)
-                            raise gcmd.error(
+                            self._abort(gcmd, axis, ai, away,
                                 "YUMI_SENSORLESS_HOME %s: aucun contact apres "
                                 "%d re-home(s) -> position de depart ou butee "
                                 "non fiable, home avorte" % (axis, rehomes))
@@ -572,8 +615,7 @@ class YumiSensorless:
             # Budget de taps epuise sans assez de contacts prouves : le
             # referentiel n'est pas fiable -> unhome + erreur franche (avant :
             # "home natif conserve" = zero potentiellement faux garde en douce).
-            self._unhome(ai)
-            raise gcmd.error(
+            self._abort(gcmd, axis, ai, away,
                 "YUMI_SENSORLESS_HOME %s: repetabilite NON etablie "
                 "(%d taps valides / %d requis, %d rejetes) -> referentiel "
                 "non fiable, home avorte" % (axis, len(triggers), samples,
@@ -587,8 +629,7 @@ class YumiSensorless:
         if not ok and spread > max(tol * 4., 0.2):
             # Contacts reels mais dispersion incompatible avec une butee
             # fiable (courroie/mecanique) : jamais de faux zero.
-            self._unhome(ai)
-            raise gcmd.error(
+            self._abort(gcmd, axis, ai, away,
                 "YUMI_SENSORLESS_HOME %s: spread=%.4fmm sur %d taps "
                 "(tol=%.4f) -> butee non repetable, home avorte"
                 % (axis, spread, len(window), tol))

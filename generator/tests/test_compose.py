@@ -1,4 +1,5 @@
 """compose.py — composition -> product -> printer.cfg (stdlib unittest, no hardware)."""
+import copy
 import json
 import os
 import sys
@@ -30,6 +31,10 @@ def board(port, device, uid, kind="main"):
 
 
 C235 = {"boards": [board("/dev/ttyS1", "C235", "aaaaaa")], "cameras": []}
+# What the main board alone puts in the overrides: its port and the motors its descriptor names.
+BOARD_OVERRIDES = {"mcu": {"serial": "/dev/ttyS1"},
+                   **{"stepper_%s" % a: {"autotune": {"motor": m}}
+                      for a, m in board("/dev/ttyS1", "C235", "aaaaaa")["motors"].items()}}
 C235_HD = {"boards": [board("/dev/ttyS1", "C235", "aaaaaa"),
                       board("/dev/ttyS2", "HYPERDRIVE_3P2L", "bbbbbb", kind="smartbox")], "cameras": []}
 SAVE_BLOCK = ("#*# <---------------------- SAVE_CONFIG ---------------------->\n"
@@ -84,9 +89,23 @@ class Select(unittest.TestCase):
         # no smartbox, no wizard choice: ChromaX12 + 2 YMS Lite, the same default as the slicer profiles
         sel = compose.select(C235, CATALOG)
         self.assertEqual(sel["product"], "C235_CX12_LW_04_2YMS")
-        self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+        self.assertEqual(sel["overrides"]["mcu"], {"serial": "/dev/ttyS1"})
         self.assertFalse(sel["minimal"])
         self.assertIsNone(sel["alert"])
+
+    def test_autotune_tunes_the_motors_the_board_names(self):
+        sel = compose.select(C235, CATALOG)
+        cfg = generator.generate(sel["product"], sel["overrides"])
+        for axis, motor in (("x", "42BYGH3023-B-22DH"), ("z", "42BYGH2216-B-24DH")):
+            self.assertIn("[autotune_tmc stepper_%s]\nmotor: %s" % (axis, motor), cfg)
+        self.assertIn("[motor_constants 42BYGH2216-B-24DH]", cfg)
+
+    def test_unknown_board_motor_keeps_the_catalog_motor_and_says_so(self):
+        comp = copy.deepcopy(C235)
+        comp["boards"][0]["motors"]["z"] = "NO-SUCH-MOTOR"
+        sel = compose.select(comp, CATALOG)
+        self.assertNotIn("stepper_z", sel["overrides"])
+        self.assertTrue(any("NO-SUCH-MOTOR" in r for r in sel["reasons"]))
 
     def test_smartbox_means_chromax_7yms(self):
         sel = compose.select(C235_HD, CATALOG)
@@ -319,7 +338,7 @@ class LocalOverrides(unittest.TestCase):
         self.assertTrue(any("local overrides" in r for r in sel["reasons"]))
 
     def test_no_overrides_changes_nothing(self):
-        self.assertEqual(compose.select(C235, CATALOG, {})["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+        self.assertEqual(compose.select(C235, CATALOG, {})["overrides"], BOARD_OVERRIDES)
 
 
 class WizardMachine(unittest.TestCase):
@@ -331,7 +350,7 @@ class WizardMachine(unittest.TestCase):
         self.assertEqual(sel["situation"], "unknown")
         self.assertFalse(sel["minimal"])
         self.assertEqual(sel["product"], "C335_CX12_LW_04_2YMS")
-        self.assertEqual(sel["overrides"], {"mcu": {"serial": "/dev/ttyS1"}})
+        self.assertEqual(sel["overrides"], BOARD_OVERRIDES)
 
     def test_foreign_board_takes_the_chosen_machine_through_its_parent_board(self):
         b = dict(board("/dev/ttyACM0", None, "eeeeee"), board="MKS_ROBIN_NANO")

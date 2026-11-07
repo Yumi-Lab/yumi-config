@@ -213,6 +213,17 @@ def select(composition, catalog, prefs=None):
     overrides = {"mcu": {"serial": main["port"]}}
     if smartbox is not None:
         overrides["smartbox"] = {"serial": smartbox["port"]}
+    # Motors named by the main board's firmware descriptor (mx/my/mz): autotune derives the
+    # driver tuning from the motor constants, so it must tune the motor really fitted (C335
+    # 2026-11-07: Z tuned for a 0.16 N.m motor, the board carries a 0.46 N.m one).
+    known = {m for comp in catalog["components"].values() if isinstance(comp, dict)
+             for m in comp.get("motor_constants", {})}
+    for axis, motor in sorted((main.get("motors") or {}).items()):
+        if motor in known:
+            overrides = generator.deep_merge(overrides, {"stepper_%s" % axis: {"autotune": {"motor": motor}}})
+        else:
+            sel["reasons"].append("stepper_%s: motor %s from the board has no motor_constants in the "
+                                  "catalog -> autotune keeps the catalog motor" % (axis, motor))
     # Local tuning of THIS machine (prefs "overrides", deep-merged over the catalog product):
     # a calibrated value, or an option the trunk cannot carry yet because the fleet's
     # firmware does not know it. Regenerated cfgs keep it; the catalog stays common.
