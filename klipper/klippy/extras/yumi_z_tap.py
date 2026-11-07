@@ -35,10 +35,6 @@ class ZTap:
         # a dead pressure switch then makes the motor give way instead of pressing the
         # nozzle into the bed. 0 = keep the [tmc2209 stepper_z] current.
         self.tap_current = config.getfloat("tap_current", 0., minval=0.)
-        # Two consecutive contacts farther apart than this = Z stalled or skipped steps: the
-        # step count then reads the nozzle lower than it is and a zero would sit on a
-        # compressed nozzle. The tap lifts away and stops at the first one. 0 = no check.
-        self.max_tap_jump = config.getfloat("max_tap_jump", 0., minval=0.)
         # Tolerance de validation Z=0/maillage : a la fin du tap, on verifie
         # que le maillage charge vaut ~0 a la coordonnee du tap (sinon Z=0 et
         # le mesh sont decales). 0 = desactive la verif.
@@ -421,8 +417,6 @@ class ZTap:
             # Stabilite sur taps valides consecutifs
             if zendstop_p is not None:
                 diff_z = abs(zcur[2] - zendstop_p[2])
-                if self.max_tap_jump and diff_z > self.max_tap_jump:
-                    self._abort_stalled(gcmd, diff_z)
                 if diff_z <= self.active_tolerance:
                     stable_count += 1
                     gcmd.respond_info("Tap OK (diff=%.4fmm, stable %d/%d)"
@@ -471,11 +465,15 @@ class ZTap:
                 lift_z = min(pos[2] + self.z_hop, self.z_max)
                 toolhead.manual_move([None, None, lift_z], self.lift_speed)
 
+        # No stable contact within max_probe_times: the measured signature of a Z stalling
+        # against the bed (C335 07/11: 32 triggers in 30 s, 1.2 mm apart). A single false
+        # trigger (vibration, someone touching the printer) only resets the stable count above.
+        self._lift_and_unhome_z()
         raise gcmd.error(
             "ZTap: no stable contact: %d/%d stable after %d taps (%d rejected as vibration) "
-            "-> Z stalls against the bed or the pressure sensor is unreliable: check the Z "
-            "current (tap_current) and the sensor"
-            % (stable_count, self.samples, self.max_probe_times, spurious))
+            "-> Z stalls against the bed or the pressure sensor is unreliable; nozzle lifted "
+            "%.0f mm, Z unhomed. Check the Z current (tap_current) and the sensor"
+            % (stable_count, self.samples, self.max_probe_times, spurious, self.safe_z))
 
     def _restore_z_current(self):
         """Back to the [tmc2209 stepper_z] current once the descents are over."""
@@ -484,9 +482,9 @@ class ZTap:
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % self._normal_current)
 
-    def _abort_stalled(self, gcmd, diff_z):
-        """Lift away first (a hot nozzle must not stay on the bed), from where the nozzle
-        really is: the Z position cannot be trusted any more. Then forget Z and stop."""
+    def _lift_and_unhome_z(self):
+        """Lift away first (a hot nozzle must not stay on the bed), from where the nozzle really
+        is: after a stall the Z position cannot be trusted. Then forget Z."""
         toolhead = self.printer.lookup_object('toolhead')
         self._restore_z_current()
         self.printer.lookup_object('gcode').run_script_from_command(
@@ -494,11 +492,3 @@ class ZTap:
         toolhead.manual_move([None, None, self.safe_z], self.lift_speed)
         toolhead.wait_moves()
         toolhead.get_kinematics().clear_homing_state("z")
-        raise gcmd.error(
-            "ZTap: two contacts %.3f mm apart (limit %.3f) -> Z stalled or skipped steps, "
-            "measurement discarded; nozzle lifted %.0f mm, Z unhomed. Check the Z current "
-            "(tap_current) and the Z axis" % (diff_z, self.max_tap_jump, self.safe_z))
-
-
-def load_config(config):
-    return ZTap(config)
