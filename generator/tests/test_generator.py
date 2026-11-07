@@ -470,6 +470,12 @@ class BedDetection(unittest.TestCase):
         self.assertNotIn("ref_offset", det)
         self.assertIn("sv.bed_detect_x|float", m["gcode_macro _BED_DETECT_AT_REF"])
         self.assertEqual(m["gcode_macro BED_DETECT_SYNC"].splitlines()[-1].strip(), "BED_DETECTION")
+        # C335 07/11 still held the point a C235 had measured: the point belongs to a bed size
+        self.assertIn("sv.bed_detect_bed|default(0)|float != bed", det)
+        ref = m["gcode_macro _BED_DETECT_AT_REF"]
+        self.assertIn("BED_REF_PROBE X={mx} Y={my}", ref)
+        self.assertIn("BED_PLATE_PRESENT X={x_max - bed_probe_x_inset} Y={my}", ref)
+        self.assertNotIn("\n    PROBE\n", ref)
         sec = parse(cfg)["yumi_bed_scan"]
         for key in ("center_dx", "center_dy", "range_x", "range_y", "z_clear", "z_step", "z_floor", "planes", "accel"):
             self.assertIn(key, sec)

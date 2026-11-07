@@ -27,6 +27,25 @@ class Grid(unittest.TestCase):
         self.assertEqual(scan.planes(0.6, 0.1, 0.1), [0.6, 0.5, 0.4, 0.3, 0.2, 0.1])
         self.assertEqual(scan.planes(0.5, 0.2, 0.2), [0.5, 0.3])
 
+    def test_interior_point_ignores_where_the_window_cuts_a_long_strip(self):
+        """C335 07/11: the reference is a strip wider than the window; the box centre followed
+        the window (172.5, 169.5, 160). The interior point stays on the strip's mid-line,
+        as close to the formula point as the clearance allows."""
+        for cx in (160.0, 169.5, 172.5):
+            grid = scan.serpentine(cx, 306, 14, 14, 2, 2)
+            hits = [p for p in grid if 305 <= p[1] <= 309]          # strip Y 305..309, endless in X
+            (x, y), margin = scan.interior_point(hits, grid, (cx, 306), 2, 2)
+            self.assertIn(y, (306.0, 308.0))
+            self.assertEqual(margin, 2.0)
+            self.assertLessEqual(abs(x - cx), 1.0)
+
+    def test_interior_point_keeps_away_from_a_hole(self):
+        grid = scan.serpentine(0, 0, 6, 6, 1, 1)
+        hits = [p for p in grid if p != (0.0, 0.0)]                  # one perforation at the target
+        (x, y), margin = scan.interior_point(hits, grid, (0, 0), 1, 1)
+        self.assertGreater(margin, 1.0)
+        self.assertNotEqual((x, y), (0.0, 0.0))
+
     def test_bbox_center_has_equal_margins(self):
         mx, my, box = scan.bbox_center([(120, 210), (124, 210), (122, 214), (120, 212)])
         self.assertEqual((mx, my), (122.0, 212.0))

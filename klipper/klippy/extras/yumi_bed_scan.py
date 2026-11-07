@@ -14,8 +14,10 @@
 #   - from the first plane where the metal triggers, `planes` planes are
 #     scanned (the inductive field is not uniform, the lower plane widens the
 #     footprint) and the UNION of the triggered points is kept,
-#   - result = centre of the bounding box (equal margins), saved with the
-#     height of the first plane that saw metal.
+#   - result = the metal point farthest from any non-metal point or the window border
+#     (the plate is a strip wider than the window and perforated), ties to the bed-size
+#     formula point; saved with the height of the first plane that saw metal and the bed
+#     size it belongs to (bed_detect_bed).
 #   - the nozzle stays above the bed while the probe is behind it: the sweep
 #     never goes below z_floor (nozzle frame, Z=0 = tap).
 #   - accelerations are lowered during the sweep (short moves at 20000 mm/s²
@@ -38,9 +40,14 @@
 #   lift                  Z clearance before an XY travel (default 5)
 #   accel                 acceleration during the sweep, restored afterwards (default 1000)
 # Command: BED_SCAN_ZERO [CENTER_X= CENTER_Y=] [RANGE_X= RANGE_Y=] [STEP_X= STEP_Y=] [Z_CLEAR=]
-#   [Z_STEP=] [Z_FLOOR=] [PLANES=] — homes, scans, saves bed_detect_x/y/z in save_variables.
+#   [Z_STEP=] [Z_FLOOR=] [PLANES=] — homes, scans, saves bed_detect_x/y/z/bed in save_variables.
+# Command: BED_REF_PROBE X= Y= — PROBE on the reference at the [yumi_z_tap] tap_current; on a
+#   miss, lift, unhome Z and stop (BED_DETECTION phase 1).
+# Command: BED_PLATE_PRESENT X= Y= — PROBE on the print plate tab (nozzle past the bed edge);
+#   no trigger down to position_min = no print plate, clear error (BED_DETECTION phase 2).
 # Status (printer.yumi_bed_scan): found, x, y, z, points.
 import logging
+import math
 
 
 def serpentine(cx, cy, rx, ry, sx, sy):
@@ -73,6 +80,30 @@ def bbox_center(points):
             (min(xs), max(xs), min(ys), max(ys)))
 
 
+def interior_point(hits, grid, target, step_x, step_y):
+    """The metal point farthest from anything that is not known metal: a grid point without
+    metal, or the ring just outside the window (unknown). Ties go to the point closest to
+    `target` (the bed-size formula), so every machine size lands on the same spot of the plate.
+    The bounding-box centre only followed the window when the plate is wider than it (C335
+    07/11: three windows on the same plate gave X 172.5, 169.5, 160)."""
+    hit = set(hits)
+    misses = [p for p in grid if p not in hit]
+    xs = [p[0] for p in grid]
+    ys = [p[1] for p in grid]
+    x0, x1 = min(xs) - step_x, max(xs) + step_x
+    y0, y1 = min(ys) - step_y, max(ys) + step_y
+
+    def clearance(p):
+        d = min(p[0] - x0, x1 - p[0], p[1] - y0, y1 - p[1])
+        for m in misses:
+            d = min(d, math.hypot(p[0] - m[0], p[1] - m[1]))
+        return d
+
+    best = max(hit, key=lambda p: (round(clearance(p), 6),
+                                   -math.hypot(p[0] - target[0], p[1] - target[1])))
+    return best, clearance(best)
+
+
 class YumiBedScan:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -95,6 +126,10 @@ class YumiBedScan:
         self.last = {"found": False, "x": None, "y": None, "z": None, "points": 0}
         self.gcode.register_command('BED_SCAN_ZERO', self.cmd_BED_SCAN_ZERO,
                                     desc=self.cmd_BED_SCAN_ZERO_help)
+        self.gcode.register_command('BED_PLATE_PRESENT', self.cmd_BED_PLATE_PRESENT,
+                                    desc=self.cmd_BED_PLATE_PRESENT_help)
+        self.gcode.register_command('BED_REF_PROBE', self.cmd_BED_REF_PROBE,
+                                    desc=self.cmd_BED_REF_PROBE_help)
 
     def get_status(self, eventtime):
         return dict(self.last)
@@ -107,8 +142,8 @@ class YumiBedScan:
         except Exception:
             bed = 0.
         if bed <= 0:
-            raise gcmd.error("BED_SCAN_ZERO: machine size unknown (_YUMI_MACHINE not run) "
-                             "- give CENTER_X and CENTER_Y")
+            raise gcmd.error("BED_SCAN_ZERO: machine size unknown (_YUMI_MACHINE not run): the "
+                             "scanned point is saved for a bed size, run _YUMI_MACHINE first")
         return bed
 
     def _query(self, toolhead, probe):
@@ -139,12 +174,9 @@ class YumiBedScan:
         z_step = gcmd.get_float('Z_STEP', self.z_step, above=0.)
         z_floor = gcmd.get_float('Z_FLOOR', self.z_floor)
         max_planes = gcmd.get_int('PLANES', self.planes, minval=1)
-        if gcmd.get_float('CENTER_X', None) is None or gcmd.get_float('CENTER_Y', None) is None:
-            bed = self._bed_size(gcmd)
-            cx = gcmd.get_float('CENTER_X', bed / 2.0 + self.center_dx)
-            cy = gcmd.get_float('CENTER_Y', bed + self.center_dy)
-        else:
-            cx, cy = gcmd.get_float('CENTER_X'), gcmd.get_float('CENTER_Y')
+        bed = self._bed_size(gcmd)
+        cx = gcmd.get_float('CENTER_X', bed / 2.0 + self.center_dx)
+        cy = gcmd.get_float('CENTER_Y', bed + self.center_dy)
         if z_floor > z_clear:
             raise gcmd.error("BED_SCAN_ZERO: Z_FLOOR above Z_CLEAR")
 
@@ -195,16 +227,74 @@ class YumiBedScan:
             raise gcmd.error("BED_SCAN_ZERO: no metal detected down to Z%.2f in X[%.1f..%.1f] "
                              "Y[%.1f..%.1f] — lower Z_FLOOR or move the window (CENTER_X/CENTER_Y)"
                              % (z_floor, cx - rx, cx + rx, cy - ry, cy + ry))
-        mx, my, (x0, x1, y0, y1) = bbox_center(hits)
+        _bx, _by, (x0, x1, y0, y1) = bbox_center(hits)
+        (mx, my), margin = interior_point(hits, grid, (cx, cy), sx, sy)
         self.last = {"found": True, "x": mx, "y": my, "z": first_z, "points": len(hits)}
-        for name, val in (("bed_detect_x", mx), ("bed_detect_y", my), ("bed_detect_z", first_z)):
+        # bed_detect_bed: the machine size the point belongs to; BED_DETECTION scans again
+        # when the pad now drives another size (C335 07/11 still held its C235 point).
+        for name, val in (("bed_detect_x", mx), ("bed_detect_y", my), ("bed_detect_z", first_z),
+                          ("bed_detect_bed", bed)):
             self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=%.3f" % (name, val))
         gcmd.respond_info("BED_SCAN_ZERO: metal footprint %d point(s), top plane Z%.2f, "
-                          "box X[%.1f..%.1f] Y[%.1f..%.1f] -> centre X%.2f Y%.2f saved (bed_detect_x/y/z)"
-                          % (len(hits), first_z, x0, x1, y0, y1, mx, my))
+                          "box X[%.1f..%.1f] Y[%.1f..%.1f] -> most interior metal point X%.2f Y%.2f "
+                          "(%.1f mm from any non-metal) saved (bed_detect_x/y/z)"
+                          % (len(hits), first_z, x0, x1, y0, y1, mx, my, margin))
         self.gcode.run_script_from_command("M117 Metal ref: X%.1f Y%.1f" % (mx, my))
         logging.info("yumi_bed_scan: %s", self.last)
 
+
+    cmd_BED_REF_PROBE_help = ("Probe the reference plate at X Y with the inductive probe at the Z tap "
+                              "current ([yumi_z_tap] tap_current); on a miss, lift and stop")
+
+    def cmd_BED_REF_PROBE(self, gcmd):
+        """The Z position is fake until the probe triggers: a missed plate would drive the
+        nozzle into the bed. Reduced current makes the motor give way; a failed probe lifts
+        the nozzle from where it really is, forgets Z and stops."""
+        toolhead = self.printer.lookup_object('toolhead')
+        x, y = gcmd.get_float('X'), gcmd.get_float('Y')
+        settings = self.printer.lookup_object('configfile').get_status(0)['settings']
+        tap_current = settings.get('yumi_z_tap', {}).get('tap_current', 0.)
+        tmc = settings.get('tmc2209 stepper_z', {})
+        toolhead.manual_move([x, y, None], self.speed)
+        if tap_current:
+            self.gcode.run_script_from_command(
+                "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                % (tap_current, tap_current))
+        try:
+            self.gcode.run_script_from_command("PROBE")
+        except self.printer.command_error as e:
+            self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z")
+            toolhead.manual_move([None, None, self.lift], self.z_speed)
+            toolhead.wait_moves()
+            toolhead.get_kinematics().clear_homing_state("z")
+            raise gcmd.error("BED_DETECTION: reference plate not found at X%.1f Y%.1f (%s) -> nozzle "
+                             "lifted %.0f mm, Z unhomed; run BED_SCAN_ZERO"
+                             % (x, y, str(e).split('\n')[0], self.lift))
+        finally:
+            if tap_current:
+                self.gcode.run_script_from_command(
+                    "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                    % (tmc.get('run_current'), tmc.get('hold_current', tmc.get('run_current'))))
+
+    cmd_BED_PLATE_PRESENT_help = ("Is the print plate on the bed? Probe its tab at X Y (the nozzle is "
+                                  "past the bed edge there); no trigger down to position_min = no plate")
+
+    def cmd_BED_PLATE_PRESENT(self, gcmd):
+        """Vanilla probe on the plate tab: at x_max - inset the nozzle is past the bed edge, so
+        a descent down to position_min touches nothing; reaching it without a trigger means no
+        print plate. Only the message changes: the probe's 'No trigger' becomes the cause."""
+        toolhead = self.printer.lookup_object('toolhead')
+        x, y = gcmd.get_float('X'), gcmd.get_float('Y')
+        toolhead.manual_move([x, y, None], self.speed)
+        try:
+            self.gcode.run_script_from_command("PROBE")
+        except self.printer.command_error as e:
+            if "No trigger" not in str(e):
+                raise
+            toolhead.manual_move([None, None, self.lift], self.z_speed)
+            toolhead.wait_moves()
+            raise gcmd.error("BED_DETECTION: print plate absent (no metal at its tab X%.1f Y%.1f) "
+                             "-> put the print plate on the bed" % (x, y))
 
 def load_config(config):
     return YumiBedScan(config)
