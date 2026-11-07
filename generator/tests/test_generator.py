@@ -668,6 +668,21 @@ class CancelSequence(unittest.TestCase):
         self.assertLess(lift, start.index("SET_KINEMATIC_POSITION CLEAR=Z"))
         self.assertNotRegex(start, r"M10[49]|M1[49]0", "PRINT_START heats nothing: the slicer does, after it")
 
+    def test_g28_z_alone_keeps_an_xy_really_found(self):
+        """The start G-code homes XY while the bed heats, then G28 Z taps on the hot bed: G28 Z
+        re-homes X/Y only when the sensorless homing has not found them (its own state, not
+        homed_axes, which SET_KINEMATIC_POSITION fakes)."""
+        cfg = generator.generate("C235_DD_LW_04", catalog=CATALOG)
+        o = cfg[cfg.index("[homing_override]"):]
+        o = o[:o.index("\n[", 1)]
+        self.assertIn("{% set found = printer.yumi_sensorless_homing.homed %}", o)
+        self.assertIn("{% set do_x = home_all or has_x or (has_z and not xy_found) %}", o)
+        self.assertIn("{% if do_x %}\n        YUMI_SENSORLESS_HOME AXIS=X", o)
+        self.assertIn("{% if do_y %}\n        YUMI_SENSORLESS_HOME AXIS=Y", o)
+        retract = o.index("SET_KINEMATIC_POSITION X={x_max} Y={y_min}")
+        self.assertLess(o.index("{% if do_x or do_y %}"), retract, "a kept XY is never overwritten")
+        self.assertNotIn("homed_axes", o)
+
     def test_yms_are_scanned_at_boot_and_at_print_start(self):
         """Which YMS are plugged (C335 08/11: a print lost on an unplugged YMS cable): scanned
         at boot for the screen, again by PRINT_START, the starting tool's YMS required there."""
