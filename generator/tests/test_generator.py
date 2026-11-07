@@ -657,6 +657,17 @@ class CancelSequence(unittest.TestCase):
         self.assertIn('"gcode_macro save_last_file" in printer', start)
         self.assertLess(start.index("CANCEL_PRINT_DEFAULT"), start.index("printing_start VALUE=True"), "state set only when the guard passed")
 
+    def test_print_start_lifts_the_nozzle_before_anything_heats(self):
+        """A print launched with the nozzle resting low (previous print stopped at Z 2.5) heated
+        it there (C335 08/11): once the profile guard passed, PRINT_START lifts with the watched
+        lift (Z not trusted, stops at the top end stop) and forgets Z for G28."""
+        start = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))["gcode_macro PRINT_START"]
+        lift = start.index("YUMI_Z_LIFT DIST=10 SPEED=5")
+        self.assertLess(start.index("CANCEL_PRINT_DEFAULT"), lift, "a refused file never moves")
+        self.assertLess(start.index("SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z"), lift)
+        self.assertLess(lift, start.index("SET_KINEMATIC_POSITION CLEAR=Z"))
+        self.assertNotRegex(start, r"M10[49]|M1[49]0", "PRINT_START heats nothing: the slicer does, after it")
+
     def test_tip_sequence_is_one_source(self):
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
         tip = m["gcode_macro _YUMI_TIP"]
