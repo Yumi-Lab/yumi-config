@@ -492,3 +492,7 @@ class ZTap:
         toolhead.manual_move([None, None, self.safe_z], self.lift_speed)
         toolhead.wait_moves()
         toolhead.get_kinematics().clear_homing_state("z")
+
+
+def load_config(config):
+    return ZTap(config)

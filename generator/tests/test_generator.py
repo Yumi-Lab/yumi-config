@@ -460,6 +460,16 @@ class ModuleDocs(unittest.TestCase):
         self.assertNotIn("filament_yumi_smart_motion_sensor", dd)
 
 
+class ExtrasModulesLoad(unittest.TestCase):
+    """Klipper only knows a [section] whose module defines load_config: a cut-off yumi_z_tap.py
+    compiled fine and halted the C335 on 'Section yumi_z_tap is not a valid config section'."""
+
+    def test_every_yumi_module_defines_load_config(self):
+        extras = HERE.parent.parent / "klipper" / "klippy" / "extras"
+        for module in sorted(extras.glob("yumi_*.py")):
+            self.assertIn("\ndef load_config(config):", module.read_text(encoding="utf-8"), module.name)
+
+
 class PopToolAccelerationIsGivenBack(unittest.TestCase):
     """The pop-tool run needs 20000 mm/s2 in X; the macros that raise it give back the
     acceleration they came with (C335 07/11: after a print every Y move ran at 20000)."""
