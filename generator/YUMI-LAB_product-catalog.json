@@ -579,8 +579,10 @@
         "samples_tolerance": 0.01,
         "safe_z": 10,
         "tap_current": 0.7,
+        "max_tap_jump": 0.1,
         "_comments": {
           "max_probe_times": "taps before giving up without a stable contact. A good tap validates in 6-8 (C335 07/11); a Z stalled against the bed fired the sensor 32 times in 30 s at heights 1.2 mm apart, never stable",
+          "max_tap_jump": "two consecutive contacts farther apart = Z stalled or skipped steps: lift and stop. C335 07/11, 81 taps at 0.7 A: largest normal jump 0.045 mm; stalls jumped 0.19 to 1.2 mm",
           "tap_current": "Z current during the tap: the motor gives way on a crash instead of pressing the nozzle into the bed. C335 07/11: 0.5 A taps fine (5 within 0.0025 mm), 0.4 A stalls without the impact the sensor needs",
           "probe_delay": "探测延迟（ms）",
           "samples_tolerance": "precision"
