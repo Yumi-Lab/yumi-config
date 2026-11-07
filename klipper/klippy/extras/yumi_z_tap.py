@@ -526,6 +526,10 @@ class ZTap:
         except Exception as e:
             logging.info("ZTap trace: sample failed: %s", e)
             return eventtime + 0.05
+        if self._trace is not tr:
+            # the tap ended while this UART read was in flight: the file is closed (writing
+            # to it raised in a reactor timer and shut Klipper down, C335 08/11)
+            return self.printer.get_reactor().NEVER
         tr["f"].write("%.4f,%d,%.4f,\n" % (eventtime - tr["t0"], sg, z))
         tr["rows"] += 1
         if eventtime - tr["flushed"] > 0.5:
