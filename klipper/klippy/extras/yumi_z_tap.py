@@ -90,6 +90,8 @@ class ZTap:
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('YUMI_Z_TAP', self.cmd_Z_TAP,
                               desc="Set Z=0 at nozzle contact via pressure switch")
+        gcode.register_command('YUMI_Z_LIFT', self.cmd_Z_LIFT,
+                              desc="Lift Z, stopping at the top end stop if the carriage reaches it: DIST= SPEED=")
         gcode.register_command('YUMI_Z_TRACE', self.cmd_Z_TRACE,
                               desc="Record the Z driver load outside a tap: ACTION=START [PATH=] | MARK TEXT= | STOP")
 
@@ -214,14 +216,7 @@ class ZTap:
             gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
-        if tmc_z is not None:
-            # StallGuard4 (SG_RESULT) only exists in stealthChop: Z runs spreadCycle for its
-            # torque at speed (C335 07/11), so the slow tap descents switch to stealthChop at
-            # every speed and the normal mode comes back with the normal current.
-            self._normal_mode = {f: tmc_z.fields.get_field(f) for f in self.TAP_MODE_FIELDS}
-            for field, value in self.TAP_MODE_FIELDS.items():
-                gcode.run_script_from_command(
-                    "SET_TMC_FIELD STEPPER=stepper_z FIELD=%s VALUE=%d" % (field, value))
+        self._stealth_on()
         trace = gcmd.get('TRACE', '')
         self._sampler_start(self.TRACE_DEFAULT_PATH if trace == '1' else trace, gcmd)
         try:
@@ -520,6 +515,45 @@ class ZTap:
     SAMPLE_PERIOD_S = 0.025
     TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
 
+    LIFT_TRIES = 3   # a false trigger of the pressure switch ends a try early
+
+    def cmd_Z_LIFT(self, gcmd):
+        """The blind first lift of a G28 (Z position unknown) drove the carriage into the top of
+        the frame when the head was already high (Nicolas 08/11). The lift runs as a homing move
+        in stealthChop with the stall watch: at the top end stop the host ends it like an end
+        switch would, Klipper keeps running and the homing goes on from there."""
+        dist = gcmd.get_float('DIST', above=0.)
+        speed = gcmd.get_float('SPEED', above=0.)
+        toolhead = self.printer.lookup_object('toolhead')
+        phoming = self.printer.lookup_object('homing')
+        probe = self.printer.lookup_object('probe_pressure')
+        target = toolhead.get_position()[2] + dist
+        self._normal_current = None
+        self._stealth_on()
+        self._sampler_start('', gcmd)
+        try:
+            for _ in range(self.LIFT_TRIES):
+                pos = toolhead.get_position()
+                if pos[2] >= target - 1e-3:
+                    break
+                pos[2] = target
+                self._arm_stall(True, direction=1)
+                phoming.manual_home(toolhead, [(probe.mcu_probe, "z_lift")], pos, speed,
+                                    probe_pos=True, triggered=True, check_triggered=False)
+                self._arm_stall(False)
+                if self._stalled():
+                    break
+            stalled = self._stalled()
+        finally:
+            self._sampler_stop(gcmd)
+            self._restore_z_current()
+        lifted = toolhead.get_position()[2] - (target - dist)
+        if stalled:
+            gcmd.respond_info("YUMI_Z_LIFT: top end stop reached after %.1f of %.1f mm, stopped there"
+                              % (lifted, dist))
+        else:
+            gcmd.respond_info("YUMI_Z_LIFT: lifted %.1f mm" % lifted)
+
     def cmd_Z_TRACE(self, gcmd):
         """Same recording as YUMI_Z_TAP TRACE, driven by hand: a stall provoked on purpose
         (Z carriage driven into its end stop, nozzle off the bed) to learn its pattern."""
@@ -542,7 +576,8 @@ class ZTap:
         stepper = kin.rails[2].get_steppers()[0]
         sp = {"t0": reactor.monotonic(), "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
               "stepper": stepper, "mcu": stepper.get_mcu(), "f": None, "path": path, "rows": 0,
-              "flushed": 0., "prev_z": None, "low": [], "armed": False, "stalled": False}
+              "flushed": 0., "prev_z": None, "low": [], "armed": False, "stalled": False,
+              "dir": -1}
         if path:
             sp["f"] = open(path, "w")
             sp["f"].write("t,sg_result,z,event,drv_status\n")
@@ -569,9 +604,9 @@ class ZTap:
             # the tap ended while this UART read was in flight (writing to the closed trace
             # file raised in a reactor timer and shut Klipper down, C335 08/11)
             return reactor.NEVER
-        going_down = sp["prev_z"] is not None and z < sp["prev_z"] - 1e-4
+        moving = sp["prev_z"] is not None and (z - sp["prev_z"]) * sp["dir"] > 1e-4
         sp["prev_z"] = z
-        if sp["armed"] and going_down and sg < self.STALL_SG and not sp["stalled"]:
+        if sp["armed"] and moving and sg < self.STALL_SG and not sp["stalled"]:
             sp["low"] = [t for t in sp["low"] if eventtime - t <= self.STALL_WINDOW_S] + [eventtime]
             if len(sp["low"]) >= self.STALL_SAMPLES:
                 sp["stalled"] = True
@@ -592,10 +627,12 @@ class ZTap:
         logging.info("[ZTap] Z stall detected, descent stopped from the host")
         self._trace_mark("stall")
 
-    def _arm_stall(self, armed):
+    def _arm_stall(self, armed, direction=-1):
+        """direction: -1 watches descents (tap), +1 lifts (YUMI_Z_LIFT)."""
         sp = self._sampler
         if sp is not None:
             sp["armed"] = armed
+            sp["dir"] = direction
             sp["low"] = []
             sp["prev_z"] = None
 
@@ -617,6 +654,18 @@ class ZTap:
             sp["f"].close()
             gcmd.respond_info("ZTap: TRACE %d samples in %.1f s -> %s" % (
                 sp["rows"], self.printer.get_reactor().monotonic() - sp["t0"], sp["path"]))
+
+    def _stealth_on(self):
+        """StallGuard4 (SG_RESULT) only exists in stealthChop: Z runs spreadCycle for its torque
+        at speed (C335 07/11), so the slow watched moves switch to stealthChop at every speed;
+        _restore_z_current gives the normal mode back."""
+        tmc_z = self.printer.lookup_object('tmc2209 stepper_z', None)
+        if tmc_z is None:
+            return
+        self._normal_mode = {f: tmc_z.fields.get_field(f) for f in self.TAP_MODE_FIELDS}
+        for field, value in self.TAP_MODE_FIELDS.items():
+            self.printer.lookup_object('gcode').run_script_from_command(
+                "SET_TMC_FIELD STEPPER=stepper_z FIELD=%s VALUE=%d" % (field, value))
 
     def _restore_z_current(self):
         """Back to the [tmc2209 stepper_z] current and chopper mode once the descents are over.
