@@ -1,4 +1,5 @@
 import logging
+import statistics
 
 
 class ZTap:
@@ -505,8 +506,15 @@ class ZTap:
     # (SG_RESULT) of a free descent stayed 212-244; at the stop it fell under 15 within 0.3 s and
     # kept swinging 2-250. spreadCycle shows nothing (SG_RESULT 0, cs_actual fixed), which is
     # why the descents run in stealthChop (TAP_MODE_FIELDS).
-    STALL_SG = 50               # 4x under the lowest free-descent reading
-    STALL_SAMPLES = 3           # readings under STALL_SG while Z goes down...
+    # At 5 mm/s (BED_REF_PROBE into the stop, C335 08/11) the load does not fall flat: free
+    # 194-206, then grinding 66-206 with only isolated readings under 50 -> the fixed threshold
+    # fired after 2.1 s of grinding, or never. So the threshold is relative to the move's own
+    # free load: replayed on every trace, 70 % fires 0.08 s after the stop and never on the
+    # clean taps (still none at 90 %; their isolated lows are cut by STALL_SAMPLES).
+    STALL_SG = 50               # floor, and the threshold until the free load is known
+    STALL_RATIO = 0.7           # stall = load under this share of the move's free load...
+    BASELINE_SAMPLES = 6        # ...the median of its first moving readings (0.15 s)
+    STALL_SAMPLES = 3           # readings under the threshold while Z moves...
     STALL_WINDOW_S = 0.3        # ...within this window: a single low reading never stops a tap
     SAMPLE_PERIOD_S = 0.025
     TRACE_DEFAULT_PATH = "/tmp/yumi_z_tap_trace.csv"
@@ -577,7 +585,7 @@ class ZTap:
         stepper = kin.rails[2].get_steppers()[0]
         sp = {"t0": reactor.monotonic(), "tmc": self.printer.lookup_object('tmc2209 stepper_z'),
               "stepper": stepper, "mcu": stepper.get_mcu(), "f": None, "path": path, "rows": 0,
-              "flushed": 0., "prev_z": None, "low": [], "armed": False, "stalled": False,
+              "flushed": 0., "prev_z": None, "low": [], "free": [], "armed": False, "stalled": False,
               "dir": -1}
         if path:
             sp["f"] = open(path, "w")
@@ -607,7 +615,12 @@ class ZTap:
             return reactor.NEVER
         moving = sp["prev_z"] is not None and (z - sp["prev_z"]) * sp["dir"] > 1e-4
         sp["prev_z"] = z
-        if sp["armed"] and moving and sg < self.STALL_SG and not sp["stalled"]:
+        threshold = self.STALL_SG
+        if sp["armed"] and moving and len(sp["free"]) < self.BASELINE_SAMPLES:
+            sp["free"].append(sg)
+        elif sp["free"]:
+            threshold = max(self.STALL_SG, self.STALL_RATIO * statistics.median(sp["free"]))
+        if sp["armed"] and moving and sg < threshold and not sp["stalled"]:
             sp["low"] = [t for t in sp["low"] if eventtime - t <= self.STALL_WINDOW_S] + [eventtime]
             if len(sp["low"]) >= self.STALL_SAMPLES:
                 sp["stalled"] = True
@@ -638,6 +651,7 @@ class ZTap:
             sp["dir"] = direction
             sp["endstop"] = endstop
             sp["low"] = []
+            sp["free"] = []
             sp["prev_z"] = None
 
     def _stall_error(self, gcmd):
@@ -645,19 +659,21 @@ class ZTap:
         self._lift_and_unhome_z()
         self.stall_stopped = True
         return gcmd.error(
-            "Z motor stalled (driver load under %d %d times in %.1f s) -> stopped at once, nozzle "
-            "lifted %.0f mm, Z unhomed. Check what blocks Z and the Z current (tap_current)"
-            % (self.STALL_SG, self.STALL_SAMPLES, self.STALL_WINDOW_S, self.safe_z))
+            "Z motor stalled (driver load under %.0f %% of its free-run level %d times in %.1f s) "
+            "-> stopped at once, nozzle lifted %.0f mm, Z unhomed. Check what blocks Z and the Z "
+            "current (tap_current)"
+            % (100 * self.STALL_RATIO, self.STALL_SAMPLES, self.STALL_WINDOW_S, self.safe_z))
 
     def run_watched(self, gcmd, endstop, action, direction=-1):
         """Run action() -- a probing or homing move on `endstop` -- in stealthChop with the stall
         watch (BED_DETECTION's probes, C335 08/11). The Z current is the caller's. On a stall the
         move is ended from the host, the nozzle lifted, Z unhomed, and stall_stopped is set so
-        the caller lets the error through as it is."""
+        the caller lets the error through as it is. TRACE=<path> on the caller's command records
+        the samples, as YUMI_Z_TAP TRACE does."""
         self.stall_stopped = False
         self._normal_current = None
         self._stealth_on()
-        self._sampler_start('', gcmd)
+        self._sampler_start(gcmd.get('TRACE', ''), gcmd)
         try:
             self._arm_stall(True, direction, endstop)
             try:
