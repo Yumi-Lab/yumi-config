@@ -204,9 +204,11 @@ class ZTap:
         tap_current = gcmd.get_float('CURRENT', self.tap_current, minval=0.)
         tmc_z = self.printer.lookup_object('tmc2209 stepper_z', None)
         saved_current = None
+        self._normal_current = None
         if tap_current > 0 and tmc_z is not None:
             st = tmc_z.get_status(self.printer.get_reactor().monotonic())
             saved_current = (st['run_current'], st['hold_current'])
+            self._normal_current = saved_current
             gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (tap_current, tap_current))
@@ -455,7 +457,9 @@ class ZTap:
                     "(compression=%.4f - z_offset=%.4f)"
                     % (trigger_z, lift, self.active_compression,
                        self.active_z_offset))
-                # Lift to safe_z above Z=0
+                # Lift to safe_z above Z=0, at the normal current: the moves that follow a tap
+                # (a 100 mm mesh lift) stalled on the C335 at the reduced one (07/11)
+                self._restore_z_current()
                 toolhead.manual_move([None, None, self.safe_z],
                                      self.lift_speed)
                 gcode.run_script_from_command("M400")
@@ -473,10 +477,18 @@ class ZTap:
             "current (tap_current) and the sensor"
             % (stable_count, self.samples, self.max_probe_times, spurious))
 
+    def _restore_z_current(self):
+        """Back to the [tmc2209 stepper_z] current once the descents are over."""
+        if self._normal_current is not None:
+            self.printer.lookup_object('gcode').run_script_from_command(
+                "SET_TMC_CURRENT STEPPER=stepper_z CURRENT=%.3f HOLDCURRENT=%.3f"
+                % self._normal_current)
+
     def _abort_stalled(self, gcmd, diff_z):
         """Lift away first (a hot nozzle must not stay on the bed), from where the nozzle
         really is: the Z position cannot be trusted any more. Then forget Z and stop."""
         toolhead = self.printer.lookup_object('toolhead')
+        self._restore_z_current()
         self.printer.lookup_object('gcode').run_script_from_command(
             "SET_KINEMATIC_POSITION Z=0 SET_HOMED=Z")
         toolhead.manual_move([None, None, self.safe_z], self.lift_speed)

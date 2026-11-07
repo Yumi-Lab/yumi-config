@@ -457,6 +457,20 @@ class ModuleDocs(unittest.TestCase):
         self.assertNotIn("filament_yumi_smart_motion_sensor", dd)
 
 
+class ZMovesCarryTheirSpeed(unittest.TestCase):
+    """A Z move without F inherits the last XY feedrate (capped at max_z_velocity): on the C335
+    (07/11) the mesh lift after BED_DETECTION stalled the leadscrew and Klipper believed Z=100."""
+
+    def test_every_macro_z_move_has_a_feedrate(self):
+        import re
+        for product in ("C235_DD_LW_04", "C335_CX12_LW_04_2YMS", "C435_CX12_HF_04_7YMS"):
+            cfg = generator.generate(product, catalog=CATALOG)
+            for line in cfg.splitlines():
+                code = line.split("#", 1)[0].strip()
+                if re.match(r"G[01]\b.*\bZ", code):
+                    self.assertRegex(code, r"\bF", "%s: %s" % (product, code))
+
+
 class BedDetection(unittest.TestCase):
     """The metal reference is measured (BED_SCAN_ZERO), never guessed from the bed size."""
 
