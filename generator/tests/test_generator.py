@@ -372,16 +372,25 @@ class BladeCutOnEveryUnload(unittest.TestCase):
 
     PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
 
-    def test_the_cut_happens_between_the_retract_and_the_pull(self):
+    def test_the_blade_replaces_the_cut_len_pull(self):
+        """Measured on the bench 09/11: the tip came out ragged because the blade fired after
+        first_len AND cut_len, 17 mm of retract, which lifts the tip past the blade. cut_len was
+        named "cut" because it was the pull standing in for a blade, so the blade REPLACES it.
+        The retract before the blade is first_len alone."""
         for product in self.PRODUCTS:
             m = macros(generator.generate(product, catalog=CATALOG))
             tip = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
             self.assertIn("YUMI_CUT_TIP", tip, product)
-            # the filament has just left the hot zone (cut_len) and is not yet up in the PTFE
-            self.assertLess(tip.index("{cut_len}"), tip.index("YUMI_CUT_TIP"),
-                            "%s: retract first, so the blade cuts cold filament" % product)
+            self.assertLess(tip.index("{first_len}"), tip.index("YUMI_CUT_TIP"),
+                            "%s: a short retract first, so the blade cuts cold filament" % product)
             self.assertLess(tip.index("YUMI_CUT_TIP"), tip.index("{slow_len}"),
                             "%s: cut before the slow pull, not after" % product)
+            # cut_len must be in the CUT=0 branch only, never on the blade path
+            blade, fallback = tip.split("YUMI_CUT_TIP", 1)
+            self.assertNotIn("G1 E-{cut_len}", blade,
+                             "%s: cut_len must not be pulled before the blade" % product)
+            self.assertIn("G1 E-{cut_len}", fallback.split("{% endif %}", 1)[0],
+                          "%s: CUT=0 keeps the old pull" % product)
 
     def test_the_caller_can_opt_out(self):
         m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
