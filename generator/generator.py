@@ -434,9 +434,13 @@ def render_extruder_steppers(p):
         lines.append(render_extruder_stepper(p, i, slot))
         lines.append("")
 
-        # Filament sensor — YMS-2 carries the smart motion sensor (jam detection)
+        # Filament sensor. EVERY channel carries the smart motion sensor: the hardware is the
+        # same on all of them (Nicolas, 09/11), and the jam detection used to be emitted for
+        # i == 1 only -- so it sat on YMS-2 while YMS-1, the channel actually plugged in on the
+        # bench, ran a bare Klipper motion sensor with no pitch and no blockage detection at all.
+        # The jam the operator suffered was watched by nothing.
         yms_num = i + 1
-        sensor_type = "filament_yumi_smart_motion_sensor" if i == 1 else "filament_motion_sensor"
+        sensor_type = "filament_yumi_smart_motion_sensor"
         if sensor_type in DOCUMENTED_MODULES:
             lines.append(module_doc(sensor_type))
         lines.append(f"[{sensor_type} YMS-{yms_num}]")
@@ -447,15 +451,15 @@ def render_extruder_steppers(p):
         # no dead time after an event: a re-insertion right after "INSERT NEXT FILAMENT" would
         # otherwise flip the state without firing (Klipper's default event_delay is 3 s)
         lines.append("event_delay: 0.0001")
-        if i == 1:
-            lines.append(f"motor: extruder{i}  # this YMS's feeder: a tick while the extruder moves counts only when it drives")
-            lines.append("blockage_detection: True")
-            lines.append("min_pitch: 0.7")
-            lines.append("max_pitch: 2.6")
-            lines.append("blockage_threshold: 2")
-            lines.append("reset_motion_sensor_threshold: 16")
-            lines.append("pitch_view: True")
-            lines.append("low_pitch_filter: 0.015")
+        # YMS-n is fed by extruder_stepper extruder{n-1}, so extruder{i} for every channel
+        lines.append(f"motor: extruder{i}  # this YMS's feeder: a tick while the extruder moves counts only when it drives")
+        lines.append("blockage_detection: True")
+        lines.append("min_pitch: 0.7")
+        lines.append("max_pitch: 2.6")
+        lines.append("blockage_threshold: 2")
+        lines.append("reset_motion_sensor_threshold: 16")
+        lines.append("pitch_view: True")
+        lines.append("low_pitch_filter: 0.015")
         lines.append("runout_gcode:")
         lines.append(f"  SAVE_VARIABLE VARIABLE=yms{yms_num}_sensor VALUE=False")
         lines.append("   {% set print_state = printer.print_stats.state %}")

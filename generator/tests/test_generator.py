@@ -524,6 +524,42 @@ class ManualLoadAndUnload(unittest.TestCase):
         self.assertIn("RESTORE_GCODE_STATE NAME=yumi_load_filament", code)
 
 
+class EveryYmsWatchesForJams(unittest.TestCase):
+    """All the YMS are identical hardware (Nicolas, 09/11), so all of them must carry the smart
+    motion sensor. The jam detection used to be emitted for i == 1 only: it sat on YMS-2 while
+    YMS-1 -- the channel actually plugged in -- ran a bare Klipper motion sensor with no pitch
+    and no blockage detection. The jam was watched by nothing, and the only remaining check was
+    an absence over detection_length 50 mm, about 48 s at a normal flow."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_no_channel_is_left_with_a_bare_sensor(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            found = re.findall(r"\[(filament_\w+) (YMS-\d+)\]", cfg)
+            self.assertTrue(found, product)
+            for typ, name in found:
+                self.assertEqual(typ, "filament_yumi_smart_motion_sensor",
+                                 "%s / %s: identical hardware, identical sensor" % (product, name))
+
+    def test_each_channel_watches_its_own_feeder(self):
+        """YMS-n is fed by extruder_stepper extruder{n-1}: a tick counts only when THAT feeder
+        drives, so a wrong mapping would blame the wrong channel for a jam."""
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            blocks = re.findall(
+                r"\[filament_yumi_smart_motion_sensor (YMS-(\d+))\]((?:\n(?!\[)[^\n]*)*)", cfg)
+            self.assertTrue(blocks, product)
+            for name, num, body in blocks:
+                self.assertIn("blockage_detection: True", body, "%s / %s" % (product, name))
+                motor = re.search(r"motor: (\S+)", body)
+                self.assertIsNotNone(motor, "%s / %s: no feeder declared" % (product, name))
+                self.assertEqual(motor.group(1), "extruder%d" % (int(num) - 1),
+                                 "%s / %s must watch its own feeder" % (product, name))
+                for option in ("min_pitch:", "max_pitch:", "blockage_threshold:", "pitch_view:"):
+                    self.assertIn(option, body, "%s / %s: %s missing" % (product, name, option))
+
+
 class NoHeadSensor(unittest.TestCase):
     """A machine without the head sensor — an older head, or the per-machine override
     {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link
