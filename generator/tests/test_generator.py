@@ -364,56 +364,49 @@ class Cutter(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
 
-class BladeCutOnEveryUnload(unittest.TestCase):
-    """Every unload path must leave a BLADE-cut tip, not a shaped pull. A slow pull on filament
-    still in the hot zone stretches it like chewing gum and leaves a plug with a thin tail, in
-    two parts, which jams on the next load (Nicolas, 08/11). YUMI_UNLOAD_TIP is the single
-    choke point: cancel, print end, tool change and filament change all go through it."""
+class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
+    """The tip is shaped by COOLING SIZED in the 1.9 mm bore of the PEEK heatbreak, the narrowest
+    point of the head: that was the project's initial objective, and the blade was added only as
+    a safety net (Nicolas, 09/11). The star PTFE below the heatbreak is the widest bore of the
+    path at 2.7-3.0 mm, where warm filament is free to swell, so the sequence must cross it FAST
+    (first_len + cut_len, tip to 17 mm) and only then crawl (slow_len, tip 17 -> 37 mm) so the tip
+    enters the 1.9 bore and cools to size. Arming the blade before cut_len moved that crawl into
+    the wide section instead, warm and free to swell, and the head clogged."""
 
     PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
 
-    def test_the_blade_replaces_the_cut_len_pull(self):
-        """Measured on the bench 09/11: the tip came out ragged because the blade fired after
-        first_len AND cut_len, 17 mm of retract, which lifts the tip past the blade. cut_len was
-        named "cut" because it was the pull standing in for a blade, so the blade REPLACES it.
-        The retract before the blade is first_len alone."""
-        for product in self.PRODUCTS:
-            m = macros(generator.generate(product, catalog=CATALOG))
-            tip = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
-            self.assertIn("YUMI_CUT_TIP", tip, product)
-            self.assertLess(tip.index("{first_len}"), tip.index("YUMI_CUT_TIP"),
-                            "%s: a short retract first, so the blade cuts cold filament" % product)
-            self.assertLess(tip.index("YUMI_CUT_TIP"), tip.index("{slow_len}"),
-                            "%s: cut before the slow pull, not after" % product)
-            # cut_len must be in the CUT=0 branch only, never on the blade path
-            blade, fallback = tip.split("YUMI_CUT_TIP", 1)
-            self.assertNotIn("G1 E-{cut_len}", blade,
-                             "%s: cut_len must not be pulled before the blade" % product)
-            self.assertIn("G1 E-{cut_len}", fallback.split("{% endif %}", 1)[0],
-                          "%s: CUT=0 keeps the old pull" % product)
+    def _tip(self, product):
+        return macros(generator.generate(product, catalog=CATALOG))[
+            "gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
 
-    def test_the_caller_can_opt_out(self):
-        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
-        tip = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
-        self.assertIn("params.CUT|default(1)|int == 1", tip, "on by default, CUT=0 restores the pull")
-
-    def test_an_unload_never_fails_over_the_cut(self):
-        """The cut is a bonus, never a gate: an unhomed unload still unloads. So the guard
-        responds, it does not raise, and the bypass is CUT_FILAMENT's own business."""
+    def test_the_fast_transit_reaches_the_sizing_bore_before_any_crawl(self):
         for product in self.PRODUCTS:
-            m = macros(generator.generate(product, catalog=CATALOG))
-            cut = m["gcode_macro YUMI_CUT_TIP"]
-            code = "\n".join(l for l in cut.split("gcode:", 1)[1].splitlines()
-                             if not l.strip().startswith("#"))
-            self.assertIn('printer["yumi_sensorless_homing"].homed', code,
-                          "%s: real homing, not the faked homed_axes" % product)
-            self.assertNotIn("homed_axes", code, "toolhead.homed_axes is faked at boot by plr.cfg")
-            self.assertNotIn("action_raise_error", code, "an unload must not abort over the cut")
-            self.assertIn("RESPOND", code, "it says it skipped")
-            self.assertIn("CUT_FILAMENT", code)
-            self.assertIn("_YUMI_POP_TOOL", code, "the head comes back where the caller left it")
-            self.assertLess(code.index("CUT_FILAMENT"), code.index("_YUMI_POP_TOOL"))
-            self.assertFalse(re.search(r"G1 X-?\d", code), "no hard-coded X: the geometry is CUT_FILAMENT's")
+            tip = self._tip(product)
+            i_first = tip.index("G1 E-{first_len}")
+            i_cut = tip.index("G1 E-{cut_len}")
+            i_slow = tip.index("G1 E-{slow_len}")
+            self.assertLess(i_first, i_cut, "%s: first_len then cut_len, both fast" % product)
+            self.assertLess(i_cut, i_slow,
+                            "%s: the crawl comes AFTER the fast transit, never during it" % product)
+            between = tip[i_cut:i_slow]
+            self.assertNotIn("G1 E", between.replace("G1 E-{cut_len}", "", 1),
+                             "%s: nothing may extrude between the transit and the crawl" % product)
+
+    def test_the_blade_is_off_by_default(self):
+        """A safety net is armed on purpose. It must not be the default path, or it disturbs the
+        mechanism it exists to rescue."""
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            self.assertIn("params.CUT|default(0)|int == 1", tip,
+                          "%s: the blade is the netting, CUT=1 arms it" % product)
+
+    def test_when_armed_the_blade_does_not_split_the_transit_nor_the_crawl(self):
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            self.assertLess(tip.index("G1 E-{cut_len}"), tip.index("YUMI_CUT_TIP"),
+                            "%s: the blade never cuts before the tip has left the hot zone" % product)
+            self.assertLess(tip.index("YUMI_CUT_TIP"), tip.index("G1 E-{slow_len}"),
+                            "%s: and never during the sizing crawl" % product)
 
 
 class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
