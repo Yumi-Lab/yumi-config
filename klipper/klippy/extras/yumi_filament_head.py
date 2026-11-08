@@ -140,8 +140,12 @@ class YumiFilamentHead:
         return self.present
 
     def get_status(self, eventtime):
+        # `pusher` = what an E move will really turn, for the macros that drive E themselves;
+        # empty means an E move would move nothing at all. Attribute reads only, no MCU I/O: this
+        # runs in the reactor's main context, where an MCU query shuts Klipper down.
         return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass,
-                "yms_connected": list(self.yms_connected), "pending": self.pending is not None}
+                "yms_connected": list(self.yms_connected), "pending": self.pending is not None,
+                "pusher": ",".join(self._synced_pushers())}
 
     # ── the feeding YMS ────────────────────────────────────────────────
     def _feeder(self, gcmd, step):
@@ -226,21 +230,50 @@ class YumiFilamentHead:
                 enable.set_motors_enable([stepper.get_name()], False)
         return seen == {'ola', 'olb'}
 
+    def _synced_pushers(self):
+        """Names of the steppers an extruder move will ACTUALLY turn.
+
+        On a ChromaX12 [extruder] is a fictitious motor on free pins; the real pushers are the YMS
+        extruder_steppers, one metre of tube away, and T<n> is what syncs one of them. Outside a
+        print T<n> deliberately syncs NONE (its else branch sets MOTION_QUEUE=""), so every E move
+        sent by hand turns a motor connected to nothing -- silently, with the g-code E axis
+        advancing exactly as asked. Measured on the C335 on 09/11: a whole unload sequence, 347 mm
+        of commanded retraction and a blade cut, moved not one millimetre of filament, and the only
+        symptom was a head sensor that would not release.
+
+        On a direct drive there is no extruder_stepper at all and [extruder] is the real motor, so
+        the list is never empty there and nothing is refused."""
+        toolhead = self.printer.lookup_object('toolhead')
+        active = toolhead.get_extruder().get_name()
+        steppers = list(self.printer.lookup_objects('extruder_stepper'))
+        if not steppers:
+            return [active]
+        out = []
+        for name, obj in steppers:
+            es = getattr(obj, 'extruder_stepper', obj)
+            if getattr(es, 'motion_queue', None) == active:
+                out.append(name.split()[-1])
+        return out
+
+    def _require_pusher(self, gcmd):
+        if not self._synced_pushers():
+            raise gcmd.error(
+                "No pusher is synced to the active extruder '%s': every E move would turn a motor "
+                "that is not connected to the filament, and nothing would move. Call T<n> first "
+                "(T0 = YMS-1). Outside a print T<n> deliberately leaves them unsynced, so a "
+                "sequence run by hand has to sync one itself: "
+                "SYNC_EXTRUDER_MOTION EXTRUDER=extruder0 MOTION_QUEUE=extruder"
+                % self.printer.lookup_object('toolhead').get_extruder().get_name())
+
     def _feeding_drivers(self):
         """[(mux name, tmc)] of every driver that will move on an extruder move: the active
         extruder's own stepper plus every extruder_stepper synced to it. SET_TMC_CURRENT keys on
         the LAST word of the driver section, which is what is returned. A ChromaX12's [extruder]
         is a fictitious motor on free pins with no driver at all, so it simply does not appear."""
-        toolhead = self.printer.lookup_object('toolhead')
-        active = toolhead.get_extruder().get_name()
-        moving = {active}
-        for name, obj in self.printer.lookup_objects('extruder_stepper'):
-            es = getattr(obj, 'extruder_stepper', obj)
-            if getattr(es, 'motion_queue', None) == active:
-                moving.add(name)
+        moving = set(self._synced_pushers())
         out = []
         for name, obj in self.printer.lookup_objects():
-            if name.startswith('tmc') and ' ' in name and name.split(None, 1)[1] in moving:
+            if name.startswith('tmc') and ' ' in name and name.split()[-1] in moving:
                 out.append((name.split()[-1], obj))
         return out
 
@@ -372,6 +405,7 @@ class YumiFilamentHead:
             self._fail_or_pause(gcmd, message)
 
     def _load(self, gcmd):
+        self._require_pusher(gcmd)
         # the weak current covers the descent down the tube ONLY. The prime into the nozzle after
         # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
         # runs outside the window: a current chosen to be too weak to chew would simply stall there.
@@ -458,6 +492,7 @@ class YumiFilamentHead:
         self.pending = None
 
     def cmd_UNLOAD_CHECK(self, gcmd):
+        self._require_pusher(gcmd)
         """After an unload: the head sensor must have released, pull more (one move) if not"""
         max_extra = gcmd.get_float('MAX_EXTRA', self.max_unload_extra, minval=0.)
         step = self.load_step(gcmd)

@@ -100,8 +100,11 @@ class Printer:
         self.handlers = {}
         self.command_error = CommandError
         self.reactor = types.SimpleNamespace(monotonic=lambda: 0., pause=lambda t: None)
+        self.pushers = {}   # 'extruder0' -> the extruder it is synced to, None = synced to nothing
         toolhead = types.SimpleNamespace(manual_move=self._manual_move, wait_moves=lambda: None,
-                                         get_position=lambda: list(self.pos))
+                                         get_position=lambda: list(self.pos),
+                                         get_extruder=lambda: types.SimpleNamespace(
+                                             get_name=lambda: "extruder"))
         gcode = types.SimpleNamespace(register_command=lambda *a, **k: None,
                                       run_script_from_command=self.scripts.append,
                                       respond_raw=self.scripts.append)
@@ -122,7 +125,10 @@ class Printer:
 
     def lookup_objects(self, module=None):
         """Klipper's filter: every object, or those named `module` / `module <name>`."""
-        objs = list(self.objects.items()) + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+        objs = (list(self.objects.items())
+                + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+                + [("extruder_stepper " + n, types.SimpleNamespace(motion_queue=q))
+                   for n, q in self.pushers.items()])
         return [(n, o) for n, o in objs if module is None or n == module or n.startswith(module + " ")]
 
     def lookup_object(self, name, default=KeyError):
@@ -309,6 +315,64 @@ class UnloadCheck(unittest.TestCase):
         h.cmd_UNLOAD_CHECK(g)
         self.assertEqual(p.moves, [])
         self.assertIn("out of the head", g.messages[0])
+
+
+
+class APusherHasToBeSyncedOrNothingMoves(unittest.TestCase):
+    """On a ChromaX12 an E move turns nothing unless T<n> synced a YMS pusher first.
+
+    [extruder] there is a fictitious motor on free pins; the pushers are the YMS steppers, a metre
+    of tube away. T<n>'s else branch -- the one that runs OUTSIDE a print -- deliberately syncs
+    none of them. So a sequence launched by hand drives the phantom: the g-code E axis advances
+    exactly as commanded, every move reports success, and not one millimetre of filament moves.
+
+    Measured on the C335 on 09/11: a full unload ran that way. 347 mm of commanded retraction, a
+    blade stroke fired on filament that was still whole, and the only visible symptom was a head
+    sensor that would not release -- which sent the whole investigation after the wrong cause for
+    half an hour. The lesson is not "sync first", it is that this must REFUSE instead of pretending.
+    """
+
+    def _head(self, pushers):
+        h, p = head()
+        p.pushers = dict(pushers)
+        return h, p
+
+    def test_no_synced_pusher_refuses_instead_of_feeding_the_phantom(self):
+        h, p = self._head({"extruder0": None, "extruder1": None})
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        msg = str(cm.exception)
+        self.assertIn("No pusher is synced", msg)
+        self.assertIn("extruder", msg, "the refusal names the extruder it found active")
+        self.assertIn("T<n>", msg, "and how to fix it in the normal case")
+        self.assertIn("SYNC_EXTRUDER_MOTION", msg, "and how to fix it by hand, outside a print")
+        self.assertEqual(p.moves, [], "not a single move may be queued")
+
+    def test_a_synced_pusher_lets_the_load_through(self):
+        h, p = self._head({"extruder0": "extruder", "extruder1": None})
+        h.cmd_LOAD(Gcmd())
+        self.assertTrue(p.moves, "with a pusher synced the load feeds normally")
+
+    def test_the_unload_check_refuses_too_rather_than_pulling_on_nothing(self):
+        h, p = self._head({"extruder0": None})
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_UNLOAD_CHECK(Gcmd())
+        self.assertIn("No pusher is synced", str(cm.exception))
+        self.assertEqual(p.moves, [], "it must not report 'unload failed' after pulling on air")
+
+    def test_the_synced_pusher_is_published_for_the_macros(self):
+        """YUMI_UNLOAD_TIP drives E itself, so it needs to read this before retracting."""
+        h, _ = self._head({"extruder0": None, "extruder1": None})
+        self.assertEqual(h.get_status(0.)["pusher"], "")
+        h, _ = self._head({"extruder0": "extruder", "extruder1": None})
+        self.assertEqual(h.get_status(0.)["pusher"], "extruder0")
+
+    def test_a_direct_drive_is_never_refused(self):
+        """No extruder_stepper at all: [extruder] is the real motor and always moves."""
+        h, p = self._head({})
+        self.assertEqual(h.get_status(0.)["pusher"], "extruder")
+        h.cmd_LOAD(Gcmd())
+        self.assertTrue(p.moves)
 
 
 if __name__ == "__main__":
