@@ -114,6 +114,17 @@ class Printer:
             "save_variables": types.SimpleNamespace(allVariables=self.variables),
         }
 
+    def with_tip(self, **variables):
+        """A _YUMI_TIP macro the module can read, as SET_GCODE_VARIABLE would leave it."""
+        self.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(variables=dict(variables))
+        return self
+
+    def with_hotend(self, temperature):
+        self.objects["extruder"] = types.SimpleNamespace(
+            get_heater=lambda: types.SimpleNamespace(
+                get_status=lambda t: {"temperature": temperature}))
+        return self
+
     def _manual_move(self, coord, speed):
         for i, v in enumerate(coord):
             if v is not None:
@@ -434,6 +445,87 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
             h.cmd_LOAD(Gcmd())
         c = self._currents(p.scripts)
         self.assertIn("CURRENT=1.200", c[-1], "the run current comes back on the failure path too")
+
+
+
+class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
+    """A cut at 70 mm leaves everything below it in the head, and nothing can take it out but the
+    next load.
+
+    The pusher is upstream of the blade and has no grip on that piece. The upstream filament could
+    push it, but only by going back down into the melt, which would destroy the cold blade-cut tip
+    the cut exists to produce. So the piece stays, and the load has to drive it out through the
+    nozzle, hot.
+
+    Measured on 09/11, by getting it wrong: an unload cut at 70 with the tip at 17 left 53 mm
+    behind; three full-tube loads then stopped AT the head switch, 8 mm above it, and never touched
+    it; a push through it at 155 degC blocked the head and chewed the filament. Nothing in the
+    system knew the piece was there -- which is the defect, not the push.
+    """
+
+    def _head(self, stub, temperature=215., **cfg):
+        h, p = head(**cfg)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=stub).with_hotend(temperature)
+        return h, p
+
+    def _extra_over_a_clean_head(self, stub, **cfg):
+        """mm fed beyond what the same load feeds with nothing left in the head. Measured against
+        that baseline, not against the switch position: a stepped load overshoots the switch by up
+        to one step, which is not what this is about."""
+        clean, _ = self._head(0., **cfg)
+        clean.cmd_LOAD(Gcmd())
+        dirty, p = self._head(stub, **cfg)
+        dirty.cmd_LOAD(Gcmd())
+        return dirty.get_status(0.)["loaded_mm"] - clean.get_status(0.)["loaded_mm"], p
+
+    def test_the_stub_is_pushed_out_even_when_the_slicer_owns_the_prime(self):
+        """head_to_nozzle is 0 by decision, and a head with a plug in it is still not loaded."""
+        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=0)
+        self.assertAlmostEqual(extra, 53., places=3,
+                               msg="the 53 mm must be fed out, not left in the head")
+
+    def test_the_stub_adds_to_a_configured_prime(self):
+        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=78)
+        self.assertAlmostEqual(extra, 53., places=3,
+                               msg="the stub adds to the prime, it does not replace part of it")
+
+    def test_the_books_are_cleared_once_it_is_out(self):
+        h, p = self._head(53.)
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts,
+                      "a stub still on the books would be pushed out twice")
+
+    def test_a_cold_hotend_refuses_and_says_what_cold_does(self):
+        h, p = self._head(53., temperature=155.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        msg = str(cm.exception)
+        self.assertIn("155", msg, "the refusal quotes the temperature it found")
+        self.assertIn("53", msg, "and how much has to come out")
+        self.assertIn("blocks the head", msg, "and what happens if it is pushed cold")
+        clean, cp = self._head(0., head_to_nozzle=0)
+        clean.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves[-1][0], cp.moves[-1][0],
+                         "it may load to the switch, but not a millimetre past it")
+
+    def test_an_unreadable_temperature_is_not_hot_enough(self):
+        """Unknown must refuse here: pushing a stub cold is a measured way to block the head."""
+        h, p = head(head_to_nozzle=0)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=53.)          # no hotend object: the temperature cannot be read
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        self.assertIn("cannot be read", str(cm.exception))
+
+    def test_no_stub_no_extra_feed(self):
+        extra, p = self._extra_over_a_clean_head(0., head_to_nozzle=0)
+        self.assertAlmostEqual(extra, 0., places=3)
+        self.assertNotIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts)
+
+    def test_the_stub_is_published(self):
+        h, _ = self._head(53.)
+        self.assertEqual(h.get_status(0.)["stub"], 53.)
 
 
 if __name__ == "__main__":

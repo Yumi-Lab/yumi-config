@@ -148,7 +148,7 @@ class YumiFilamentHead:
         # runs in the reactor's main context, where an MCU query shuts Klipper down.
         return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass,
                 "yms_connected": list(self.yms_connected), "pending": self.pending is not None,
-                "pusher": ",".join(self._synced_pushers())}
+                "pusher": ",".join(self._synced_pushers()), "stub": self._stub()}
 
     # ── the feeding YMS ────────────────────────────────────────────────
     def _feeder(self, gcmd, step):
@@ -368,6 +368,19 @@ class YumiFilamentHead:
         toolhead.wait_moves()
         self.printer.lookup_object('gcode_move').reset_last_position()
 
+    def _stub(self):
+        """mm the blade left in the head, from _YUMI_TIP.stub (single source, set by YUMI_CUT_TIP).
+
+        The pusher sits upstream of the blade and has no grip on that piece, and the upstream
+        filament cannot push it out without going back down into the melt, which would ruin the
+        cold cut tip. So the LOAD owns it: it adds the stub to its prime and drives it out through
+        the nozzle. Measured on 09/11: a 53 mm piece nobody knew about blocked the head when it was
+        pushed through at 155 degC."""
+        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
+        if tip is None:
+            return 0.
+        return max(0., float(tip.variables.get('stub', 0.)))
+
     def _blind_load_len(self):
         """Blind load length: blind_load, or the tip-shaping unload total (single source)."""
         if self.blind_load > 0:
@@ -417,13 +430,37 @@ class YumiFilamentHead:
         with self._reduced_current(gcmd):
             fed = self._feed_to_switch(gcmd)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
-        if to_nozzle > 0:
+        # a stub left by the blade has to come out even when head_to_nozzle is 0 (the slicer owns
+        # the prime by decision): a head with a plug in it is not loaded, and the slicer's own
+        # prime would hit that plug with no idea it is there
+        stub = self._stub()
+        if to_nozzle + stub > 0:
             temp = self._hotend_temp()
+            if stub > 0 and temp is None:
+                # an unreadable temperature used to pass this gate. For a plain prime that is the
+                # long-standing behaviour; for a stub it is not acceptable, because pushing one
+                # cold is a MEASURED way to block the head (09/11) -- unknown is not hot enough.
+                raise gcmd.error(
+                    "Hotend temperature cannot be read, and %.0f mm the blade left in the head "
+                    "have to be pushed out through the nozzle: doing that cold blocks the head "
+                    "and chews the filament (measured 09/11). Fix the hotend sensor first."
+                    % stub)
             if temp is not None and temp < self.min_temp:
-                raise gcmd.error("Hotend at %.0fC: heat above %.0fC before loading to the nozzle"
-                                 % (temp, self.min_temp))
-            self._move_e(to_nozzle, self.nozzle_speed)
-            fed += to_nozzle
+                raise gcmd.error(
+                    "Hotend at %.0fC: heat above %.0fC before %s.%s"
+                    % (temp, self.min_temp,
+                       ("pushing the %.0f mm the blade left in the head out through the nozzle"
+                        % stub) if stub > 0 else "loading to the nozzle",
+                       " Pushing it cold blocks the head and chews the filament (measured 09/11)."
+                       if stub > 0 else ""))
+            if stub > 0:
+                gcmd.respond_info("pushing the %.0f mm the blade left in the head out through the "
+                                  "nozzle before the %.0f mm prime" % (stub, to_nozzle))
+            self._move_e(to_nozzle + stub, self.nozzle_speed)
+            fed += to_nozzle + stub
+            if stub > 0:
+                self.gcode.run_script_from_command(
+                    "SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0")
         self.loaded_mm = fed
         self.gcode.run_script_from_command("M117 Filament loaded")
 

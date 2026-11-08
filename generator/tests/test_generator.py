@@ -1144,6 +1144,43 @@ class TipSizingArithmetic(unittest.TestCase):
         self.assertIn(str(bad), msg, "the refusal must quote the value received")
         self.assertIn("docs/hotend-chromax-x12.md", msg, "the refusal must point at the drawing")
 
+    def test_the_stub_handed_to_the_blade_is_what_the_blade_really_leaves(self):
+        """The cut severs at blade_len, so what stays in the head is blade_len minus wherever the
+        tip is at that moment. The load is told that number and pushes exactly it out through the
+        nozzle, so a wrong one either leaves a plug behind or purges filament for nothing. It has
+        to follow the geometry, not be typed in: both branches are checked, and both cut at a
+        different height."""
+        for params, expected_tip in ((dict(SIZE=1), "sizing_len"), (dict(), "legacy")):
+            tip_vars, moves = self._render(**params)
+            out_lines = self._cut_lines(**params)
+            self.assertEqual(len(out_lines), 1, "exactly one cut per branch taken")
+            stub = float(out_lines[0].split("STUB=")[1].split()[0])
+            if expected_tip == "sizing_len":
+                tip_at_cut = tip_vars["sizing_len"]
+            else:
+                tip_at_cut = tip_vars["first_len"] + tip_vars["cut_len"]
+            self.assertAlmostEqual(
+                stub, tip_vars["blade_len"] - tip_at_cut, places=6,
+                msg="%s branch: told the load %.1f mm, but the blade leaves %.1f"
+                    % (expected_tip, stub, tip_vars["blade_len"] - tip_at_cut))
+            self.assertGreater(stub, 0., "a cut always leaves something below the blade")
+
+    def _cut_lines(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        out = env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
+        return [l.strip() for l in out.split("\n") if l.strip().startswith("YUMI_CUT_TIP")]
+
     def test_a_cooling_stroke_that_would_dip_into_the_stuck_zone_is_refused(self):
         tip_vars, _, _ = self._sizing_height()
         too_long = tip_vars["sizing_len"] - tip_vars["stuck_len"] + 1
