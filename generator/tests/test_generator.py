@@ -382,7 +382,7 @@ class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
     def test_the_fast_transit_reaches_the_sizing_bore_before_any_crawl(self):
         for product in self.PRODUCTS:
             tip = self._tip(product)
-            i_first = tip.index("G1 E-{first_len}")
+            i_first = tip.index("G1 E-{done}")
             i_cut = tip.index("G1 E-{cut_len}")
             i_slow = tip.index("G1 E-{slow_len}")
             self.assertLess(i_first, i_cut, "%s: first_len then cut_len, both fast" % product)
@@ -392,20 +392,44 @@ class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
             self.assertNotIn("G1 E", between.replace("G1 E-{cut_len}", "", 1),
                              "%s: nothing may extrude between the transit and the crawl" % product)
 
-    def test_the_blade_is_off_by_default(self):
-        """A safety net is armed on purpose. It must not be the default path, or it disturbs the
-        mechanism it exists to rescue."""
-        for product in self.PRODUCTS:
-            tip = self._tip(product)
-            self.assertIn("params.CUT|default(0)|int == 1", tip,
-                          "%s: the blade is the netting, CUT=1 arms it" % product)
+    def test_the_blade_is_armed_by_default(self):
+        """Reversed on 09/11, on a measurement, not a preference.
 
-    def test_when_armed_the_blade_does_not_split_the_transit_nor_the_crawl(self):
+        The sized tip came out in one piece and cleaner than any before it -- and then would not
+        go back in. It jammed, and Nicolas had to cut it by hand, pull the PTFE and start over:
+        "le bout chaud regonfle, il faut absolument qu'il soit froid avant d'etre retire". Shaping
+        cannot beat that, because the tip leaves the nozzle molten whatever the sequence does. A
+        blade cut lands above the heatsink, on cold filament, and cannot swell. His verdict:
+        "couper ne fait pas perdre beaucoup de temps et au moins ca garantit que ca fonctionne".
+        So the cut is the default on every unload path and CUT=0 is what has to be asked for.
+        Machines whose cutter is bypassed (cut_filament_bypass, SET_CUT_FILAMENT_BYPASS) fall back
+        to the shaping path on their own -- CUT_FILAMENT handles the bypass itself."""
         for product in self.PRODUCTS:
             tip = self._tip(product)
-            self.assertLess(tip.index("G1 E-{cut_len}"), tip.index("YUMI_CUT_TIP"),
-                            "%s: the blade never cuts before the tip has left the hot zone" % product)
-            self.assertLess(tip.index("YUMI_CUT_TIP"), tip.index("G1 E-{slow_len}"),
+            self.assertIn("params.CUT|default(1)|int == 1", tip,
+                          "%s: the blade is the guarantee, CUT=0 declines it" % product)
+            self.assertNotIn("params.CUT|default(0)", tip,
+                             "%s: no path may leave the blade disarmed by default" % product)
+
+    def test_the_blade_never_cuts_while_the_tip_is_still_hot(self):
+        """One cut per branch, and in both the tip is already out of the melt when it happens.
+
+        Moving the blade earlier on 09/11 clogged the head: the stroke landed on filament still in
+        the hot wide bore, where it swells. In the legacy branch the cut comes after the cut_len
+        transit and before the crawl; in the sizing branch it comes after the dwell, which is the
+        coldest the tip ever gets. Indexes are taken per branch, since both now cut."""
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            sizing, _, legacy = tip.partition("{% else %}")
+            self.assertEqual(tip.count("YUMI_CUT_TIP"), 2,
+                             "%s: exactly one cut per unload branch" % product)
+            self.assertLess(sizing.index("G4 P{dwell_ms}"), sizing.index("YUMI_CUT_TIP"),
+                            "%s: the sizing branch cuts only once the dwell has set the tip"
+                            % product)
+            self.assertLess(legacy.index("G1 E-{cut_len}"), legacy.index("YUMI_CUT_TIP"),
+                            "%s: the blade never cuts before the tip has left the hot zone"
+                            % product)
+            self.assertLess(legacy.index("YUMI_CUT_TIP"), legacy.index("G1 E-{slow_len}"),
                             "%s: and never during the sizing crawl" % product)
 
 
@@ -451,7 +475,7 @@ class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
         the print stays paused. A verification that cannot verify must not decide."""
         m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
         code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
-        self.assertIn("'yumi_filament_head' in printer and not printer.yumi_filament_head.bypass", code)
+        self.assertIn("head.bypass", code, "a bypassed head sensor verifies nothing")
         tail = code.rsplit("{% else %}", 1)[1]
         self.assertIn("filament encoder runout", tail, "the old message is the fallback")
         self.assertNotIn("RESUME", tail, "an unverifiable runout does not resume")
@@ -914,8 +938,10 @@ class CancelSequence(unittest.TestCase):
         self.assertIn("variable_cut_speed: 65", tip)
         self.assertIn("variable_cut_len: 10", tip)
         unload = m["gcode_macro YUMI_UNLOAD_TIP"]
-        for step in ("first_len", "cut_len", "slow_len", "pull_len"):
+        for step in ("done", "cut_len", "slow_len", "pull_len"):
             self.assertIn("G1 E-{%s}" % step, unload)
+        self.assertIn("{% set done = 0.0 if params.SKIP_FIRST|default(0)|int == 1 else first_len %}",
+                      unload)
         self.assertLess(unload.index("M83"), unload.index("G1 E-{cut_len}"))
         test = m["gcode_macro YUMI_TIP_TEST"]
         for key in ("params.CYCLES", "params.TEMP", "params.WAIT", "YUMI_UNLOAD_TIP", "G4 P{(wait * 1000)|int}", "M109 S{temp}"):
@@ -1014,6 +1040,118 @@ class Heads(unittest.TestCase):
         for sec, opts in gen.items():
             for opt, val in opts.items():
                 self.assertNotRegex(val, r"[A-Za-z0-9_]+:[!^~]", "%s/%s = %s" % (sec, opt, val))
+
+
+
+class TipSizingArithmetic(unittest.TestCase):
+    """Where the tip actually STOPS, by rendering the macro and adding up its E moves.
+
+    The sizing path only works because the tip stops ABOVE the stuck zone, so the one number that
+    has to be right is the position reached before the dwell. It was NOT right: the sizing retract
+    read ``sizing_len - first_len + push_len`` and subtracted first_len even when the caller had
+    not done that retract. CANCEL_PRINT is such a caller -- it retracts over the part itself and
+    passes SKIP_FIRST=1 -- so there the tip stopped 7 mm short, at 23 mm, inside the 25 mm that
+    stays welded to the walls. That is the two-piece tip this whole path exists to avoid, produced
+    silently, with no error and nothing in the log. Text matching could not see it; only adding the
+    moves up can, which is why this class renders instead of grepping.
+    """
+
+    PRODUCT = "C235_DD_LW_04"
+
+    def _render(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+
+        def raise_error(msg):
+            raise RuntimeError(msg)
+
+        # Klipper's own delimiters (klippy/extras/gcode_macro.py): single braces, not {{ }}
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        out = env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=raise_error,
+        )
+        # tip height above the nozzle = minus the cumulative E
+        moves, cum = [], 0.0
+        for line in out.split("\n"):
+            line = line.strip()
+            if line.startswith("G1 E"):
+                cum += float(line.split("E", 1)[1].split()[0])
+                moves.append(("move", -cum))
+            elif line.startswith("G4 P"):
+                moves.append(("dwell", -cum))
+        return tip_vars, moves
+
+    def _sizing_height(self, **params):
+        tip_vars, moves = self._render(SIZE=1, **params)
+        dwells = [h for kind, h in moves if kind == "dwell"]
+        self.assertEqual(len(dwells), 1, "the sizing path holds the tip exactly once")
+        return tip_vars, dwells[0], moves
+
+    def test_the_tip_stops_at_sizing_len_whoever_did_the_first_retract(self):
+        for skip in (0, 1):
+            tip_vars, height, _ = self._sizing_height(SKIP_FIRST=skip)
+            self.assertAlmostEqual(
+                height, tip_vars["sizing_len"], places=6,
+                msg="SKIP_FIRST=%d: the tip is held at %.1f mm, not at sizing_len=%.1f"
+                    % (skip, height, tip_vars["sizing_len"]))
+
+    def test_the_held_tip_is_clear_of_the_stuck_zone(self):
+        for skip in (0, 1):
+            tip_vars, height, _ = self._sizing_height(SKIP_FIRST=skip)
+            self.assertGreater(
+                height, tip_vars["stuck_len"],
+                "SKIP_FIRST=%d: held at %.1f mm, inside the %.1f mm that stays welded -- this is "
+                "the tip that snaps in two" % (skip, height, tip_vars["stuck_len"]))
+
+    def test_the_cooling_moves_never_dip_back_into_the_stuck_zone(self):
+        tip_vars, height, moves = self._sizing_height()
+        stuck = tip_vars["stuck_len"]
+        # everything from the moment the tip first clears the stuck zone up to the dwell
+        after = []
+        for kind, h in moves:
+            if after or h > stuck:
+                after.append(h)
+            if kind == "dwell":
+                break
+        self.assertGreater(len(after), 1, "the cooling moves must show up in the rendered sequence")
+        self.assertGreater(min(after), stuck,
+                           "a cooling move brings the tip down to %.1f mm, inside the %.1f mm "
+                           "stuck zone" % (min(after), stuck))
+
+    def test_the_cooling_moves_are_a_round_trip(self):
+        """They shear the thread; they must not move the tip, or they would undo the sizing."""
+        tip_vars, with_moves, _ = self._sizing_height()
+        _, without, _ = self._sizing_height(COOL_MOVES=0)
+        self.assertAlmostEqual(with_moves, without, places=6,
+                               msg="the cooling moves shifted the held tip by %.3f mm"
+                                   % (with_moves - without))
+
+    def test_a_tip_asked_for_inside_the_stuck_zone_is_refused_not_silently_made(self):
+        tip_vars, _, _ = self._sizing_height()
+        bad = tip_vars["stuck_len"] - 2
+        with self.assertRaises(RuntimeError) as cm:
+            self._render(SIZE=1, SIZING_LEN=bad)
+        msg = str(cm.exception)
+        self.assertIn("SIZING_LEN", msg, "the refusal must name the parameter at fault")
+        self.assertIn(str(bad), msg, "the refusal must quote the value received")
+        self.assertIn("docs/hotend-chromax-x12.md", msg, "the refusal must point at the drawing")
+
+    def test_a_cooling_stroke_that_would_dip_into_the_stuck_zone_is_refused(self):
+        tip_vars, _, _ = self._sizing_height()
+        too_long = tip_vars["sizing_len"] - tip_vars["stuck_len"] + 1
+        with self.assertRaises(RuntimeError) as cm:
+            self._render(SIZE=1, COOL_LEN=too_long)
+        msg = str(cm.exception)
+        self.assertIn("COOL_LEN", msg)
+        self.assertIn("COOL_MOVES=0", msg, "the refusal must say how to proceed anyway")
 
 
 if __name__ == "__main__":
