@@ -441,6 +441,8 @@ class YumiFilamentHead:
 
     def _load(self, gcmd):
         self._require_pusher(gcmd)
+        if self._stub() > 0:
+            return self._load_over_a_stub(gcmd)
         # the weak current covers the descent down the tube ONLY. The prime into the nozzle after
         # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
         # runs outside the window: a current chosen to be too weak to chew would simply stall there.
@@ -494,6 +496,59 @@ class YumiFilamentHead:
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.loaded_mm = fed
+        self.gcode.run_script_from_command("M117 Filament loaded")
+
+    def _load_over_a_stub(self, gcmd):
+        """Load when the blade left a piece in the head: the switch cannot be believed.
+
+        That piece sits at the head switch and holds it, so `filament already at the head` is true
+        of the STUB and says nothing about the filament arriving behind it. Measured on 09/11: the
+        load read the switch, fed 0 mm, primed 78 mm into filament still far up the tube, announced
+        that it had pushed the stub out and cleared the books. Nothing had moved and the books
+        lied, which is worse than the plug itself.
+
+        The short-circuit stays for the case it was written for -- a colour change with no cut and
+        nothing withdrawn, where the filament really is at the head (Nicolas, 09/11: "quand t'as
+        qu'un filament, y'a pas de problème, c'est le même que tu rentres et que tu sors"). Here
+        there is no signal left to wait for, so the feed is BLIND over the distance the unload
+        retracted (_blind_load_len: the tip-shaping total, one source), which brings the tip from
+        there to the nozzle and pushes the stub out on the same travel. It says so, because a
+        blind feed assumes nobody pulled the filament further back by hand."""
+        stub = self._stub()
+        temp = self._hotend_temp()
+        if temp is None or temp < self.min_temp:
+            raise gcmd.error(
+                "%.0f mm the blade left in the head have to be pushed out through the nozzle, and "
+                "the hotend is %s: doing that cold blocks the head and chews the filament "
+                "(measured 09/11). Heat above %.0fC first."
+                % (stub, "at %.0fC" % temp if temp is not None else "unreadable", self.min_temp))
+        # Where the new tip waits: the cut moved the sequence's reference. Tip at 17 when the blade
+        # fires at 70, then slow_len + pull_len retract the UPSTREAM piece from 70 -- so it ends at
+        # blade_len + slow + pull = 200 mm, not at the 147 mm the sequence retracted in total. The
+        # difference is exactly the stub, so the distance is the tip-shaping total PLUS the stub.
+        # Feeding only the total would stop 53 mm short, leaving the plug half out: the same
+        # arithmetic slip as adding the stub to the prime, mirrored.
+        given = gcmd.get_float('MAX', None, above=0.)
+        total = self._blind_load_len()
+        if given is None and total <= 0.:
+            # the stub's own length is NOT a distance to feed: it would stop short, in silence
+            raise gcmd.error(
+                "%.0f mm the blade left in the head have to be pushed out, but the distance to "
+                "feed is not known: the head switch is held by that piece and cannot say when the "
+                "filament arrives, and the tip-shaping lengths are not available either. Give "
+                "MAX=<mm>, or SAVE_VARIABLE VARIABLE=head_stub VALUE=0 if the piece was taken out "
+                "by hand." % stub)
+        distance = given if given is not None else total + stub
+        gcmd.respond_info(
+            "blind load of %.0f mm: the %.0f mm the blade left in the head holds the switch, so "
+            "there is nothing to wait for -- this travel brings the tip to the nozzle and pushes "
+            "that piece out. Check material really came out before printing."
+            % (distance, stub))
+        feeder = self._feeder(gcmd, self.load_step(gcmd))
+        with self._reduced_current(gcmd):
+            fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.speed, None, feeder)
+        self.loaded_mm = fed
+        self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     def _feed_to_switch(self, gcmd):

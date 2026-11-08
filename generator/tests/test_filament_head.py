@@ -452,131 +452,127 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
 
 
 class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
-    """A cut at 70 mm leaves everything below it in the head, and nothing can take it out but the
-    next load.
+    """A cut at 70 mm leaves everything below it in the head, and only the next load can take it
+    out -- the pusher is upstream of the blade and has no grip on that piece, and the upstream
+    filament could only push it by going back down into the melt, which would destroy the cold
+    blade-cut tip the cut exists to produce.
 
-    The pusher is upstream of the blade and has no grip on that piece. The upstream filament could
-    push it, but only by going back down into the melt, which would destroy the cold blade-cut tip
-    the cut exists to produce. So the piece stays, and the load has to drive it out through the
-    nozzle, hot.
+    What makes that load special is that the piece SITS AT THE HEAD SWITCH and holds it. So
+    `filament already at the head` is true of the stub and says nothing about the filament arriving
+    behind it. Measured on the C335 on 09/11: the load read the switch, fed 0 mm, primed 78 mm into
+    filament still far up the tube, announced it had pushed the stub out, and cleared the books.
+    Nothing had moved and the books lied -- worse than the plug.
 
-    Measured on 09/11, by getting it wrong: an unload cut at 70 with the tip at 17 left 53 mm
-    behind; three full-tube loads then stopped AT the head switch, 8 mm above it, and never touched
-    it; a push through it at 155 degC blocked the head and chewed the filament. Nothing in the
-    system knew the piece was there -- which is the defect, not the push.
+    The short-circuit stays for the case it was written for: a colour change with no cut and
+    nothing withdrawn, where the filament really is at the head (Nicolas: "quand t'as qu'un
+    filament, y'a pas de problème, c'est le même que tu rentres et que tu sors").
     """
 
-    SPAN = 78.   # measured switch-to-nozzle distance, _YUMI_TIP.head_to_nozzle
+    SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.)
+    STUB = 53.
+    # the cut at 70 fires with the tip at 17, then slow+pull retract the UPSTREAM piece from 70:
+    # it waits at 70 + 20 + 110 = 200, which is the sequence total (147) plus the stub (53)
+    WAITS_AT = 200.
 
     def _head(self, stub, temperature=215., **cfg):
         h, p = head(**cfg)
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=stub, head_to_nozzle=self.SPAN).with_hotend(temperature)
+        p.with_tip(stub=stub, **self.SEQ)
+        if temperature is not None:
+            p.with_hotend(temperature)
         return h, p
 
-    def _extra_over_a_clean_head(self, stub, **cfg):
-        """mm fed beyond what the same load feeds with nothing left in the head. Measured against
-        that baseline, not against the switch position: a stepped load overshoots the switch by up
-        to one step, which is not what this is about."""
-        clean, _ = self._head(0., **cfg)
-        clean.cmd_LOAD(Gcmd())
-        dirty, p = self._head(stub, **cfg)
-        dirty.cmd_LOAD(Gcmd())
-        return dirty.get_status(0.)["loaded_mm"] - clean.get_status(0.)["loaded_mm"], p
+    def test_the_switch_is_not_believed_while_a_stub_holds_it(self):
+        h, p = self._head(self.STUB)
+        p.switch_at = -1.          # the switch reads present from the very start, as the stub does
+        h.cmd_LOAD(Gcmd())
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], self.WAITS_AT, places=3,
+                               msg="fed %.1f mm: the load believed the switch and moved nothing"
+                                   % h.get_status(0.)["loaded_mm"])
 
-    def test_the_stub_is_pushed_out_even_when_the_slicer_owns_the_prime(self):
-        """head_to_nozzle is 0 by decision, and a head with a plug in it is still not loaded."""
-        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=0)
-        self.assertAlmostEqual(
-            extra, self.SPAN, places=3,
-            msg="the prime must cover the whole switch-to-nozzle span, which is what takes the "
-                "stub out; feeding only the stub's 53 mm leaves half of it in the bore and the "
-                "new tip 25 mm short of the nozzle")
-
-    def test_the_stub_adds_no_distance_to_a_prime_that_already_covers_the_span(self):
-        """It sits INSIDE the span, it does not come after it.
-
-        Cut at 70 with the tip at 17 leaves the stub at [17, 70]; the switch is at 78. The
-        arriving tip travels 8 mm to meet it, then 70 more pushes its top to the nozzle -- 78 in
-        all, and the new tip lands at 0. Adding the stub's length on top would purge 53 mm for
-        nothing."""
-        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=self.SPAN)
-        self.assertAlmostEqual(extra, 0., places=3,
-                               msg="the same travel brings the tip down and takes the stub out")
+    def test_the_distance_is_the_sequence_total_plus_the_stub(self):
+        """Not the total alone. The cut moves the reference, so the tip waits 53 mm further back;
+        feeding only 147 would stop short and leave the plug half out."""
+        h, p = self._head(self.STUB)
+        h.cmd_LOAD(Gcmd())
+        total = sum(self.SEQ[k] for k in ('first_len', 'cut_len', 'slow_len', 'pull_len'))
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], total + self.STUB, places=3)
 
     def test_the_books_are_cleared_once_it_is_out(self):
-        h, p = self._head(53.)
+        h, p = self._head(self.STUB)
         h.cmd_LOAD(Gcmd())
         self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
-                      "a stub still on the books would be pushed out twice")
+                      "a stub still on the books would be fed out again at the next load")
+
+    def test_it_says_it_is_blind(self):
+        """A blind feed assumes nobody pulled the filament further back by hand, so it has to say
+        so rather than report a verified load."""
+        h, _ = self._head(self.STUB)
+        g = Gcmd()
+        h.cmd_LOAD(g)
+        said = " ".join(g.messages)
+        self.assertIn("blind", said, "the operator has to know this load was not verified")
+        self.assertIn("53", said, "and how much is being pushed out")
 
     def test_a_cold_hotend_refuses_and_says_what_cold_does(self):
-        h, p = self._head(53., temperature=155.)
+        h, p = self._head(self.STUB, temperature=155.)
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd())
         msg = str(cm.exception)
         self.assertIn("155", msg, "the refusal quotes the temperature it found")
         self.assertIn("53", msg, "and how much has to come out")
         self.assertIn("blocks the head", msg, "and what happens if it is pushed cold")
-        clean, cp = self._head(0., head_to_nozzle=0)
-        clean.cmd_LOAD(Gcmd())
-        self.assertEqual(p.moves[-1][0], cp.moves[-1][0],
-                         "it may load to the switch, but not a millimetre past it")
+        self.assertEqual(p.moves, [], "not a millimetre may be fed")
 
     def test_an_unreadable_temperature_is_not_hot_enough(self):
         """Unknown must refuse here: pushing a stub cold is a measured way to block the head."""
-        h, p = head(head_to_nozzle=0)
-        p.pushers = {"extruder0": "extruder"}
-        # the span is known, so the prime would happen; no hotend object, so the temperature is not
-        p.with_tip(stub=53., head_to_nozzle=self.SPAN)
+        h, p = self._head(self.STUB, temperature=None)
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd())
-        self.assertIn("cannot be read", str(cm.exception))
+        self.assertIn("unreadable", str(cm.exception))
+        self.assertEqual(p.moves, [])
 
-    def test_a_stub_with_no_known_geometry_refuses_rather_than_leaving_it_in(self):
-        """Without head_to_nozzle there is no prime, and the plug would simply stay there while
-        the load reported success -- then the next one would push filament onto it."""
-        h, p = head(head_to_nozzle=0)
+    def test_a_stub_with_no_known_distance_refuses_rather_than_leaving_it_in(self):
+        h, p = head()
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=53.).with_hotend(215.)       # stub known, span not
+        p.with_tip(stub=self.STUB).with_hotend(215.)      # no sequence lengths: nothing to go on
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd())
         msg = str(cm.exception)
-        self.assertIn("53", msg)
-        self.assertIn("head_to_nozzle", msg, "the refusal names the value to set")
-        self.assertIn("HEAD_TO_NOZZLE=", msg, "and the way to get past it for one call")
+        self.assertIn("MAX=", msg, "the refusal names the way to supply the distance")
+        self.assertIn("head_stub VALUE=0", msg, "and how to clear the books if it was taken out")
 
-    def test_the_call_can_supply_the_span_itself(self):
-        h, p = head(head_to_nozzle=0)
+    def test_the_call_can_supply_the_distance_itself(self):
+        h, p = head()
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=53.).with_hotend(215.)
-        h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE=str(self.SPAN)))
-        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+        p.with_tip(stub=self.STUB).with_hotend(215.)
+        h.cmd_LOAD(Gcmd(MAX="200"))
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 200., places=3)
 
-    def test_no_stub_no_extra_feed(self):
-        extra, p = self._extra_over_a_clean_head(0., head_to_nozzle=0)
-        self.assertAlmostEqual(extra, 0., places=3)
+    def test_no_stub_leaves_the_normal_path_alone(self):
+        """The short-circuit and the prime are for the colour change with no cut."""
+        h, p = self._head(0.)
+        h.cmd_LOAD(Gcmd())
         self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+        self.assertGreater(h.get_status(0.)["loaded_mm"], 0.)
 
     def test_a_macro_variable_is_not_where_the_stub_lives(self):
         """It has to survive a restart. A gcode variable does not: it lives in RAM and a restart
         resets it, while filament left in the head survives one perfectly well -- and the next
-        load would then push fresh filament onto a plug it no longer knew about. Same store as
-        cut_filament_bypass, for the same reason."""
-        h, p = head(head_to_nozzle=0)
+        load would then push fresh filament onto a plug it no longer knew about."""
+        h, p = head()
         p.pushers = {"extruder0": "extruder"}
         p.with_hotend(215.)
-        # a macro variable called stub, and nothing in variables.cfg
         p.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(
-            variables={"stub": 53., "head_to_nozzle": self.SPAN})
+            variables=dict(self.SEQ, stub=self.STUB))     # a macro variable, nothing persisted
         self.assertEqual(h.get_status(0.)["stub"], 0.,
                          "a macro variable must not be taken for the record")
-        h.cmd_LOAD(Gcmd())        # and nothing is pushed out on its word
+        h.cmd_LOAD(Gcmd())
         self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
 
     def test_the_stub_is_published(self):
-        h, _ = self._head(53.)
-        self.assertEqual(h.get_status(0.)["stub"], 53.)
+        h, _ = self._head(self.STUB)
+        self.assertEqual(h.get_status(0.)["stub"], self.STUB)
 
 
 if __name__ == "__main__":
