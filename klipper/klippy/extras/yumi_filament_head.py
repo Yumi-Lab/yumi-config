@@ -13,6 +13,9 @@
 # the 4/4 "No trigger after full movement" of 2026-09-06 never moved a millimetre of filament.
 #
 #   YUMI_LOAD_TO_HEAD  [SENSOR=] [PRELOAD=] [SPEED=] [MAX=] [STEP=] [HEAD_TO_NOZZLE=]
+#                      [CURRENT=]  overrides load_current for THIS call only, nothing is
+#                      remembered: finding the lowest current that still pulls a full tube is a
+#                      sweep, and a config option would cost a restart per value.
 #       feed `step` mm at `speed`, read the switch, again until it sees filament, MAX mm at
 #       most (error otherwise), then stop: what follows (prime to the nozzle, purge) is the
 #       slicer's G-code. PRELOAD= feeds that many mm first in ONE move without reading the
@@ -280,8 +283,10 @@ class YumiFilamentHead:
     @contextlib.contextmanager
     def _reduced_current(self, gcmd):
         """Run the body with load_current on the pusher(s), then put back what was there --
-        including when the body raises, which is exactly when it matters."""
-        if self.load_current <= 0.:
+        including when the body raises, which is exactly when it matters. CURRENT= overrides the
+        configured value for this call only."""
+        wanted = gcmd.get_float('CURRENT', self.load_current, minval=0.)
+        if wanted <= 0.:
             yield
             return
         eventtime = self.printer.get_reactor().monotonic()
@@ -290,18 +295,18 @@ class YumiFilamentHead:
                  for short, cur in saved if cur.get('run_current') is not None]
         if not saved:
             # never silently load at full current when a weaker one was asked for
-            gcmd.respond_info("load_current=%.2fA asked for, but no adjustable driver feeds the "
-                              "filament here: loading at the configured current"
-                              % self.load_current)
+            gcmd.respond_info("load current of %.2fA asked for, but no adjustable driver "
+                              "feeds the filament here: loading at the configured current"
+                              % wanted)
             yield
             return
         for short, run, hold in saved:
             self.gcode.run_script_from_command(
                 "SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
-                % (short, self.load_current, min(hold, self.load_current)))
+                % (short, wanted, min(hold, wanted)))
         gcmd.respond_info("loading at %.2f A on %s (run %.2f A): too weak to chew the filament, "
                           "so an obstruction makes it skip instead"
-                          % (self.load_current, ", ".join(s for s, _, _ in saved), saved[0][1]))
+                          % (wanted, ", ".join(s for s, _, _ in saved), saved[0][1]))
         try:
             yield
         finally:

@@ -375,5 +375,66 @@ class APusherHasToBeSyncedOrNothingMoves(unittest.TestCase):
         self.assertTrue(p.moves)
 
 
+
+class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
+    """Loading pushes filament down a tube; the run current is sized for retractions and for
+    pushing melt through the nozzle. Nicolas 09/11: "il n'y a pas besoin d'avoir de force. Si il y
+    a une contrainte, il ne faut pas qu'on bouffe le filament." A pusher too weak for an
+    obstruction skips and the load reports a failure; one strong enough grinds a flat into the
+    filament and from then on nothing feeds at all. CURRENT= exists because finding the lowest
+    current that still pulls a full metre of tube is a sweep, and a config option costs a restart
+    per value."""
+
+    def _head(self, **cfg):
+        h, p = head(**cfg)
+        p.pushers = {"extruder0": "extruder", "extruder1": None}
+        p.objects["tmc2209 extruder_stepper extruder0"] = types.SimpleNamespace(
+            get_status=lambda t: {"run_current": 1.2, "hold_current": 0.3})
+        return h, p
+
+    def _currents(self, scripts):
+        return [l for l in scripts if isinstance(l, str) and l.startswith("SET_TMC_CURRENT")]
+
+    def test_the_configured_current_is_applied_then_put_back(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd())
+        c = self._currents(p.scripts)
+        self.assertEqual(len(c), 2, "exactly one lowering and one restore")
+        self.assertIn("CURRENT=0.600", c[0])
+        self.assertIn("STEPPER=extruder0", c[0])
+        self.assertIn("CURRENT=1.200", c[1], "the run current must come back, not the weak one")
+
+    def test_only_the_synced_pusher_is_touched(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd())
+        self.assertNotIn("extruder1", " ".join(self._currents(p.scripts)),
+                         "an unsynced pusher does not move, so its current is none of our business")
+
+    def test_current_on_the_call_wins_over_the_config(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd(CURRENT="0.4"))
+        self.assertIn("CURRENT=0.400", self._currents(p.scripts)[0])
+
+    def test_zero_leaves_the_current_alone(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd(CURRENT="0"))
+        self.assertEqual(self._currents(p.scripts), [],
+                         "0 means do not touch, not set the driver to zero amps")
+
+    def test_unconfigured_leaves_the_current_alone(self):
+        h, p = self._head()
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(self._currents(p.scripts), [])
+
+    def test_the_current_is_restored_even_when_the_load_fails(self):
+        """The restore is the whole point: a machine left at 0.6 A would under-extrude silently."""
+        h, p = self._head(load_current=0.6, max_load=10)
+        p.switch_at = 10000.          # the switch never triggers
+        with self.assertRaises(CommandError):
+            h.cmd_LOAD(Gcmd())
+        c = self._currents(p.scripts)
+        self.assertIn("CURRENT=1.200", c[-1], "the run current comes back on the failure path too")
+
+
 if __name__ == "__main__":
     unittest.main()
