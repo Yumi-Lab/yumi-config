@@ -407,6 +407,54 @@ class BladeCutOnEveryUnload(unittest.TestCase):
             self.assertFalse(re.search(r"G1 X-?\d", code), "no hard-coded X: the geometry is CUT_FILAMENT's")
 
 
+class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
+    """A YMS encoder runout is a suspicion, not a verdict: a flaky read kills a print for
+    nothing (Nicolas, 08/11). The sensor must hand over to a verification that pauses first,
+    checks whether the feeder really delivers, and only then decides."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_every_sensor_hands_over_instead_of_pausing_blind(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            runouts = re.findall(r"runout_gcode:(.*?)insert_gcode:", cfg, re.S)
+            self.assertTrue(runouts, product)
+            for n, block in enumerate(runouts, 1):
+                self.assertIn("YUMI_CONFIRM_RUNOUT SENSOR=YMS-%d" % n, block,
+                              "%s: YMS-%d must hand over, not pause blind" % (product, n))
+                self.assertNotIn("filament encoder runout", block,
+                                 "%s: the bare PAUSE + error is gone from the sensor" % product)
+
+    def test_it_pauses_before_it_verifies(self):
+        """One never keeps depositing on a suspicion: PAUSE comes before any motion or feed."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        self.assertLess(code.index("PAUSE"), code.index("_YUMI_POP_TOOL"))
+        self.assertLess(code.index("PAUSE"), code.index("YUMI_LOAD_TO_HEAD"))
+
+    def test_a_confirmed_jam_cuts_and_waits_a_false_reading_resumes(self):
+        for product in self.PRODUCTS:
+            m = macros(generator.generate(product, catalog=CATALOG))
+            code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+            self.assertIn("printer.yumi_filament_head.pending", code,
+                          "%s: the verdict comes from the module, not from a guess" % product)
+            jam, ok = code.split("{% else %}", 1)[0], code.split("{% else %}", 1)[1]
+            self.assertIn("YUMI_CUT_TIP", jam, "%s: a confirmed jam cuts the tip" % product)
+            self.assertNotIn("RESUME", jam, "%s: a confirmed jam never resumes by itself" % product)
+            self.assertIn("RESUME", ok, "%s: a false reading resumes the print" % product)
+            self.assertFalse(re.search(r"G1 X-?\d", code), "no hard-coded X")
+
+    def test_nothing_verifiable_keeps_the_old_behaviour(self):
+        """No head sensor, or bypassed: nothing can be checked, so the old message is kept and
+        the print stays paused. A verification that cannot verify must not decide."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        self.assertIn("'yumi_filament_head' in printer and not printer.yumi_filament_head.bypass", code)
+        tail = code.rsplit("{% else %}", 1)[1]
+        self.assertIn("filament encoder runout", tail, "the old message is the fallback")
+        self.assertNotIn("RESUME", tail, "an unverifiable runout does not resume")
+
+
 class NoHeadSensor(unittest.TestCase):
     """A machine without the head sensor — an older head, or the per-machine override
     {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link

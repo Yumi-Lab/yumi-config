@@ -460,8 +460,9 @@ def render_extruder_steppers(p):
         lines.append(f"  SAVE_VARIABLE VARIABLE=yms{yms_num}_sensor VALUE=False")
         lines.append("   {% set print_state = printer.print_stats.state %}")
         lines.append("    {% if print_state in ['printing', 'paused'] %}")
-        lines.append("        PAUSE")
-        lines.append(f"        RESPOND TYPE=error MSG=\"YMS-{yms_num} filament encoder runout\"")
+        # YUMI: a runout is a suspicion. YUMI_CONFIRM_RUNOUT pauses, then verifies the feeder
+        # and decides: resume on a false reading, cut and wait on a confirmed jam.
+        lines.append(f"        YUMI_CONFIRM_RUNOUT SENSOR=YMS-{yms_num}")
         lines.append("    {% else %}")
         lines.append(f"        RESPOND TYPE=error MSG=\"YMS-{yms_num} No printing running!\"")
         lines.append("    {% endif %}")
