@@ -554,6 +554,7 @@
         "nozzle_speed": 5,
         "max_unload_extra": 200,
         "blind_load": 0,
+        "load_current": 0.6,
         "min_temp": 170,
         "_comments": {
           "pin": "^ = tirage interne : sans lui la ligne du capteur flotte (lectures differentes d'un redemarrage a l'autre au banc)",
@@ -563,7 +564,8 @@
           "max_load": "generous on purpose: the YMS->merger tubes vary per bench (800 cut a real load short on 06/09, YMS ticking all along); a jam is caught earlier by the YMS runout (50 mm without tick), an empty feed costs nothing",
           "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
-          "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)"
+          "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)",
+          "load_current": "A on the pusher driver(s) while the filament travels DOWN THE TUBE, restored right after (0 = leave the configured current alone). That descent needs almost no force; the 1.2 A run current is sized for retractions and for pushing melt through the nozzle. A pusher strong enough to win against an obstruction wins by grinding a flat into the filament, and from then on nothing feeds at all -- so the load is deliberately too weak to chew, and an obstruction makes it skip and report a failure instead. Excludes the head_to_nozzle prime, which pushes melt through the orifice and keeps the full current. 0.6 = half the run current, a STARTING POINT, not a measurement: the number to confirm on the bench is whether a full load through the longest YMS tube still completes at it. It fails loudly if not (\"No filament at the head after 2500 mm\", print paused), never silently."
         }
       },
       "probe_pressure": {

@@ -55,6 +55,21 @@
 #   max_unload_extra  mm pulled at most by YUMI_UNLOAD_CHECK while the switch still sees filament (default 200)
 #   blind_load        mm fed when the sensor is bypassed; 0 = the unload total of _YUMI_TIP (default 0)
 #   min_temp          degC the hotend must have reached before head_to_nozzle is fed (default 170)
+#   load_current      A on the pusher driver(s) WHILE LOADING, restored after (0 = leave alone).
+#                     Loading needs almost no force -- it pushes filament down a tube -- while the
+#                     configured run current is sized for retractions and for pushing melt through
+#                     the nozzle. Nicolas 09/11: "il n'y a pas besoin d'avoir de force. Si il y a
+#                     une contrainte, il ne faut pas qu'on bouffe le filament", and earlier: "un
+#                     pas moteur rate c'est pas tres grave sur la pression alors que bouffer le
+#                     filament ca arrete tout court". A pusher that cannot win against an
+#                     obstruction skips and the load reports a failure; one that can wins by
+#                     grinding a flat into the filament, and from then on NOTHING feeds -- the
+#                     failure Nicolas has been chasing. So the load deliberately runs too weak to
+#                     chew. It covers every path through this module (T<n>, the runout recovery,
+#                     the tip test); the slicer's own prime and LOAD_FILAMENT do not come through
+#                     here, and neither does the head_to_nozzle prime, which pushes melt through
+#                     the nozzle and needs the real current. UNLOADING keeps the full current too:
+#                     pulling a cold tip out of the die needs it.
 #   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
 # Status (printer.yumi_filament_head): present (live switch state, usable in macros: e.g. cut and
 # pull the previous filament before loading another tool), loaded_mm (last load), bypass,
@@ -69,6 +84,7 @@
 #       first line of RESUME: runs again the load / check that paused the print.
 # During a print a failed load or a required YMS unplugged no longer stops the print: alert,
 # PAUSE, and RESUME retries it (Nicolas 08/11: the YMS cable was unplugged, the print was lost).
+import contextlib
 import json
 import logging
 import re
@@ -89,6 +105,7 @@ class YumiFilamentHead:
         self.head_to_nozzle = config.getfloat('head_to_nozzle', 0., minval=0.)
         self.nozzle_speed = config.getfloat('nozzle_speed', 5., above=0.)    # mm/s, into the melt zone
         self.max_unload_extra = config.getfloat('max_unload_extra', 200., minval=0.)
+        self.load_current = config.getfloat('load_current', 0., minval=0.)
         self.blind_load = config.getfloat('blind_load', 0., minval=0.)
         self.min_temp = config.getfloat('min_temp', 170., minval=0.)
         self.bypass_variable = config.get('bypass_variable', 'head_sensor_bypass')
@@ -209,6 +226,56 @@ class YumiFilamentHead:
                 enable.set_motors_enable([stepper.get_name()], False)
         return seen == {'ola', 'olb'}
 
+    def _feeding_drivers(self):
+        """[(mux name, tmc)] of every driver that will move on an extruder move: the active
+        extruder's own stepper plus every extruder_stepper synced to it. SET_TMC_CURRENT keys on
+        the LAST word of the driver section, which is what is returned. A ChromaX12's [extruder]
+        is a fictitious motor on free pins with no driver at all, so it simply does not appear."""
+        toolhead = self.printer.lookup_object('toolhead')
+        active = toolhead.get_extruder().get_name()
+        moving = {active}
+        for name, obj in self.printer.lookup_objects('extruder_stepper'):
+            es = getattr(obj, 'extruder_stepper', obj)
+            if getattr(es, 'motion_queue', None) == active:
+                moving.add(name)
+        out = []
+        for name, obj in self.printer.lookup_objects():
+            if name.startswith('tmc') and ' ' in name and name.split(None, 1)[1] in moving:
+                out.append((name.split()[-1], obj))
+        return out
+
+    @contextlib.contextmanager
+    def _reduced_current(self, gcmd):
+        """Run the body with load_current on the pusher(s), then put back what was there --
+        including when the body raises, which is exactly when it matters."""
+        if self.load_current <= 0.:
+            yield
+            return
+        eventtime = self.printer.get_reactor().monotonic()
+        saved = [(short, tmc.get_status(eventtime)) for short, tmc in self._feeding_drivers()]
+        saved = [(short, cur['run_current'], cur['hold_current'])
+                 for short, cur in saved if cur.get('run_current') is not None]
+        if not saved:
+            # never silently load at full current when a weaker one was asked for
+            gcmd.respond_info("load_current=%.2fA asked for, but no adjustable driver feeds the "
+                              "filament here: loading at the configured current"
+                              % self.load_current)
+            yield
+            return
+        for short, run, hold in saved:
+            self.gcode.run_script_from_command(
+                "SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
+                % (short, self.load_current, min(hold, self.load_current)))
+        gcmd.respond_info("loading at %.2f A on %s (run %.2f A): too weak to chew the filament, "
+                          "so an obstruction makes it skip instead"
+                          % (self.load_current, ", ".join(s for s, _, _ in saved), saved[0][1]))
+        try:
+            yield
+        finally:
+            for short, run, hold in saved:
+                self.gcode.run_script_from_command(
+                    "SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f" % (short, run, hold))
+
     def _unplugged_message(self, n):
         return ("YMS-%d motor not connected (its driver reads both coils open): plug the YMS-%d "
                 "cable back in" % (n, n))
@@ -305,11 +372,28 @@ class YumiFilamentHead:
             self._fail_or_pause(gcmd, message)
 
     def _load(self, gcmd):
+        # the weak current covers the descent down the tube ONLY. The prime into the nozzle after
+        # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
+        # runs outside the window: a current chosen to be too weak to chew would simply stall there.
+        with self._reduced_current(gcmd):
+            fed = self._feed_to_switch(gcmd)
+        to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
+        if to_nozzle > 0:
+            temp = self._hotend_temp()
+            if temp is not None and temp < self.min_temp:
+                raise gcmd.error("Hotend at %.0fC: heat above %.0fC before loading to the nozzle"
+                                 % (temp, self.min_temp))
+            self._move_e(to_nozzle, self.nozzle_speed)
+            fed += to_nozzle
+        self.loaded_mm = fed
+        self.gcode.run_script_from_command("M117 Filament loaded")
+
+    def _feed_to_switch(self, gcmd):
+        """Down the tube until the head switch sees it; returns the mm fed."""
         speed = gcmd.get_float('SPEED', self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
         step = self.load_step(gcmd)
         preload = gcmd.get_float('PRELOAD', 0., minval=0.)
-        to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         feeder = self._feeder(gcmd, step)
         if self.bypass:
             blind = self._blind_load_len()
@@ -339,14 +423,7 @@ class YumiFilamentHead:
                     raise
             gcmd.respond_info("filament reached the head after %.0f mm%s"
                               % (fed, (" (preload %.0f)" % preload) if preload > 0 else ""))
-        if to_nozzle > 0:
-            temp = self._hotend_temp()
-            if temp is not None and temp < self.min_temp:
-                raise gcmd.error("Hotend at %.0fC: heat above %.0fC before loading to the nozzle" % (temp, self.min_temp))
-            self._move_e(to_nozzle, self.nozzle_speed)
-            fed += to_nozzle
-        self.loaded_mm = fed
-        self.gcode.run_script_from_command("M117 Filament loaded")
+        return fed
 
     def cmd_YMS_SCAN(self, gcmd):
         """Which YMS are plugged (0.1 mm back and forth each), saved as yms_connected; REQUIRE=<n>: YMS-n must be"""
