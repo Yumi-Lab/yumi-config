@@ -364,6 +364,49 @@ class Cutter(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
 
+class BladeCutOnEveryUnload(unittest.TestCase):
+    """Every unload path must leave a BLADE-cut tip, not a shaped pull. A slow pull on filament
+    still in the hot zone stretches it like chewing gum and leaves a plug with a thin tail, in
+    two parts, which jams on the next load (Nicolas, 08/11). YUMI_UNLOAD_TIP is the single
+    choke point: cancel, print end, tool change and filament change all go through it."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_the_cut_happens_between_the_retract_and_the_pull(self):
+        for product in self.PRODUCTS:
+            m = macros(generator.generate(product, catalog=CATALOG))
+            tip = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+            self.assertIn("YUMI_CUT_TIP", tip, product)
+            # the filament has just left the hot zone (cut_len) and is not yet up in the PTFE
+            self.assertLess(tip.index("{cut_len}"), tip.index("YUMI_CUT_TIP"),
+                            "%s: retract first, so the blade cuts cold filament" % product)
+            self.assertLess(tip.index("YUMI_CUT_TIP"), tip.index("{slow_len}"),
+                            "%s: cut before the slow pull, not after" % product)
+
+    def test_the_caller_can_opt_out(self):
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        tip = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+        self.assertIn("params.CUT|default(1)|int == 1", tip, "on by default, CUT=0 restores the pull")
+
+    def test_an_unload_never_fails_over_the_cut(self):
+        """The cut is a bonus, never a gate: an unhomed unload still unloads. So the guard
+        responds, it does not raise, and the bypass is CUT_FILAMENT's own business."""
+        for product in self.PRODUCTS:
+            m = macros(generator.generate(product, catalog=CATALOG))
+            cut = m["gcode_macro YUMI_CUT_TIP"]
+            code = "\n".join(l for l in cut.split("gcode:", 1)[1].splitlines()
+                             if not l.strip().startswith("#"))
+            self.assertIn('printer["yumi_sensorless_homing"].homed', code,
+                          "%s: real homing, not the faked homed_axes" % product)
+            self.assertNotIn("homed_axes", code, "toolhead.homed_axes is faked at boot by plr.cfg")
+            self.assertNotIn("action_raise_error", code, "an unload must not abort over the cut")
+            self.assertIn("RESPOND", code, "it says it skipped")
+            self.assertIn("CUT_FILAMENT", code)
+            self.assertIn("_YUMI_POP_TOOL", code, "the head comes back where the caller left it")
+            self.assertLess(code.index("CUT_FILAMENT"), code.index("_YUMI_POP_TOOL"))
+            self.assertFalse(re.search(r"G1 X-?\d", code), "no hard-coded X: the geometry is CUT_FILAMENT's")
+
+
 class NoHeadSensor(unittest.TestCase):
     """A machine without the head sensor — an older head, or the per-machine override
     {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link
