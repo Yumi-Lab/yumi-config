@@ -379,17 +379,24 @@ class YumiFilamentHead:
         return max(0., float(tip.variables.get('head_to_nozzle', 0.)))
 
     def _stub(self):
-        """mm the blade left in the head, from _YUMI_TIP.stub (single source, set by YUMI_CUT_TIP).
+        """mm the blade left in the head, from variables.cfg (head_stub, set by YUMI_CUT_TIP).
+
+        It is persisted, not a macro variable: a gcode variable lives in RAM and a restart resets
+        it, while filament left in the head survives a restart perfectly well -- the next load
+        would then push fresh filament onto a plug it no longer knew about.
 
         The pusher sits upstream of the blade and has no grip on that piece, and the upstream
         filament cannot push it out without going back down into the melt, which would ruin the
         cold cut tip. So the LOAD owns it: it adds the stub to its prime and drives it out through
         the nozzle. Measured on 09/11: a 53 mm piece nobody knew about blocked the head when it was
         pushed through at 155 degC."""
-        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
-        if tip is None:
+        sv = self.printer.lookup_object('save_variables', None)
+        if sv is None:
             return 0.
-        return max(0., float(tip.variables.get('stub', 0.)))
+        try:
+            return max(0., float(sv.allVariables.get('head_stub', 0.)))
+        except (TypeError, ValueError):
+            return 0.
 
     def _blind_load_len(self):
         """Blind load length: blind_load, or the tip-shaping unload total (single source)."""
@@ -458,7 +465,8 @@ class YumiFilamentHead:
                 "%.0f mm the blade left in the head have to be pushed out through the nozzle, but "
                 "the switch-to-nozzle distance is not known: set head_to_nozzle in [gcode_macro "
                 "_YUMI_TIP] (measured at 78 mm on a ChromaX12), or pass HEAD_TO_NOZZLE= on this "
-                "call. Loading on top of that plug blocks the head." % stub)
+                "call. Loading on top of that plug blocks the head. SAVE_VARIABLE VARIABLE="
+                "head_stub VALUE=0 if the piece was taken out by hand." % stub)
         if prime > 0:
             temp = self._hotend_temp()
             if stub > 0 and temp is None:
@@ -484,8 +492,7 @@ class YumiFilamentHead:
             self._move_e(prime, self.nozzle_speed)
             fed += prime
             if stub > 0:
-                self.gcode.run_script_from_command(
-                    "SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0")
+                self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.loaded_mm = fed
         self.gcode.run_script_from_command("M117 Filament loaded")
 

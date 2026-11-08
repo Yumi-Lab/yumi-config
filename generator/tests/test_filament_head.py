@@ -114,9 +114,12 @@ class Printer:
             "save_variables": types.SimpleNamespace(allVariables=self.variables),
         }
 
-    def with_tip(self, **variables):
-        """A _YUMI_TIP macro the module can read, as SET_GCODE_VARIABLE would leave it."""
+    def with_tip(self, stub=None, **variables):
+        """A _YUMI_TIP macro the module can read, as SET_GCODE_VARIABLE would leave it. `stub` goes
+        to variables.cfg instead, which is where the blade records it so it survives a restart."""
         self.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(variables=dict(variables))
+        if stub is not None:
+            self.variables["head_stub"] = stub
         return self
 
     def with_hotend(self, temperature):
@@ -504,7 +507,7 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
     def test_the_books_are_cleared_once_it_is_out(self):
         h, p = self._head(53.)
         h.cmd_LOAD(Gcmd())
-        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts,
+        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
                       "a stub still on the books would be pushed out twice")
 
     def test_a_cold_hotend_refuses_and_says_what_cold_does(self):
@@ -548,12 +551,28 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
         p.pushers = {"extruder0": "extruder"}
         p.with_tip(stub=53.).with_hotend(215.)
         h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE=str(self.SPAN)))
-        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts)
+        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
 
     def test_no_stub_no_extra_feed(self):
         extra, p = self._extra_over_a_clean_head(0., head_to_nozzle=0)
         self.assertAlmostEqual(extra, 0., places=3)
-        self.assertNotIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts)
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+
+    def test_a_macro_variable_is_not_where_the_stub_lives(self):
+        """It has to survive a restart. A gcode variable does not: it lives in RAM and a restart
+        resets it, while filament left in the head survives one perfectly well -- and the next
+        load would then push fresh filament onto a plug it no longer knew about. Same store as
+        cut_filament_bypass, for the same reason."""
+        h, p = head(head_to_nozzle=0)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_hotend(215.)
+        # a macro variable called stub, and nothing in variables.cfg
+        p.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(
+            variables={"stub": 53., "head_to_nozzle": self.SPAN})
+        self.assertEqual(h.get_status(0.)["stub"], 0.,
+                         "a macro variable must not be taken for the record")
+        h.cmd_LOAD(Gcmd())        # and nothing is pushed out on its word
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
 
     def test_the_stub_is_published(self):
         h, _ = self._head(53.)

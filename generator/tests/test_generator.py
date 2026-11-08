@@ -997,7 +997,16 @@ class FilamentAtHead(unittest.TestCase):
             self.assertIn("YUMI_LOAD_TO_HEAD", body, t)
             # only in the printing branch, never in the filament-insertion (init) mode
             self.assertLess(body.index("YUMI_LOAD_TO_HEAD"), body.index("{% else %}"), t)
-        self.assertIn("YUMI_UNLOAD_CHECK", yms["gcode_macro YUMI_UNLOAD_TIP"])
+        # the release check moved into _YUMI_UNLOAD_VERIFY: a macro's template is rendered BEFORE
+        # its commands run, so read from inside the sequence the stub the cut is about to record
+        # would still hold the previous cut's value. The chain has to stay unbroken.
+        self.assertIn("_YUMI_UNLOAD_VERIFY", yms["gcode_macro YUMI_UNLOAD_TIP"])
+        verify = yms["gcode_macro _YUMI_UNLOAD_VERIFY"]
+        self.assertIn("YUMI_UNLOAD_CHECK", verify)
+        self.assertIn("stub", verify, "it decides on the stub the cut just recorded")
+        self.assertNotIn("t.stub", yms["gcode_macro YUMI_UNLOAD_TIP"],
+                         "the sequence writes the stub (STUB= to the blade) but must never READ "
+                         "it: at render time it still holds the previous cut's value")
         self.assertIn("YUMI_LOAD_TO_HEAD", yms["gcode_macro YUMI_TIP_TEST"])
 
 
