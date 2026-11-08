@@ -368,6 +368,16 @@ class YumiFilamentHead:
         toolhead.wait_moves()
         self.printer.lookup_object('gcode_move').reset_last_position()
 
+    def _switch_to_nozzle(self):
+        """mm from the head switch down to the nozzle tip, from _YUMI_TIP (single source: the
+        macros need it too). MEASURED at 78 on 09/11. It is the distance a prime must cover to put
+        a freshly arrived tip at the nozzle -- and, when the blade left a stub, exactly the travel
+        that pushes that stub out."""
+        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
+        if tip is None:
+            return 0.
+        return max(0., float(tip.variables.get('head_to_nozzle', 0.)))
+
     def _stub(self):
         """mm the blade left in the head, from _YUMI_TIP.stub (single source, set by YUMI_CUT_TIP).
 
@@ -433,8 +443,23 @@ class YumiFilamentHead:
         # a stub left by the blade has to come out even when head_to_nozzle is 0 (the slicer owns
         # the prime by decision): a head with a plug in it is not loaded, and the slicer's own
         # prime would hit that plug with no idea it is there
+        # A stub does NOT add distance. It sits INSIDE the switch-to-nozzle span: the arriving tip
+        # meets it, pushes it ahead, and the same travel that brings the tip to the nozzle takes
+        # the stub out of it (cut at 70 with the tip at 17 -> stub [17,70], switch at 78: 8 mm to
+        # touch it, 70 more to push its top to the nozzle, and the new tip lands at 0). What the
+        # stub changes is that the prime becomes MANDATORY, and must cover the whole span even when
+        # head_to_nozzle is 0 -- feeding only the stub's length would leave half of it in the bore
+        # and the new tip 25 mm short.
         stub = self._stub()
-        if to_nozzle + stub > 0:
+        prime = max(to_nozzle, self._switch_to_nozzle()) if stub > 0 else to_nozzle
+        if stub > 0 and prime <= 0:
+            # never leave a known plug in the head because the geometry is missing
+            raise gcmd.error(
+                "%.0f mm the blade left in the head have to be pushed out through the nozzle, but "
+                "the switch-to-nozzle distance is not known: set head_to_nozzle in [gcode_macro "
+                "_YUMI_TIP] (measured at 78 mm on a ChromaX12), or pass HEAD_TO_NOZZLE= on this "
+                "call. Loading on top of that plug blocks the head." % stub)
+        if prime > 0:
             temp = self._hotend_temp()
             if stub > 0 and temp is None:
                 # an unreadable temperature used to pass this gate. For a plain prime that is the
@@ -454,10 +479,10 @@ class YumiFilamentHead:
                        " Pushing it cold blocks the head and chews the filament (measured 09/11)."
                        if stub > 0 else ""))
             if stub > 0:
-                gcmd.respond_info("pushing the %.0f mm the blade left in the head out through the "
-                                  "nozzle before the %.0f mm prime" % (stub, to_nozzle))
-            self._move_e(to_nozzle + stub, self.nozzle_speed)
-            fed += to_nozzle + stub
+                gcmd.respond_info("priming %.0f mm: it brings the tip to the nozzle AND pushes out "
+                                  "the %.0f mm the blade left in the head" % (prime, stub))
+            self._move_e(prime, self.nozzle_speed)
+            fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command(
                     "SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0")

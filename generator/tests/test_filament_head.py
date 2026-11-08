@@ -463,10 +463,12 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
     system knew the piece was there -- which is the defect, not the push.
     """
 
+    SPAN = 78.   # measured switch-to-nozzle distance, _YUMI_TIP.head_to_nozzle
+
     def _head(self, stub, temperature=215., **cfg):
         h, p = head(**cfg)
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=stub).with_hotend(temperature)
+        p.with_tip(stub=stub, head_to_nozzle=self.SPAN).with_hotend(temperature)
         return h, p
 
     def _extra_over_a_clean_head(self, stub, **cfg):
@@ -482,13 +484,22 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
     def test_the_stub_is_pushed_out_even_when_the_slicer_owns_the_prime(self):
         """head_to_nozzle is 0 by decision, and a head with a plug in it is still not loaded."""
         extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=0)
-        self.assertAlmostEqual(extra, 53., places=3,
-                               msg="the 53 mm must be fed out, not left in the head")
+        self.assertAlmostEqual(
+            extra, self.SPAN, places=3,
+            msg="the prime must cover the whole switch-to-nozzle span, which is what takes the "
+                "stub out; feeding only the stub's 53 mm leaves half of it in the bore and the "
+                "new tip 25 mm short of the nozzle")
 
-    def test_the_stub_adds_to_a_configured_prime(self):
-        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=78)
-        self.assertAlmostEqual(extra, 53., places=3,
-                               msg="the stub adds to the prime, it does not replace part of it")
+    def test_the_stub_adds_no_distance_to_a_prime_that_already_covers_the_span(self):
+        """It sits INSIDE the span, it does not come after it.
+
+        Cut at 70 with the tip at 17 leaves the stub at [17, 70]; the switch is at 78. The
+        arriving tip travels 8 mm to meet it, then 70 more pushes its top to the nozzle -- 78 in
+        all, and the new tip lands at 0. Adding the stub's length on top would purge 53 mm for
+        nothing."""
+        extra, _ = self._extra_over_a_clean_head(53., head_to_nozzle=self.SPAN)
+        self.assertAlmostEqual(extra, 0., places=3,
+                               msg="the same travel brings the tip down and takes the stub out")
 
     def test_the_books_are_cleared_once_it_is_out(self):
         h, p = self._head(53.)
@@ -513,10 +524,31 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
         """Unknown must refuse here: pushing a stub cold is a measured way to block the head."""
         h, p = head(head_to_nozzle=0)
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=53.)          # no hotend object: the temperature cannot be read
+        # the span is known, so the prime would happen; no hotend object, so the temperature is not
+        p.with_tip(stub=53., head_to_nozzle=self.SPAN)
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd())
         self.assertIn("cannot be read", str(cm.exception))
+
+    def test_a_stub_with_no_known_geometry_refuses_rather_than_leaving_it_in(self):
+        """Without head_to_nozzle there is no prime, and the plug would simply stay there while
+        the load reported success -- then the next one would push filament onto it."""
+        h, p = head(head_to_nozzle=0)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=53.).with_hotend(215.)       # stub known, span not
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        msg = str(cm.exception)
+        self.assertIn("53", msg)
+        self.assertIn("head_to_nozzle", msg, "the refusal names the value to set")
+        self.assertIn("HEAD_TO_NOZZLE=", msg, "and the way to get past it for one call")
+
+    def test_the_call_can_supply_the_span_itself(self):
+        h, p = head(head_to_nozzle=0)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=53.).with_hotend(215.)
+        h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE=str(self.SPAN)))
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=stub VALUE=0", p.scripts)
 
     def test_no_stub_no_extra_feed(self):
         extra, p = self._extra_over_a_clean_head(0., head_to_nozzle=0)
