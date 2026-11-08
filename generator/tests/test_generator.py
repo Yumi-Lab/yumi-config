@@ -455,6 +455,66 @@ class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
         self.assertNotIn("RESUME", tail, "an unverifiable runout does not resume")
 
 
+class NoMacroLeavesTheAxisLimits(unittest.TestCase):
+    """The audit rule, made permanent. UNLOAD_FILAMENT walked to a hard-coded X-12 where
+    position_min is -10: Klipper refused the move and the macro died before touching the
+    extruder, so it never unloaded anything (found 08/11). Literal coordinates are only read
+    in ABSOLUTE context -- under G91 the number is a delta, not a position."""
+
+    PRODUCTS = ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_every_literal_coordinate_is_reachable(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            settings = parse(cfg)
+            limits = {}
+            for ax in "xyz":
+                s = settings.get("stepper_" + ax, {})
+                if "position_min" in s and "position_max" in s:
+                    limits[ax] = (float(s["position_min"]), float(s["position_max"]))
+            self.assertTrue(limits, product)
+            for name, body in macros(cfg).items():
+                absolute = True   # Klipper boots in G90
+                for line in body.splitlines():
+                    bare = line.split("#", 1)[0].strip()
+                    if re.match(r"^G91\b", bare):
+                        absolute = False
+                    elif re.match(r"^G90\b", bare):
+                        absolute = True
+                    elif absolute and re.match(r"^G[01]\b", bare):
+                        for ax, val in re.findall(r"\b([XYZ])(-?[0-9]+(?:\.[0-9]+)?)\b", bare):
+                            lo, hi = limits.get(ax.lower(), (None, None))
+                            if lo is None:
+                                continue
+                            self.assertGreaterEqual(float(val), lo,
+                                "%s / %s: %s -> %s%s is below position_min %s" % (product, name, bare, ax, val, lo))
+                            self.assertLessEqual(float(val), hi,
+                                "%s / %s: %s -> %s%s is above position_max %s" % (product, name, bare, ax, val, hi))
+
+
+class ManualLoadAndUnload(unittest.TestCase):
+    """UNLOAD_FILAMENT and LOAD_FILAMENT, the two macros the operator presses by hand."""
+
+    def test_unload_delegates_instead_of_rolling_its_own_geometry(self):
+        for product in ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS"):
+            code = macros(generator.generate(product, catalog=CATALOG))["gcode_macro UNLOAD_FILAMENT"]
+            code = code.split("gcode:", 1)[1]
+            self.assertIn("YUMI_UNLOAD_TIP", code, "%s: the single source does the sequence" % product)
+            self.assertFalse(re.search(r"G1 X-?\d", code), "%s: no hand-rolled X any more" % product)
+            self.assertNotIn("G92 E", code, "%s: G92 corrupts the slicer E bookkeeping" % product)
+
+    def test_load_uses_m83_because_g91_does_not_make_e_relative(self):
+        """Klipper overrides absolute_coord with absolute_extrude for the E axis, so under G91
+        the feeds stayed absolute: E50 then E30 fed 50 mm and then pulled 20 mm BACK, and which
+        of the two happened depended on the mode the previous print left behind."""
+        code = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))["gcode_macro LOAD_FILAMENT"]
+        code = code.split("gcode:", 1)[1]
+        self.assertIn("M83", code)
+        self.assertNotIn("G91", code, "G91 does not make E relative")
+        self.assertIn("SAVE_GCODE_STATE NAME=yumi_load_filament", code, "the mode must not leak")
+        self.assertIn("RESTORE_GCODE_STATE NAME=yumi_load_filament", code)
+
+
 class NoHeadSensor(unittest.TestCase):
     """A machine without the head sensor — an older head, or the per-machine override
     {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link
