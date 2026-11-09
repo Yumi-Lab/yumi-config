@@ -426,17 +426,25 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
         self.assertIn("STEPPER=extruder0", c[0])
         self.assertIn("CURRENT=1.200", c[1], "the run current must come back, not the weak one")
 
-    def test_the_prime_after_the_switch_is_gentle_too(self):
-        """Once the switch has seen the filament, push gently: the prime runs on the weak current as
-        well (a forced load jammed the blue on 09/11). Two windows, descent then prime, each put
-        back to the run current."""
+    def test_the_push_into_the_melt_runs_on_the_run_current(self):
+        """The weak current is for the descent and the switch only. Below the switch the new
+        filament meets the piece the blade left, and from there on it pushes melt: on 09/11 that
+        push at 0.4 A skipped the motor at 3.7 mm/s, while the purge right after, same speed at the
+        run current, went through clean. So the run current is back before the prime starts."""
         h, p = self._head(load_current=0.4)
         p.with_hotend(235.).with_tip(purge_speed=3.7)
+        log = []
+        h.gcode.run_script_from_command = lambda line: (p.scripts.append(line),
+                                                        log.append((line, len(p.moves))))
         h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
         c = self._currents(p.scripts)
-        self.assertEqual(len(c), 4, "lower+restore for the descent, then for the prime: %r" % c)
+        self.assertEqual(len(c), 2, "one window, lowered for the descent then restored: %r" % c)
         self.assertIn("CURRENT=0.400", c[0]); self.assertIn("CURRENT=1.200", c[1])
-        self.assertIn("CURRENT=0.400", c[2]); self.assertIn("CURRENT=1.200", c[3])
+        moves_when_restored = [n for line, n in log if "CURRENT=1.200" in line][0]
+        at_switch = h.get_status(0.)["loaded_mm"] - 78.
+        self.assertEqual(moves_when_restored,
+                         len([m for m in p.moves if m[0] <= at_switch + 1e-6]),
+                         "the run current comes back right at the switch, before any prime move")
 
     def test_a_prime_without_a_flow_limit_is_refused_and_says_how_to_set_it(self):
         """The prime speed is purge_speed of _YUMI_TIP, the flow limit the purges obey too. Without
@@ -632,12 +640,17 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         search = [m for m in p.moves if 72. < m[0] <= 77. + 1e-6]
         self.assertEqual(search, [(73., 2.), (74., 2.), (75., 2.), (76., 2.), (77., 2.)])
 
-    def test_the_switch_is_passed_gently_then_the_prime_speeds_up(self):
-        """"tu le passes et apres tu peux reaccelerer": 5 mm at switch_speed, then purge_speed."""
+    def test_past_the_switch_fast_through_the_empty_bore_then_the_melt_speed(self):
+        """Switch at 78 from the nozzle, cut at 70: 8 mm of empty bore, then the piece the blade
+        left. 5 mm at the feed speed, then purge_speed BEFORE the new filament meets the piece
+        (Nicolas, 09/11: "apres le capteur tu peux maximum pousser 10 mm a vitesse et apres tu
+        ralentis")."""
         h, p = self._head(park=155., switch_after=77., stub=53.)
         h.cmd_LOAD(Gcmd())
         after = [m for m in p.moves if m[0] > 77. + 1e-6]
-        self.assertEqual(after, [(82., 2.), (155., self.TIP["purge_speed"])])
+        self.assertEqual(after, [(82., 16.7), (155., self.TIP["purge_speed"])])
+        self.assertLess(5., self.TIP["head_to_nozzle"] - self.TIP["blade_len"],
+                        "the fast part ends before the piece the blade left")
 
     def test_nothing_is_learned_the_switch_is_computed_every_time(self):
         """Nicolas, 09/11: "je veux juste que tu calcules". A switch met further than computed only

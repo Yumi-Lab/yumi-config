@@ -563,14 +563,17 @@ class YumiFilamentHead:
             # instead of chewing; the change raises the nozzle temperature so that the melt takes
             # the flow without needing force.
             nozzle_speed = self._nozzle_speed(gcmd)
-            with self._reduced_current(gcmd):
-                # past the switch lever gently first, then back up to the melt's flow limit
-                # (Nicolas, 09/11: "tu descends tout doucement, tu le passes et apres tu peux
-                # reaccelerer")
-                passing = min(self.SWITCH_PASS, prime)
-                self._move_e(passing, self.switch_speed)
-                if prime > passing:
-                    self._move_e(prime - passing, nozzle_speed)
+            # Below the switch the bore is empty for switch_to_nozzle - blade_len (8 mm), then
+            # comes the piece the blade left: from there on every mm pushes melt out of the
+            # nozzle. So SWITCH_PASS mm fast through the empty part, then the melt's flow limit
+            # at the RUN current, like the purge. On 09/11 this push ran on the weak load current:
+            # 3.7 mm/s skipped the motor as soon as the new filament met the piece, while the
+            # purge right after, same speed at the run current, went through clean (Nicolas:
+            # "apres le capteur tu peux maximum pousser 10 mm a vitesse et apres tu ralentis").
+            passing = min(self.SWITCH_PASS, prime)
+            self._move_e(passing, self.speed)
+            if prime > passing:
+                self._move_e(prime - passing, nozzle_speed)
             fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
