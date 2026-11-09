@@ -1356,6 +1356,28 @@ class TheCutRecordsWhereItsTipWaits(unittest.TestCase):
                         "recorded only once the blade has actually fired")
 
 
+
+class AnXOnlyHomingLeavesZAlone(unittest.TestCase):
+    """Every G28 lifted Z by 20 mm blind, G28 X included, and the lifts piled up until the head
+    left the cameras' field on the C335 bench (09/11). X alone moves only the head along X at its
+    current height, as the blade stroke does, so it lifts nothing; any homing that moves the bed or
+    taps Z keeps its lift."""
+
+    def _override(self):
+        cfg = generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG)
+        return cfg[cfg.index("[homing_override]"):]
+
+    def test_the_lift_is_skipped_for_x_alone_only(self):
+        o = self._override()
+        self.assertIn("{% if not (has_x and not has_y and not has_z) %}", o)
+        guard = o.index("{% if not (has_x and not has_y and not has_z) %}")
+        lift = o.index("YUMI_Z_LIFT DIST=20")
+        end = o.index("{% endif %}", guard)
+        self.assertTrue(guard < lift < end, "the blind lift sits inside the X-alone guard")
+        self.assertTrue(guard < o.index("SET_KINEMATIC_POSITION Z=0") < end,
+                        "and so does the Z claim it needs")
+
+
 if __name__ == "__main__":
     unittest.main()
 
