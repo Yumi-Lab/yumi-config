@@ -182,16 +182,24 @@ class LoadToHead(unittest.TestCase):
         h, p = head(switch_at=47.)
         g = Gcmd()
         h.cmd_LOAD(g)
-        self.assertEqual(p.pos[3], 50., "47 mm to the switch, 5 mm steps: stops at 50")
+        self.assertEqual(p.pos[3], 47., "47 mm to the switch, 1 mm steps: stops at 47")
         self.assertTrue(h.present)
-        self.assertEqual(h.loaded_mm, 50.)
-        self.assertIn("reached the head after 50 mm", g.messages[-1])
+        self.assertEqual(h.loaded_mm, 47.)
+        self.assertIn("reached the head after 47 mm", g.messages[-1])
+
+    def test_a_first_load_meets_the_switch_gently_all_the_way(self):
+        """Tip position unknown: 1 mm steps at switch_speed from the start. The switch is a tiny
+        plastic micro-switch, and there is time at the start of a print (Nicolas, 09/11: "le
+        premier chargement, tu peux le faire doux a 100%")."""
+        h, p = head(switch_at=12., switch_speed=2.)
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves, [(float(i), 2.) for i in range(1, 13)])
         self.assertEqual(p.scripts[-2:], ["<resync>", "M117 Filament loaded"], "g-code E resynced after the feed")
 
     def test_preload_is_one_move_then_steps(self):
         h, p = head(switch_at=47.)
         h.cmd_LOAD(Gcmd(PRELOAD=40))
-        self.assertEqual([m[0] for m in p.moves], [40., 45., 50.])
+        self.assertEqual([m[0] for m in p.moves], [40., 41., 42., 43., 44., 45., 46., 47.])
 
     def test_step_is_the_call_parameter_or_the_default(self):
         """Declared on the call = a longer step for that call; not declared = the config default.
@@ -237,7 +245,7 @@ class FeedingYms(unittest.TestCase):
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd(SENSOR="YMS-3", MAX=2500))
         self.assertIn("No filament coming from YMS-3", str(cm.exception))
-        self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps, not 2500")
+        self.assertEqual(p.pos[3], 52., "detection_length 50 + two 1 mm steps, not 2500")
 
     def test_a_failed_load_during_a_print_pauses_it_and_resume_retries(self):
         """C335 08/11: the YMS cable was unplugged and the print was lost. During a print the
@@ -260,8 +268,8 @@ class FeedingYms(unittest.TestCase):
         p.feeders["YMS-3"] = Feeder(has_filament=True)
         g = Gcmd(SENSOR="YMS-3")
         h.cmd_LOAD(g)
-        self.assertEqual(p.pos[3], 150.)
-        self.assertIn("reached the head after 150 mm", g.messages[-1])
+        self.assertEqual(p.pos[3], 147.)
+        self.assertIn("reached the head after 147 mm", g.messages[-1])
 
     def test_without_sensor_only_the_head_switch_is_watched(self):
         h, p = head(switch_at=10000.)
@@ -563,13 +571,13 @@ class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
                          "the stub goes through the orifice: purge_speed of _YUMI_TIP")
 
     def test_the_cut_filament_coming_back_is_verified_too(self):
-        """Parked at 150 mm, it meets the switch at 78 after ~72 mm, then primes 78."""
+        """Parked at 150 mm, it meets the switch at 78 after 72 mm, then primes 78."""
         h, p = self._head(switch_at=72.)
         g = Gcmd()
         h.cmd_LOAD(g)
         self.assertNotIn("blind", " ".join(g.messages))
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 75. + 78., delta=0.01,
-                               msg="to the switch within one step, then the full prime")
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 72. + 78., delta=0.01,
+                               msg="to the switch to the millimetre, then the full prime")
 
     def test_an_unreadable_hotend_temperature_is_not_hot_enough(self):
         h, p = head(switch_at=72.)
@@ -598,14 +606,12 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
 
     TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85., purge_speed=3.7)
 
-    def _head(self, park, switch_after, stub=0., slack=None):
+    def _head(self, park, switch_after, stub=0.):
         h, p = head(switch_at=switch_after, speed=16.7, step=5, switch_speed=2.)
         p.pushers = {"extruder0": "extruder"}
         p.with_tip(stub=stub, **self.TIP).with_hotend(215.)
         if park:
             p.variables["park_extruder0"] = park
-        if slack is not None:
-            p.variables["slack_extruder0"] = slack
         return h, p
 
     def test_the_known_stretch_is_one_move_then_the_end_is_searched(self):
@@ -633,25 +639,14 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         after = [m for m in p.moves if m[0] > 77. + 1e-6]
         self.assertEqual(after, [(82., 2.), (155., self.TIP["purge_speed"])])
 
-    def test_the_real_distance_is_measured_and_learned_per_pusher(self):
-        """The filament takes up slack in the tube: from 155 the switch came after 87 mm on
-        YMS-1 on 09/11, not 77. The measured difference is kept for this pusher."""
+    def test_nothing_is_learned_the_switch_is_computed_every_time(self):
+        """Nicolas, 09/11: "je veux juste que tu calcules". A switch met further than computed only
+        adds gentle 1 mm steps, it never moves the next fast stretch."""
         h, p = self._head(park=155., switch_after=87.)
         h.cmd_LOAD(Gcmd())
-        self.assertIn("SAVE_VARIABLE VARIABLE=slack_extruder0 VALUE=10.0", p.scripts)
-
-    def test_a_learned_slack_moves_the_fast_stretch(self):
-        h, p = self._head(park=155., switch_after=87., slack=10.)
-        h.cmd_LOAD(Gcmd())
-        self.assertEqual(p.moves[0], (82.0, 16.7), "77 + 10 - 5 in one move: %r" % (p.moves[:2],))
-        self.assertEqual(len([m for m in p.moves if 82. < m[0] <= 87. + 1e-6]), 5,
-                         "then the same five gentle millimetres")
-
-    def test_a_tip_moved_by_hand_is_not_learned(self):
-        """Learning a 145 mm error would send the next fast move straight into the switch."""
-        h, p = self._head(park=155., switch_after=222.)
-        h.cmd_LOAD(Gcmd())
-        self.assertFalse([s for s in p.scripts if isinstance(s, str) and "slack_" in s])
+        self.assertFalse([x for x in p.scripts if isinstance(x, str) and "slack" in x])
+        self.assertEqual(p.moves[0], (72.0, 16.7))
+        self.assertEqual(len([m for m in p.moves if 72. < m[0] <= 87. + 1e-6]), 15)
 
     def test_a_wrong_record_only_costs_time(self):
         """The tip was pulled further back by hand: the stepped search simply goes on."""
@@ -663,8 +658,8 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         h, p = self._head(park=0., switch_after=77.)
         h.cmd_LOAD(Gcmd())
         steps = [b[0] - a[0] for a, b in zip([(0., 0.)] + p.moves, p.moves)]
-        self.assertTrue(all(x <= 5. + 1e-6 for x in steps),
-                        "a fresh feeder is searched step by step from the start: %r" % steps[:4])
+        self.assertTrue(all(x <= 1. + 1e-6 for x in steps),
+                        "a fresh feeder is searched gently from the start: %r" % steps[:4])
 
     def test_the_whole_prime_runs_at_nozzle_speed(self):
         """The bore under the stub is not empty: melt stays stuck to the walls over the first
