@@ -515,6 +515,16 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
                    if isinstance(l, str) and l.startswith("SET_TMC_CURRENT")]
         self.assertEqual(lowered, [], "the stub must not be pushed out on the weak current")
 
+    def test_the_stub_is_pushed_out_at_nozzle_speed(self):
+        """Past the first few mm this feed pushes material through the orifice. At the tube
+        descent speed (16.7 mm/s, ~40 mm3/s) that is twice what a 0.4 nozzle melts: the pusher
+        skips, the tip stops short, and the books still say the full distance was fed. Measured
+        09/11: after such a load a 30 mm push flowed for 2-3 s of its 15."""
+        h, p = self._head(self.STUB, nozzle_speed=5., speed=16.7)
+        h.cmd_LOAD(Gcmd())
+        speeds = sorted(set(sp for _, sp in p.moves))
+        self.assertEqual(speeds, [5.], "fed at %r mm/s, not at nozzle speed" % speeds)
+
     def test_the_books_are_cleared_once_it_is_out(self):
         h, p = self._head(self.STUB)
         h.cmd_LOAD(Gcmd())

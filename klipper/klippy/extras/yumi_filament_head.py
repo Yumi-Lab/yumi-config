@@ -561,8 +561,14 @@ class YumiFilamentHead:
         # simply stall against the orifice (Nicolas, 09/11: "quand tu pousses dans la buse, c'est
         # la ou ca peut te manquer un peu de puissance"). Same reason the head_to_nozzle prime is
         # left out of the weak window.
+        # and at NOZZLE speed, not tube speed. Past the first few mm everything this feed moves
+        # goes through the hot zone and out of the orifice: at the 16.7 mm/s descent speed that is
+        # ~40 mm3/s, about twice what a 0.4 mm nozzle melts, so the pusher skips and the tip stops
+        # well short while the books say the full distance was fed. Measured 09/11: after a 200 mm
+        # blind load at 16.7 mm/s, a 30 mm push at 2 mm/s flowed for only 2-3 s of its 15.
         feeder = self._feeder(gcmd, self.load_step(gcmd))
-        fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.speed, None, feeder)
+        fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.nozzle_speed, None,
+                                 feeder)
         self.loaded_mm = fed
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.gcode.run_script_from_command("M117 Filament loaded")
