@@ -458,19 +458,33 @@ class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
         m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
         code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
         self.assertLess(code.index("PAUSE"), code.index("_YUMI_POP_TOOL"))
-        self.assertLess(code.index("PAUSE"), code.index("YUMI_LOAD_TO_HEAD"))
+        self.assertLess(code.index("PAUSE"), code.index("YUMI_FEEDER_TEST"))
+
+    def test_the_filament_is_extruded_never_pulled_back_to_be_tested(self):
+        """Pulling it back above the head switch and loading it again drew the hot filament out of
+        the melt and blocked the head (Nicolas, 09/11: "tu as juste a extruder")."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        for pull in ("YUMI_UNLOAD_CHECK", "YUMI_LOAD_TO_HEAD", "E-"):
+            self.assertNotIn(pull, code)
+        self.assertIn("YUMI_FEEDER_TEST{% if sensor %} SENSOR={sensor}{% endif %}", code)
 
     def test_a_confirmed_jam_cuts_and_waits_a_false_reading_resumes(self):
         for product in self.PRODUCTS:
             m = macros(generator.generate(product, catalog=CATALOG))
             code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
-            self.assertIn("printer.yumi_filament_head.pending", code,
+            self.assertNotIn("feeder_test", code,
+                             "%s: read here, the verdict would be the previous test's: the "
+                             "template is rendered before YUMI_FEEDER_TEST runs" % product)
+            self.assertLess(code.index("YUMI_FEEDER_TEST"), code.index("_YUMI_RUNOUT_VERDICT"))
+            verdict = m["gcode_macro _YUMI_RUNOUT_VERDICT"].split("gcode:", 1)[1]
+            self.assertIn('printer.yumi_filament_head.feeder_test == "delivers"', verdict,
                           "%s: the verdict comes from the module, not from a guess" % product)
-            jam, ok = code.split("{% else %}", 1)[0], code.split("{% else %}", 1)[1]
-            self.assertIn("YUMI_CUT_TIP", jam, "%s: a confirmed jam cuts the tip" % product)
-            self.assertNotIn("RESUME", jam, "%s: a confirmed jam never resumes by itself" % product)
+            ok, jam = verdict.split("{% else %}", 1)
             self.assertIn("RESUME", ok, "%s: a false reading resumes the print" % product)
-            self.assertFalse(re.search(r"G1 X-?\d", code), "no hard-coded X")
+            self.assertIn("YUMI_UNLOAD_TIP", jam, "%s: a confirmed jam cuts the tip" % product)
+            self.assertNotIn("RESUME", jam, "%s: a confirmed jam never resumes by itself" % product)
+            self.assertFalse(re.search(r"G1 X-?\d", code + verdict), "no hard-coded X")
 
     def test_nothing_verifiable_keeps_the_old_behaviour(self):
         """No head sensor, or bypassed: nothing can be checked, so the old message is kept and

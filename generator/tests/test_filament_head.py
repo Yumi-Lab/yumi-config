@@ -242,6 +242,47 @@ class LoadToHead(unittest.TestCase):
         self.assertEqual(p.moves, [], "no _YUMI_TIP macro in the stub: blind length 0, nothing fed")
 
 
+class TheFeederIsTestedByExtruding(unittest.TestCase):
+    """After an encoder runout the filament is at the nozzle, hot. It is extruded until the
+    encoder ticks again; pulling it back to reload it blocked the head (Nicolas, 09/11: "tu as
+    juste a extruder")."""
+
+    def _head(self, has_filament, temperature=230.):
+        h, p = head(switch_at=0.)
+        p.pushers = {"extruder1": "extruder"}
+        p.with_tip(purge_speed=3.7).with_hotend(temperature)
+        f = Feeder(has_filament=has_filament, detection_length=50.)
+        f.detected = False          # the runout dropped it
+        p.feeders["YMS-2"] = f
+        return h, p
+
+    def test_a_feeder_that_ticks_again_delivers_at_once(self):
+        h, p = self._head(has_filament=True)
+        h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertEqual(h.get_status(0.)["feeder_test"], "delivers")
+        self.assertEqual(p.moves, [(5., 3.7)], "one purge step, at the melt's flow limit")
+
+    def test_a_silent_feeder_is_jammed_after_its_check_length(self):
+        h, p = self._head(has_filament=False)
+        h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertEqual(h.get_status(0.)["feeder_test"], "jammed")
+        self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps")
+
+    def test_the_filament_is_never_pulled_back(self):
+        for has_filament in (True, False):
+            h, p = self._head(has_filament)
+            h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+            positions = [0.] + [m[0] for m in p.moves]
+            self.assertTrue(all(b > a for a, b in zip(positions, positions[1:])), p.moves)
+
+    def test_a_cold_nozzle_is_refused_before_any_move(self):
+        h, p = self._head(has_filament=True, temperature=150.)
+        with self.assertRaises(CommandError) as e:
+            h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertIn("above 170", str(e.exception))
+        self.assertEqual(p.moves, [])
+
+
 class FeedingYms(unittest.TestCase):
     """SENSOR= names the YMS that feeds: its encoder must tick, or the load gives up early —
     Nicolas 07/09: 'tu vois bien que le motion sensor ne tourne pas, tu devrais détecter qu'il

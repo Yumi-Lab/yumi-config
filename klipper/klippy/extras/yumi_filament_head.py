@@ -91,6 +91,10 @@
 #       be plugged.
 #   YUMI_RETRY_PENDING
 #       first line of RESUME: runs again the load / check that paused the print.
+#   YUMI_FEEDER_TEST  SENSOR=
+#       after an encoder runout, with the filament at the nozzle: extrudes at purge_speed, never
+#       pulls back, until the encoder of SENSOR ticks again (the feeder delivers) or its check
+#       length passed without a tick (jammed). Verdict in the status field `feeder_test`.
 # During a print a failed load or a required YMS unplugged no longer stops the print: alert,
 # PAUSE, and RESUME retries it (Nicolas 08/11: the YMS cable was unplugged, the print was lost).
 import contextlib
@@ -126,10 +130,12 @@ class YumiFilamentHead:
         self.loaded_mm = 0.
         self.yms_connected = []
         self.pending = None
+        self.feeder_test = ""   # verdict of the last YUMI_FEEDER_TEST: "delivers" / "jammed"
         self.printer.register_event_handler("klippy:ready", self._handle_ready)
         for name, func in (("YUMI_LOAD_TO_HEAD", self.cmd_LOAD), ("YUMI_UNLOAD_CHECK", self.cmd_UNLOAD_CHECK),
                            ("SET_HEAD_SENSOR_BYPASS", self.cmd_BYPASS), ("QUERY_HEAD_SENSOR", self.cmd_QUERY),
-                           ("YMS_SCAN", self.cmd_YMS_SCAN), ("YUMI_RETRY_PENDING", self.cmd_RETRY_PENDING)):
+                           ("YMS_SCAN", self.cmd_YMS_SCAN), ("YUMI_RETRY_PENDING", self.cmd_RETRY_PENDING),
+                           ("YUMI_FEEDER_TEST", self.cmd_FEEDER_TEST)):
             self.gcode.register_command(name, func, desc=func.__doc__)
 
     # ── state ──────────────────────────────────────────────────────────
@@ -166,7 +172,8 @@ class YumiFilamentHead:
         # runs in the reactor's main context, where an MCU query shuts Klipper down.
         return {"present": self.present, "loaded_mm": self.loaded_mm, "bypass": self.bypass,
                 "yms_connected": list(self.yms_connected), "pending": self.pending is not None,
-                "pusher": ",".join(self._synced_pushers()), "stub": self._stub()}
+                "pusher": ",".join(self._synced_pushers()), "stub": self._stub(),
+                "feeder_test": self.feeder_test}
 
     # ── the feeding YMS ────────────────────────────────────────────────
     def _feeder(self, gcmd, step):
@@ -787,6 +794,40 @@ class YumiFilamentHead:
         # paused here, so a new failure raises: RESUME stops, the print stays paused
         self.gcode.run_script_from_command(self.pending)
         self.pending = None
+
+    def cmd_FEEDER_TEST(self, gcmd):
+        """After an encoder runout: extrude at purge_speed until the YMS encoder ticks again, never pull back"""
+        # The filament is at the nozzle, hot. Testing it by pulling it back above the head switch
+        # and loading it again drew it out of the melt and blocked the head (Nicolas, 09/11: "tu
+        # as juste a extruder", "il ne faut pas le reculer comme ca, tu bouches la tete"). So it
+        # is extruded, at the melt's flow limit, and the encoder of the feeding YMS has to tick
+        # again: its filament_detected, dropped by the runout, comes back with the first tick.
+        self._require_pusher(gcmd)
+        feeder = self._feeder(gcmd, self.step)
+        if feeder is None:
+            raise gcmd.error("YUMI_FEEDER_TEST: SENSOR= is required, the YMS whose encoder ran "
+                             "out (SENSOR=YMS-2)")
+        temp = self._hotend_temp()
+        if temp is None or temp < self.min_temp:
+            raise gcmd.error("YUMI_FEEDER_TEST: the test extrudes, the nozzle has to be above "
+                             "%.0f degC (now %s). Heat it and run it again."
+                             % (self.min_temp, "unreadable" if temp is None else "%.0f" % temp))
+        speed = self._nozzle_speed(gcmd)
+        self.feeder_test = ""
+        fed = 0.
+        while True:
+            self._move_e(self.step, speed)
+            fed += self.step
+            if self._feeder_present(feeder):
+                self.feeder_test = "delivers"
+                gcmd.respond_info("%s ticks again after %.0f mm extruded: the feeder delivers"
+                                  % (feeder[0], fed))
+                return
+            if fed >= feeder[2]:
+                self.feeder_test = "jammed"
+                gcmd.respond_info("%s still silent after %.0f mm extruded: the feeder does not "
+                                  "deliver" % (feeder[0], fed))
+                return
 
     def cmd_UNLOAD_CHECK(self, gcmd):
         self._require_pusher(gcmd)
