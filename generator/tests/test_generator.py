@@ -428,7 +428,7 @@ class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
             self.assertLess(sizing.index("G4 P{dwell_ms}"), sizing.index("YUMI_CUT_TIP"),
                             "%s: the sizing branch cuts only once the dwell has set the tip"
                             % product)
-            self.assertLess(legacy.index("G1 E-{cut_len}"), legacy.index("YUMI_CUT_TIP"),
+            self.assertLess(legacy.index("G1 E-{precut_len}"), legacy.index("YUMI_CUT_TIP"),
                             "%s: the blade never cuts before the tip has left the hot zone"
                             % product)
             self.assertLess(legacy.index("YUMI_CUT_TIP"), legacy.index("G1 E-{slow_len}"),
@@ -1169,7 +1169,7 @@ class TipSizingArithmetic(unittest.TestCase):
             if expected_tip == "sizing_len":
                 tip_at_cut = tip_vars["sizing_len"]
             else:
-                tip_at_cut = tip_vars["first_len"] + tip_vars["cut_len"]
+                tip_at_cut = tip_vars["first_len"] + tip_vars["precut_len"]
             self.assertAlmostEqual(
                 stub, tip_vars["blade_len"] - tip_at_cut, places=6,
                 msg="%s branch: told the load %.1f mm, but the blade leaves %.1f"
@@ -1226,6 +1226,21 @@ class TipSizingArithmetic(unittest.TestCase):
             printer={"gcode_macro _YUMI_TIP": tip_vars},
             params={k: str(v) for k, v in params.items()},
             action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
+
+    def test_the_blade_never_cuts_a_section_that_was_still_soft(self):
+        """The section the blade cuts was, a moment earlier, at the height of the stub's length.
+        CUT_LEN=40 put it at 23 mm, inside the 25 mm stuck zone: it pinched instead of severing,
+        dragged the stub onto the head switch, and the load stalled (09/11). The default must stay
+        clear of that, and a value that is not must be refused before anything moves."""
+        tip_vars, _ = self._render()
+        stub = tip_vars["blade_len"] - tip_vars["first_len"] - tip_vars["precut_len"]
+        self.assertGreaterEqual(stub, tip_vars["stuck_len"] + 5,
+                                "the default cuts a section from %.0f mm" % stub)
+        with self.assertRaises(RuntimeError) as cm:
+            self._render(PRECUT_LEN=40)
+        msg = str(cm.exception)
+        self.assertIn("PRECUT_LEN=40", msg)
+        self.assertIn("at most", msg, "the refusal says what is accepted")
 
     def test_a_cooling_stroke_that_would_dip_into_the_stuck_zone_is_refused(self):
         tip_vars, _, _ = self._sizing_height()

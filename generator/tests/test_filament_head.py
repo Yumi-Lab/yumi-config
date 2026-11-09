@@ -452,180 +452,55 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
 
 
 class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
-    """A cut at 70 mm leaves everything below it in the head, and only the next load can take it
-    out -- the pusher is upstream of the blade and has no grip on that piece, and the upstream
-    filament could only push it by going back down into the melt, which would destroy the cold
-    blade-cut tip the cut exists to produce.
+    """A cut at 70 mm leaves everything below it in the head; the next load expels it through the
+    nozzle on its mandatory prime (see AColourChangeLoadsThroughAFreeSwitch). Where the machine
+    leaves that stub, under the switch, the switch is FREE.
 
-    What makes that load special is that the piece SITS AT THE HEAD SWITCH and holds it. So
-    `filament already at the head` is true of the stub and says nothing about the filament arriving
-    behind it. Measured on the C335 on 09/11: the load read the switch, fed 0 mm, primed 78 mm into
-    filament still far up the tube, announced it had pushed the stub out, and cleared the books.
-    Nothing had moved and the books lied -- worse than the plug.
-
-    The short-circuit stays for the case it was written for: a colour change with no cut and
-    nothing withdrawn, where the filament really is at the head (Nicolas: "quand t'as qu'un
-    filament, y'a pas de problème, c'est le même que tu rentres et que tu sors").
+    A switch that reads filament while a stub is booked is therefore not a case to force but the
+    symptom of a failed cut. Measured on the C335 on 09/11: a cut through a section that was still
+    soft pinched instead of severing, the stub rode up with the filament onto the switch, and the
+    blind feed this case used to take pushed 250 mm at full current against it. So it is refused,
+    and nothing moves.
     """
 
-    SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.,
-               blade_len=70., cut_clear=80.)
-    STUB = 53.
-    # the blade fires at 70 and the only pull that follows is the clearance, so the upstream tip
-    # waits at 70 + 80 = 150 -- NOT at the tip-shaping total, which belongs to the no-cut path
-    WAITS_AT = 150.
-
-    def _head(self, stub, temperature=215., switch_present=True, **cfg):
-        h, p = head(**cfg)
+    def _head(self, stub, switch_present):
+        h, p = head()
         p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=stub, **self.SEQ)
-        if temperature is not None:
-            p.with_hotend(temperature)
+        p.with_tip(stub=stub, head_to_nozzle=78., blade_len=70., cut_clear=85.).with_hotend(215.)
         if switch_present:
-            p.button_callback(0., 1)       # the ambiguous case this class is about
+            p.button_callback(0., 1)
         return h, p
 
-    def test_the_switch_is_not_believed_while_a_stub_holds_it(self):
-        h, p = self._head(self.STUB)
-        p.switch_at = -1.          # the switch reads present from the very start, as the stub does
-        h.cmd_LOAD(Gcmd())
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], self.WAITS_AT, places=3,
-                               msg="fed %.1f mm: the load believed the switch and moved nothing"
-                                   % h.get_status(0.)["loaded_mm"])
-
-    def test_the_distance_is_the_blade_plus_the_clearance_and_nothing_else(self):
-        """Not the tip-shaping total. slow_len and pull_len exist to drag the tip out of the head
-        on the NO-CUT path -- 130 mm of it. After a cut the filament is already out of the hot zone
-        at blade_len, so only the short clearance follows, and the reload has to feed exactly that
-        sum back. Nicolas, 09/11, seeing the tip parked at 200 mm: it has to be 70 plus 10."""
-        h, p = self._head(self.STUB)
-        h.cmd_LOAD(Gcmd())
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"],
-                               self.SEQ["blade_len"] + self.SEQ["cut_clear"], places=3)
-        total = sum(self.SEQ[k] for k in ('first_len', 'cut_len', 'slow_len', 'pull_len'))
-        self.assertNotAlmostEqual(h.get_status(0.)["loaded_mm"], total + self.STUB, places=3,
-                                  msg="the no-cut lengths must not leak into the cut reload")
-
-    def test_the_stub_is_pushed_out_at_full_current(self):
-        """The weak current is for the descent down the tube. This feed ends by pushing the stub
-        out THROUGH THE NOZZLE, and a current chosen to be too weak to chew would stall against
-        the orifice (Nicolas: "quand tu pousses dans la buse, c'est la ou ca peut te manquer un
-        peu de puissance"). Same reason the prime is left out of the weak window."""
-        h, p = self._head(self.STUB, load_current=0.2)
-        h.cmd_LOAD(Gcmd())
-        lowered = [l for l in p.scripts
-                   if isinstance(l, str) and l.startswith("SET_TMC_CURRENT")]
-        self.assertEqual(lowered, [], "the stub must not be pushed out on the weak current")
-
-    def test_nothing_is_pushed_through_the_nozzle_at_tube_speed(self):
-        """From the stub on, the feed pushes material through the orifice. At the tube descent
-        speed (16.7 mm/s, ~40 mm3/s) that is twice what a 0.4 nozzle melts: the pusher skips, the
-        tip stops short, and the books still say the full distance was fed. Measured 09/11: after
-        such a load a 30 mm push flowed for 2-3 s of its 15. The empty stretch before the stub may
-        run fast; everything from CONTACT_MARGIN before it must not."""
-        h, p = self._head(self.STUB, nozzle_speed=5., speed=16.7)
-        h.cmd_LOAD(Gcmd())
-        contact = self.SEQ["cut_clear"] - h.CONTACT_MARGIN
-        late_fast = [(pos, sp) for pos, sp in p.moves if pos > contact + 1e-6 and sp != 5.]
-        self.assertEqual(late_fast, [], "moves past %.0f mm not at nozzle speed: %r"
-                         % (contact, late_fast))
-
-    def test_the_empty_stretch_before_the_stub_runs_at_tube_speed(self):
-        """Nothing is ahead of the tip until it reaches the stub -- empty inlet, junction and head
-        bore, all cold. 150 mm at nozzle speed would be 30 s per colour change for nothing."""
-        h, p = self._head(self.STUB, nozzle_speed=5., speed=16.7)
-        h.cmd_LOAD(Gcmd())
-        contact = self.SEQ["cut_clear"] - h.CONTACT_MARGIN
-        early = [sp for pos, sp in p.moves if pos <= contact + 1e-6]
-        self.assertTrue(early and set(early) == {16.7},
-                        "the stretch before the stub should run at tube speed, got %r"
-                        % sorted(set(early)))
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], self.WAITS_AT, places=3)
-
-    def test_a_distance_given_by_hand_runs_entirely_at_nozzle_speed(self):
-        """MAX= says nothing about where the stub sits, so no stretch can be assumed empty."""
-        h, p = self._head(self.STUB, nozzle_speed=5., speed=16.7)
-        h.cmd_LOAD(Gcmd(MAX="150"))
-        self.assertEqual(sorted(set(sp for _, sp in p.moves)), [5.])
-
-    def test_the_books_are_cleared_once_it_is_out(self):
-        h, p = self._head(self.STUB)
-        h.cmd_LOAD(Gcmd())
-        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
-                      "a stub still on the books would be fed out again at the next load")
-
-    def test_it_says_it_is_blind(self):
-        """A blind feed assumes nobody pulled the filament further back by hand, so it has to say
-        so rather than report a verified load."""
-        h, _ = self._head(self.STUB)
-        g = Gcmd()
-        h.cmd_LOAD(g)
-        said = " ".join(g.messages)
-        self.assertIn("blind", said, "the operator has to know this load was not verified")
-        self.assertIn("53", said, "and how much is being pushed out")
-
-    def test_a_cold_hotend_refuses_and_says_what_cold_does(self):
-        h, p = self._head(self.STUB, temperature=155.)
+    def test_a_held_switch_with_a_stub_booked_is_refused_not_forced(self):
+        h, p = self._head(53., switch_present=True)
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd())
         msg = str(cm.exception)
-        self.assertIn("155", msg, "the refusal quotes the temperature it found")
-        self.assertIn("53", msg, "and how much has to come out")
-        self.assertIn("blocks the head", msg, "and what happens if it is pushed cold")
-        self.assertEqual(p.moves, [], "not a millimetre may be fed")
-
-    def test_an_unreadable_temperature_is_not_hot_enough(self):
-        """Unknown must refuse here: pushing a stub cold is a measured way to block the head."""
-        h, p = self._head(self.STUB, temperature=None)
-        with self.assertRaises(CommandError) as cm:
-            h.cmd_LOAD(Gcmd())
-        self.assertIn("unreadable", str(cm.exception))
-        self.assertEqual(p.moves, [])
-
-    def test_a_stub_with_no_known_distance_refuses_rather_than_leaving_it_in(self):
-        h, p = head()
-        p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=self.STUB).with_hotend(215.)      # no sequence lengths: nothing to go on
-        p.button_callback(0., 1)
-        with self.assertRaises(CommandError) as cm:
-            h.cmd_LOAD(Gcmd())
-        msg = str(cm.exception)
-        self.assertIn("MAX=", msg, "the refusal names the way to supply the distance")
-        self.assertIn("head_stub VALUE=0", msg, "and how to clear the books if it was taken out")
-
-    def test_the_call_can_supply_the_distance_itself(self):
-        h, p = head()
-        p.pushers = {"extruder0": "extruder"}
-        p.with_tip(stub=self.STUB).with_hotend(215.)
-        p.button_callback(0., 1)
-        h.cmd_LOAD(Gcmd(MAX="200"))
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 200., places=3)
+        self.assertIn("cut most likely failed", msg, "it says what the held switch means")
+        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", msg, "and how to clear the books")
+        self.assertEqual(p.moves, [], "not a millimetre is fed")
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
+                         "the stub is still there: the books must say so")
 
     def test_no_stub_leaves_the_normal_path_alone(self):
-        """The short-circuit and the prime are for the colour change with no cut."""
         h, p = self._head(0., switch_present=False)
         h.cmd_LOAD(Gcmd())
         self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
         self.assertGreater(h.get_status(0.)["loaded_mm"], 0.)
 
     def test_a_macro_variable_is_not_where_the_stub_lives(self):
-        """It has to survive a restart. A gcode variable does not: it lives in RAM and a restart
-        resets it, while filament left in the head survives one perfectly well -- and the next
-        load would then push fresh filament onto a plug it no longer knew about."""
+        """It has to survive a restart: a gcode variable lives in RAM, filament in the head does
+        not care about restarts."""
         h, p = head()
         p.pushers = {"extruder0": "extruder"}
         p.with_hotend(215.)
         p.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(
-            variables=dict(self.SEQ, stub=self.STUB))     # a macro variable, nothing persisted
-        self.assertEqual(h.get_status(0.)["stub"], 0.,
-                         "a macro variable must not be taken for the record")
-        h.cmd_LOAD(Gcmd())
-        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+            variables={"stub": 53., "head_to_nozzle": 78.})
+        self.assertEqual(h.get_status(0.)["stub"], 0.)
 
     def test_the_stub_is_published(self):
-        h, _ = self._head(self.STUB)
-        self.assertEqual(h.get_status(0.)["stub"], self.STUB)
-
+        h, _ = self._head(53., switch_present=False)
+        self.assertEqual(h.get_status(0.)["stub"], 53.)
 
 
 class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
@@ -671,6 +546,14 @@ class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
         self.assertNotIn("blind", " ".join(g.messages))
         self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 75. + 78., delta=0.01,
                                msg="to the switch within one step, then the full prime")
+
+    def test_an_unreadable_hotend_temperature_is_not_hot_enough(self):
+        h, p = head(switch_at=72.)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=self.STUB, **self.SEQ)          # no hotend object: unreadable
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        self.assertIn("cannot be read", str(cm.exception))
 
     def test_a_cold_hotend_stops_before_the_prime_and_keeps_the_books(self):
         h, p = self._head(switch_at=72., temperature=150.)
@@ -722,14 +605,17 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         self.assertTrue(all(x <= 5. + 1e-6 for x in steps),
                         "a fresh feeder is searched step by step from the start: %r" % steps[:4])
 
-    def test_the_prime_runs_fast_until_the_stub_reaches_the_orifice(self):
-        """78 - 53 = 25 mm move nothing through the nozzle; minus CONTACT_MARGIN, 20 run fast."""
+    def test_the_whole_prime_runs_at_nozzle_speed(self):
+        """The bore under the stub is not empty: melt stays stuck to the walls over the first
+        25 mm. A fast first stretch on the opposite premise pushed hard into that residue and
+        stalled the pusher on 09/11 ("tu pousses super fort alors que tu es deja en train
+        d'extruder")."""
         h, p = self._head(park=0., switch_after=10., stub=53.)
         h.cmd_LOAD(Gcmd())
         at_switch = h.get_status(0.)["loaded_mm"] - 78.
-        prime = [(pos - at_switch, sp) for pos, sp in p.moves if pos > at_switch + 1e-6]
-        self.assertEqual(prime[0], (20.0, 16.7), "the empty stretch, at tube speed: %r" % prime)
-        self.assertEqual(prime[-1], (78.0, 5.0), "then nozzle speed to the end: %r" % prime)
+        prime = [sp for pos, sp in p.moves if pos > at_switch + 1e-6]
+        self.assertEqual(set(prime), {5.0}, "the prime pushes melt: nozzle speed only, got %r"
+                         % sorted(set(prime)))
 
 
 if __name__ == "__main__":
