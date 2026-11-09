@@ -421,8 +421,10 @@ class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
         for product in self.PRODUCTS:
             tip = self._tip(product)
             sizing, _, legacy = tip.partition("{% else %}")
-            self.assertEqual(tip.count("YUMI_CUT_TIP"), 2,
-                             "%s: exactly one cut per unload branch" % product)
+            calls = [l for l in tip.splitlines()
+                     if re.match(r"\s*(\{%[^%]*%\}\s*)?YUMI_CUT_TIP\b", l)]
+            self.assertEqual(len(calls), 2,
+                             "%s: exactly one cut per unload branch, got %r" % (product, calls))
             self.assertLess(sizing.index("G4 P{dwell_ms}"), sizing.index("YUMI_CUT_TIP"),
                             "%s: the sizing branch cuts only once the dwell has set the tip"
                             % product)
@@ -1189,6 +1191,39 @@ class TipSizingArithmetic(unittest.TestCase):
             params={k: str(v) for k, v in params.items()},
             action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
         return [l.strip() for l in out.split("\n") if l.strip().startswith("YUMI_CUT_TIP")]
+
+    def test_a_cut_ends_the_pulling_there(self):
+        """slow_len + pull_len drag the tip out of the head and up into the PTFE -- 130 mm, for the
+        NO-CUT path. After a cut at blade_len the filament is already above the heatsink, out of
+        the hot zone, so pulling further buys nothing and only makes the reload longer. Nicolas,
+        09/11, seeing the tip parked at 200 mm: "t'es monte super haut, je n'ai jamais demande de
+        monter aussi haut... je dois du faire 70 plus 10." The clearance now lives in YUMI_CUT_TIP,
+        which is the only place that knows whether the blade really fired."""
+        tip_vars, _ = self._render()
+        self.assertAlmostEqual(tip_vars["blade_len"] + tip_vars["cut_clear"], 80., places=6,
+                               msg="the agreed figure is 70 + 10")
+        for params, cut in ((dict(SIZE=1), True), (dict(), True),
+                            (dict(SIZE=1, CUT=0), False), (dict(CUT=0), False)):
+            text = self._rendered(**params)
+            has_pull = "E-%g" % tip_vars["pull_len"] in text.replace(" ", "")
+            self.assertEqual(has_pull, not cut,
+                             "%s: the long no-cut pull must be %s"
+                             % (params, "absent after a cut" if cut else "present without one"))
+
+    def _rendered(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        return env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
 
     def test_a_cooling_stroke_that_would_dip_into_the_stuck_zone_is_refused(self):
         tip_vars, _, _ = self._sizing_height()

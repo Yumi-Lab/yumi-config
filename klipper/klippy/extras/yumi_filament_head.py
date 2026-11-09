@@ -398,6 +398,19 @@ class YumiFilamentHead:
         except (TypeError, ValueError):
             return 0.
 
+    def _cut_wait_len(self):
+        """mm from the nozzle where a cut leaves the upstream tip: blade_len + cut_clear.
+
+        Taken from _YUMI_TIP, the same single source the macros read, so moving either value moves
+        the unload and the reload together. Nicolas set the figure on 09/11 after seeing the tip
+        parked at 200 mm: it has to come back 70 plus 10, so 80 mm after a cut.
+        """
+        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
+        if tip is None:
+            return 0.
+        v = tip.variables
+        return sum(float(v.get(k, 0)) for k in ('blade_len', 'cut_clear'))
+
     def _blind_load_len(self):
         """Blind load length: blind_load, or the tip-shaping unload total (single source)."""
         if self.blind_load > 0:
@@ -522,14 +535,13 @@ class YumiFilamentHead:
                 "the hotend is %s: doing that cold blocks the head and chews the filament "
                 "(measured 09/11). Heat above %.0fC first."
                 % (stub, "at %.0fC" % temp if temp is not None else "unreadable", self.min_temp))
-        # Where the new tip waits: the cut moved the sequence's reference. Tip at 17 when the blade
-        # fires at 70, then slow_len + pull_len retract the UPSTREAM piece from 70 -- so it ends at
-        # blade_len + slow + pull = 200 mm, not at the 147 mm the sequence retracted in total. The
-        # difference is exactly the stub, so the distance is the tip-shaping total PLUS the stub.
-        # Feeding only the total would stop 53 mm short, leaving the plug half out: the same
-        # arithmetic slip as adding the stub to the prime, mirrored.
+        # Where the new tip waits: blade_len + cut_clear, and nothing else. The cut moves the
+        # sequence's reference -- the blade fires at blade_len and the only pull that follows is
+        # the short clearance -- so that sum is both where the tip sits and exactly what has to be
+        # fed back to reach the nozzle, pushing the stub out on the way. It is NOT the tip-shaping
+        # total: slow_len and pull_len belong to the no-cut path.
         given = gcmd.get_float('MAX', None, above=0.)
-        total = self._blind_load_len()
+        total = self._cut_wait_len()
         if given is None and total <= 0.:
             # the stub's own length is NOT a distance to feed: it would stop short, in silence
             raise gcmd.error(
@@ -538,7 +550,7 @@ class YumiFilamentHead:
                 "filament arrives, and the tip-shaping lengths are not available either. Give "
                 "MAX=<mm>, or SAVE_VARIABLE VARIABLE=head_stub VALUE=0 if the piece was taken out "
                 "by hand." % stub)
-        distance = given if given is not None else total + stub
+        distance = given if given is not None else total
         gcmd.respond_info(
             "blind load of %.0f mm: the %.0f mm the blade left in the head holds the switch, so "
             "there is nothing to wait for -- this travel brings the tip to the nozzle and pushes "

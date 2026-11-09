@@ -468,11 +468,12 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
     filament, y'a pas de problème, c'est le même que tu rentres et que tu sors").
     """
 
-    SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.)
+    SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.,
+               blade_len=70., cut_clear=10.)
     STUB = 53.
-    # the cut at 70 fires with the tip at 17, then slow+pull retract the UPSTREAM piece from 70:
-    # it waits at 70 + 20 + 110 = 200, which is the sequence total (147) plus the stub (53)
-    WAITS_AT = 200.
+    # the blade fires at 70 and the only pull that follows is the short clearance, so the upstream
+    # tip waits at 70 + 10 = 80 -- NOT at the tip-shaping total, which belongs to the no-cut path
+    WAITS_AT = 80.
 
     def _head(self, stub, temperature=215., **cfg):
         h, p = head(**cfg)
@@ -490,13 +491,18 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
                                msg="fed %.1f mm: the load believed the switch and moved nothing"
                                    % h.get_status(0.)["loaded_mm"])
 
-    def test_the_distance_is_the_sequence_total_plus_the_stub(self):
-        """Not the total alone. The cut moves the reference, so the tip waits 53 mm further back;
-        feeding only 147 would stop short and leave the plug half out."""
+    def test_the_distance_is_the_blade_plus_the_clearance_and_nothing_else(self):
+        """Not the tip-shaping total. slow_len and pull_len exist to drag the tip out of the head
+        on the NO-CUT path -- 130 mm of it. After a cut the filament is already out of the hot zone
+        at blade_len, so only the short clearance follows, and the reload has to feed exactly that
+        sum back. Nicolas, 09/11, seeing the tip parked at 200 mm: it has to be 70 plus 10."""
         h, p = self._head(self.STUB)
         h.cmd_LOAD(Gcmd())
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"],
+                               self.SEQ["blade_len"] + self.SEQ["cut_clear"], places=3)
         total = sum(self.SEQ[k] for k in ('first_len', 'cut_len', 'slow_len', 'pull_len'))
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], total + self.STUB, places=3)
+        self.assertNotAlmostEqual(h.get_status(0.)["loaded_mm"], total + self.STUB, places=3,
+                                  msg="the no-cut lengths must not leak into the cut reload")
 
     def test_the_books_are_cleared_once_it_is_out(self):
         h, p = self._head(self.STUB)
