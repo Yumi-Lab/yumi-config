@@ -70,9 +70,11 @@
 #                     failure Nicolas has been chasing. So the load deliberately runs too weak to
 #                     chew. It covers every path through this module (T<n>, the runout recovery,
 #                     the tip test); the slicer's own prime and LOAD_FILAMENT do not come through
-#                     here, and neither does the head_to_nozzle prime, which pushes melt through
-#                     the nozzle and needs the real current. UNLOADING keeps the full current too:
-#                     pulling a cold tip out of the die needs it.
+#                     here. The head_to_nozzle prime runs on it as well, slowly, at nozzle speed:
+#                     once the switch has seen the filament the push has to be gentle (a forced
+#                     prime jammed the filament on 09/11), and a hotter nozzle, not more force, is
+#                     what lets the melt take the flow. UNLOADING keeps the full current: pulling a
+#                     cold tip out of the die needs it.
 #   bypass_variable   save_variables key that persists the bypass (default head_sensor_bypass)
 # Status (printer.yumi_filament_head): present (live switch state, usable in macros: e.g. cut and
 # pull the previous filament before loading another tool), loaded_mm (last load), bypass,
@@ -528,7 +530,13 @@ class YumiFilamentHead:
             # the walls over the first 25 mm, more so the further the tip was pulled before the
             # cut. A fast first stretch, on the premise that nothing leaves the orifice yet, pushed
             # hard into that residue and stalled the pusher (09/11).
-            self._move_e(prime, self.nozzle_speed)
+            # And on the weak load current too: once the switch has seen the filament, push gently
+            # (Nicolas, 09/11, after a forced load jammed the blue: "une fois que tu as detecte le
+            # capteur, il faut que tu pousses doucement"). Against a resistance the motor stalls
+            # instead of chewing; the change raises the nozzle temperature so that the melt takes
+            # the flow without needing force.
+            with self._reduced_current(gcmd):
+                self._move_e(prime, self.nozzle_speed)
             fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")

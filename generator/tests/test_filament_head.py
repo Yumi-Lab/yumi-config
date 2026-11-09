@@ -418,6 +418,18 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
         self.assertIn("STEPPER=extruder0", c[0])
         self.assertIn("CURRENT=1.200", c[1], "the run current must come back, not the weak one")
 
+    def test_the_prime_after_the_switch_is_gentle_too(self):
+        """Once the switch has seen the filament, push gently: the prime runs on the weak current as
+        well (a forced load jammed the blue on 09/11). Two windows, descent then prime, each put
+        back to the run current."""
+        h, p = self._head(load_current=0.4)
+        p.with_hotend(235.)
+        h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
+        c = self._currents(p.scripts)
+        self.assertEqual(len(c), 4, "lower+restore for the descent, then for the prime: %r" % c)
+        self.assertIn("CURRENT=0.400", c[0]); self.assertIn("CURRENT=1.200", c[1])
+        self.assertIn("CURRENT=0.400", c[2]); self.assertIn("CURRENT=1.200", c[3])
+
     def test_only_the_synced_pusher_is_touched(self):
         h, p = self._head(load_current=0.6)
         h.cmd_LOAD(Gcmd())
