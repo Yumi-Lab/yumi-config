@@ -1321,6 +1321,21 @@ class InsertingFilamentFeedsTheRightYms(unittest.TestCase):
             self._load_yms(2, "")
 
 
+
+class TheCutRecordsWhereItsTipWaits(unittest.TestCase):
+    """The load reads park_<pusher> to go straight to the switch instead of searching step by
+    step. The record has to be written by the cut that parks the tip, with the same two values the
+    unload uses, and only for a single synced pusher."""
+
+    def test_yumi_cut_tip_records_the_park_of_the_synced_pusher(self):
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_CUT_TIP"]
+        self.assertIn("SAVE_VARIABLE VARIABLE=park_{pusher} VALUE={t.blade_len + t.cut_clear}", body)
+        self.assertIn('"," not in pusher', body, "never with two pushers synced")
+        self.assertLess(body.index("CUT_FILAMENT"), body.index("park_{pusher}"),
+                        "recorded only once the blade has actually fired")
+
+
 if __name__ == "__main__":
     unittest.main()
 

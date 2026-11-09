@@ -681,5 +681,56 @@ class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
                          "the stub is still there: the books must say so")
 
 
+
+class AKnownParkIsReachedInOneMove(unittest.TestCase):
+    """After a cut the machine knows where this pusher's tip waits (park_<pusher>, 155 mm) and where
+    the switch is (78 mm): the stretch between them has nothing to detect. The stepped search reads
+    the switch every step and each read stops the motion -- 950 mm took 137 s for a commanded
+    16.7 mm/s on 09/11 -- so that stretch goes in one move and only the end is searched. Nicolas:
+    "le but dans ce changement de fil, c'est d'aller vite"."""
+
+    TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85.)
+
+    def _head(self, park, switch_after, stub=0.):
+        h, p = head(switch_at=switch_after, speed=16.7, nozzle_speed=5., step=5)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=stub, **self.TIP).with_hotend(215.)
+        if park:
+            p.variables["park_extruder0"] = park
+        return h, p
+
+    def test_the_known_stretch_is_one_move_then_the_end_is_searched(self):
+        h, p = self._head(park=155., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves[0], (67.0, 16.7),
+                         "155 - 78 - 10 = 67 mm in a single move, got %r" % (p.moves[:3],))
+        self.assertTrue(77. <= h.get_status(0.)["loaded_mm"] <= 82.,
+                        "then stepped onto the switch: %.1f" % h.get_status(0.)["loaded_mm"])
+        self.assertIn("SAVE_VARIABLE VARIABLE=park_extruder0 VALUE=0", p.scripts,
+                      "the record is consumed: the tip is no longer parked")
+
+    def test_a_wrong_record_only_costs_time(self):
+        """The tip was pulled further back by hand: the stepped search simply goes on."""
+        h, p = self._head(park=155., switch_after=300.)
+        h.cmd_LOAD(Gcmd())
+        self.assertGreaterEqual(h.get_status(0.)["loaded_mm"], 300.)
+
+    def test_without_a_record_there_is_no_big_move(self):
+        h, p = self._head(park=0., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        steps = [b[0] - a[0] for a, b in zip([(0., 0.)] + p.moves, p.moves)]
+        self.assertTrue(all(x <= 5. + 1e-6 for x in steps),
+                        "a fresh feeder is searched step by step from the start: %r" % steps[:4])
+
+    def test_the_prime_runs_fast_until_the_stub_reaches_the_orifice(self):
+        """78 - 53 = 25 mm move nothing through the nozzle; minus CONTACT_MARGIN, 20 run fast."""
+        h, p = self._head(park=0., switch_after=10., stub=53.)
+        h.cmd_LOAD(Gcmd())
+        at_switch = h.get_status(0.)["loaded_mm"] - 78.
+        prime = [(pos - at_switch, sp) for pos, sp in p.moves if pos > at_switch + 1e-6]
+        self.assertEqual(prime[0], (20.0, 16.7), "the empty stretch, at tube speed: %r" % prime)
+        self.assertEqual(prime[-1], (78.0, 5.0), "then nozzle speed to the end: %r" % prime)
+
+
 if __name__ == "__main__":
     unittest.main()

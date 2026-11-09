@@ -475,7 +475,8 @@ class YumiFilamentHead:
         # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
         # runs outside the window: a current chosen to be too weak to chew would simply stall there.
         with self._reduced_current(gcmd):
-            fed = self._feed_to_switch(gcmd)
+            fed = self._approach_from_park(gcmd)
+            fed += self._feed_to_switch(gcmd)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         # a stub left by the blade has to come out even when head_to_nozzle is 0 (the slicer owns
         # the prime by decision): a head with a plug in it is not loaded, and the slicer's own
@@ -519,7 +520,17 @@ class YumiFilamentHead:
             if stub > 0:
                 gcmd.respond_info("priming %.0f mm: it brings the tip to the nozzle AND pushes out "
                                   "the %.0f mm the blade left in the head" % (prime, stub))
-            self._move_e(prime, self.nozzle_speed)
+            # Nothing leaves the orifice until the stub's bottom reaches it: the new tip first
+            # closes the gap from the switch down to the stub's top, then pushes the stub down its
+            # own empty bore -- switch_to_nozzle - stub mm in all (78 - 53 = 25). That stretch runs
+            # at tube speed; only what pushes melt through the nozzle runs at nozzle speed.
+            # CONTACT_MARGIN keeps the hand-over short of the orifice.
+            fast = 0.
+            if stub > 0:
+                fast = max(0., min(prime, self._switch_to_nozzle() - stub - self.CONTACT_MARGIN))
+            if fast > 0:
+                self._move_e(fast, self.speed)
+            self._move_e(prime - fast, self.nozzle_speed)
             fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
@@ -597,6 +608,45 @@ class YumiFilamentHead:
         self.loaded_mm = fed
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.gcode.run_script_from_command("M117 Filament loaded")
+
+    # mm before the switch where a known-park approach hands over to the stepped search
+    APPROACH_MARGIN = 10.
+
+    def _park_of(self, pusher):
+        sv = self.printer.lookup_object('save_variables', None)
+        if sv is None or not pusher:
+            return 0.
+        try:
+            return max(0., float(sv.allVariables.get('park_' + pusher, 0.)))
+        except (TypeError, ValueError):
+            return 0.
+
+    def _approach_from_park(self, gcmd):
+        """One move over the stretch where there is nothing to detect.
+
+        The stepped search reads the switch every `step` mm, and each read stops the motion: 950 mm
+        took 137 s for a commanded 16.7 mm/s on 09/11. After a cut the machine KNOWS where this
+        pusher's tip waits -- YUMI_CUT_TIP records park_<pusher> -- and where the switch is, so the
+        stretch between them is fed in a single move, down to APPROACH_MARGIN before the switch,
+        and the stepped search only covers the end (Nicolas, 09/11: "tu sais exactement de combien
+        tu veux charger, tu sais a combien tu attends ton capteur, donc ce n'est pas la peine de
+        faire plein d'essais" -- the point of a colour change is to be fast). A wrong record costs
+        nothing but time: if the tip was further back, the stepped search simply goes on. The
+        record is consumed by the load."""
+        pushers = self._synced_pushers()
+        if len(pushers) != 1 or self._present():
+            return 0.
+        park = self._park_of(pushers[0])
+        if park <= 0.:
+            return 0.
+        self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=park_%s VALUE=0" % pushers[0])
+        approach = park - self._switch_to_nozzle() - self.APPROACH_MARGIN
+        if approach <= 0.:
+            return 0.
+        gcmd.respond_info("tip parked at %.0f mm: %.0f mm in one move, then the stepped search"
+                          % (park, approach))
+        self._move_e(approach, self.speed)
+        return approach
 
     def _feed_to_switch(self, gcmd):
         """Down the tube until the head switch sees it; returns the mm fed."""
