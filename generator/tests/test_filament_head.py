@@ -126,10 +126,10 @@ class Printer:
             self.variables["head_stub"] = stub
         return self
 
-    def with_hotend(self, temperature):
+    def with_hotend(self, temperature, target=0.):
         self.objects["extruder"] = types.SimpleNamespace(
             get_heater=lambda: types.SimpleNamespace(
-                get_status=lambda t: {"temperature": temperature}))
+                get_status=lambda t: {"temperature": temperature, "target": target}))
         return self
 
     def _manual_move(self, coord, speed):
@@ -654,6 +654,26 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         p.variables["switch_extruder0"] = 89.
         h.cmd_LOAD(Gcmd())
         self.assertEqual(p.moves, [(84.0, 16.7), (94.0, 2.0)])
+
+    def test_the_heat_up_runs_during_the_descent_and_is_waited_for_before_the_prime(self):
+        """A nozzle cooled by the ejection fan (226 for 235) is waited for, but only once the
+        descent and the switch are done: they need no heat (09/11: a wait before the load cost
+        9-10 s per change)."""
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        p.with_hotend(226., target=235.)
+        log = []
+        h.gcode.run_script_from_command = lambda line: (p.scripts.append(line),
+                                                        log.append((line, len(p.moves))))
+        h.cmd_LOAD(Gcmd())
+        waits = [(line, n) for line, n in log if line.startswith("TEMPERATURE_WAIT")]
+        self.assertEqual([w[0] for w in waits], ["TEMPERATURE_WAIT SENSOR=extruder MINIMUM=233"])
+        self.assertEqual(waits[0][1], 2, "after the fast move and the gentle one, before the prime")
+
+    def test_a_nozzle_at_temperature_is_not_waited_for(self):
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        p.with_hotend(234., target=235.)
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if str(x).startswith("TEMPERATURE_WAIT")])
 
     def test_a_tip_moved_by_hand_is_not_kept(self):
         """Keeping a 145 mm error would send the next fast move straight into the switch."""

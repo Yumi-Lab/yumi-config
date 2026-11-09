@@ -466,6 +466,17 @@ class YumiFilamentHead:
                 return explicit
         return self.step
 
+    def _hotend_target(self):
+        try:
+            heater = self.printer.lookup_object('extruder').get_heater()
+            return heater.get_status(self.printer.get_reactor().monotonic())['target']
+        except Exception:
+            return 0.
+
+    # degC below the set target at which the prime may start: an overshoot or a ripple of the
+    # PID must not hold it up, a nozzle still cooled by the ejection fan must
+    TARGET_SLACK = 2.
+
     def _hotend_temp(self):
         try:
             heater = self.printer.lookup_object('extruder').get_heater()
@@ -542,7 +553,18 @@ class YumiFilamentHead:
                 "call. Loading on top of that plug blocks the head. SAVE_VARIABLE VARIABLE="
                 "head_stub VALUE=0 if the piece was taken out by hand." % stub)
         if prime > 0:
+            # The heat-up to the change temperature runs during the descent and the switch, which
+            # need no heat, and is waited for only here, before the first mm of melt: on 09/11 a
+            # wait BEFORE the load cost 9-10 s per change, the nozzle having cooled under the
+            # ejection fan, while the descent alone takes 10 s.
+            target = self._hotend_target()
             temp = self._hotend_temp()
+            if target > 0. and temp is not None and temp < target - self.TARGET_SLACK:
+                gcmd.respond_info("waiting for the nozzle: %.0f/%.0f degC before the prime"
+                                  % (temp, target))
+                self.gcode.run_script_from_command("TEMPERATURE_WAIT SENSOR=extruder MINIMUM=%.0f"
+                                                   % (target - self.TARGET_SLACK))
+                temp = self._hotend_temp()
             if stub > 0 and temp is None:
                 # an unreadable temperature used to pass this gate. For a plain prime that is the
                 # long-standing behaviour; for a stub it is not acceptable, because pushing one
