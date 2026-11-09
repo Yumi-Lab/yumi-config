@@ -94,6 +94,12 @@ class ZTap:
                               desc="Set Z=0 at nozzle contact via pressure switch")
         gcode.register_command('YUMI_Z_LIFT', self.cmd_Z_LIFT,
                               desc="Lift Z, stopping at the top end stop if the carriage reaches it: DIST= SPEED=")
+        gcode.register_command('YUMI_Z_UP', self.cmd_Z_UP,
+                              desc="Raise Z without any homing, stopping at the top end stop: DIST= (mm, "
+                                   "default 20) SPEED= (mm/s, default 5)")
+        gcode.register_command('YUMI_Z_DOWN', self.cmd_Z_DOWN,
+                              desc="Lower Z without any homing, stopping on nozzle contact: DIST= (mm, "
+                                   "default 10) SPEED= (mm/s, default 5)")
         gcode.register_command('YUMI_Z_TRACE', self.cmd_Z_TRACE,
                               desc="Record the Z driver load outside a tap: ACTION=START [PATH=] | MARK TEXT= | STOP")
 
@@ -528,6 +534,10 @@ class ZTap:
         switch would, Klipper keeps running and the homing goes on from there."""
         dist = gcmd.get_float('DIST', above=0.)
         speed = gcmd.get_float('SPEED', above=0.)
+        self._report_lift(gcmd, dist, *self._lift(gcmd, dist, speed))
+
+    def _lift(self, gcmd, dist, speed):
+        """The watched lift: (mm lifted, stopped by a stall at the top end stop)."""
         toolhead = self.printer.lookup_object('toolhead')
         phoming = self.printer.lookup_object('homing')
         probe = self.printer.lookup_object('probe_pressure')
@@ -551,7 +561,9 @@ class ZTap:
         finally:
             self._sampler_stop(gcmd)
             self._restore_z_current()
-        lifted = toolhead.get_position()[2] - (target - dist)
+        return toolhead.get_position()[2] - (target - dist), stalled
+
+    def _report_lift(self, gcmd, dist, lifted, stalled):
         if stalled:
             gcmd.respond_info("YUMI_Z_LIFT: top end stop reached after %.1f of %.1f mm (motor "
                               "stall), stopped there" % (lifted, dist))
@@ -562,6 +574,60 @@ class ZTap:
                               "stop knock or vibration)" % (lifted, dist))
         else:
             gcmd.respond_info("YUMI_Z_LIFT: lifted %.1f mm" % lifted)
+
+    def _jog_without_homing(self, gcmd, claim_z, move):
+        """Run `move` from a claimed Z when Z is not homed, then leave Z unhomed again.
+
+        Nicolas, 09/11: after a reboot Z has to move without any homing -- a head too high for the
+        camera, a hotend to take off -- and every G28 also lifts Z blindly, which piled up. Klipper
+        refuses a move on an unhomed axis, so the position is claimed for the duration of the move
+        only: once done, Z is marked unhomed again, so the made-up value can never pass for a real
+        one and let a later command trust it. A Z that was homed stays homed."""
+        toolhead = self.printer.lookup_object('toolhead')
+        eventtime = self.printer.get_reactor().monotonic()
+        homed = 'z' in toolhead.get_status(eventtime)['homed_axes']
+        if not homed:
+            pos = toolhead.get_position()
+            pos[2] = claim_z
+            toolhead.set_position(pos, homing_axes="z")
+        try:
+            move()
+        finally:
+            if not homed:
+                toolhead.get_kinematics().clear_homing_state("z")
+
+    def cmd_Z_UP(self, gcmd):
+        """The homing's watched lift, on demand: it stops by itself at the top end stop."""
+        dist = gcmd.get_float('DIST', 20., above=0.)
+        speed = gcmd.get_float('SPEED', 5., above=0.)
+        result = []
+        self._jog_without_homing(gcmd, 0., lambda: result.extend(self._lift(gcmd, dist, speed)))
+        self._report_lift(gcmd, dist, *result)
+
+    def cmd_Z_DOWN(self, gcmd):
+        """Down without homing is only safe if contact stops it: the move runs as a homing move on
+        the nozzle pressure switch, the same that taps Z, so touching the bed (or a part) ends it.
+        The distance stays bounded by DIST in case the switch never fires."""
+        dist = gcmd.get_float('DIST', 10., above=0.)
+        speed = gcmd.get_float('SPEED', 5., above=0.)
+        toolhead = self.printer.lookup_object('toolhead')
+        phoming = self.printer.lookup_object('homing')
+        probe = self.printer.lookup_object('probe_pressure')
+        moved = []
+
+        def down():
+            start = toolhead.get_position()
+            pos = list(start)
+            pos[2] = start[2] - dist
+            phoming.manual_home(toolhead, [(probe.mcu_probe, "z_down")], pos, speed,
+                                probe_pos=True, triggered=True, check_triggered=False)
+            moved.append(start[2] - toolhead.get_position()[2])
+        self._jog_without_homing(gcmd, dist, down)
+        if moved and moved[0] < dist - 0.01:
+            gcmd.respond_info("YUMI_Z_DOWN: stopped after %.1f of %.1f mm: nozzle contact"
+                              % (moved[0], dist))
+        else:
+            gcmd.respond_info("YUMI_Z_DOWN: lowered %.1f mm" % (moved[0] if moved else 0.))
 
     def cmd_Z_TRACE(self, gcmd):
         """Same recording as YUMI_Z_TAP TRACE, driven by hand: a stall provoked on purpose
