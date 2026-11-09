@@ -556,9 +556,13 @@ class YumiFilamentHead:
             "there is nothing to wait for -- this travel brings the tip to the nozzle and pushes "
             "that piece out. Check material really came out before printing."
             % (distance, stub))
+        # FULL current here, unlike the descent down the tube: this feed ends by pushing the stub
+        # out THROUGH THE NOZZLE, and a current chosen to be too weak to chew the filament would
+        # simply stall against the orifice (Nicolas, 09/11: "quand tu pousses dans la buse, c'est
+        # la ou ca peut te manquer un peu de puissance"). Same reason the head_to_nozzle prime is
+        # left out of the weak window.
         feeder = self._feeder(gcmd, self.load_step(gcmd))
-        with self._reduced_current(gcmd):
-            fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.speed, None, feeder)
+        fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.speed, None, feeder)
         self.loaded_mm = fed
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.gcode.run_script_from_command("M117 Filament loaded")

@@ -504,6 +504,17 @@ class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
         self.assertNotAlmostEqual(h.get_status(0.)["loaded_mm"], total + self.STUB, places=3,
                                   msg="the no-cut lengths must not leak into the cut reload")
 
+    def test_the_stub_is_pushed_out_at_full_current(self):
+        """The weak current is for the descent down the tube. This feed ends by pushing the stub
+        out THROUGH THE NOZZLE, and a current chosen to be too weak to chew would stall against
+        the orifice (Nicolas: "quand tu pousses dans la buse, c'est la ou ca peut te manquer un
+        peu de puissance"). Same reason the prime is left out of the weak window."""
+        h, p = self._head(self.STUB, load_current=0.2)
+        h.cmd_LOAD(Gcmd())
+        lowered = [l for l in p.scripts
+                   if isinstance(l, str) and l.startswith("SET_TMC_CURRENT")]
+        self.assertEqual(lowered, [], "the stub must not be pushed out on the weak current")
+
     def test_the_books_are_cleared_once_it_is_out(self):
         h, p = self._head(self.STUB)
         h.cmd_LOAD(Gcmd())
