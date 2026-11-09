@@ -956,8 +956,7 @@ class CancelSequence(unittest.TestCase):
         unload = m["gcode_macro YUMI_UNLOAD_TIP"]
         for step in ("done", "cut_len", "slow_len", "pull_len"):
             self.assertIn("G1 E-{%s}" % step, unload)
-        self.assertIn("{% set done = 0.0 if params.SKIP_FIRST|default(0)|int == 1 else first_len %}",
-                      unload)
+        self.assertIn("{% set done = first_len %}", unload)
         self.assertLess(unload.index("M83"), unload.index("G1 E-{cut_len}"))
         test = m["gcode_macro YUMI_TIP_TEST"]
         for key in ("params.CYCLES", "params.TEMP", "params.WAIT", "YUMI_UNLOAD_TIP", "G4 P{(wait * 1000)|int}", "M109 S{temp}"):
@@ -1103,8 +1102,9 @@ class TipSizingArithmetic(unittest.TestCase):
             params={k: str(v) for k, v in params.items()},
             action_raise_error=raise_error,
         )
-        # tip height above the nozzle = minus the cumulative E
-        moves, cum = [], 0.0
+        # tip height above the nozzle = minus the cumulative E. SKIP_FIRST=1: the CALLER already
+        # retracted first_len over the part (PRINT_END, CANCEL_PRINT), so the tip starts there
+        moves, cum = [], (-tip_vars["first_len"] if int(params.get("SKIP_FIRST", 0)) == 1 else 0.0)
         for line in out.split("\n"):
             line = line.strip()
             if line.startswith("G1 E"):
@@ -1381,6 +1381,19 @@ class TheCutRecordsWhereItsTipWaits(unittest.TestCase):
         self.assertIn('printer["gcode_macro _YUMI_POP_TOOL"]', body,
                       "the pop tool position comes from its single source")
 
+
+
+class AFirstRetractDoneOverThePartStillCounts(unittest.TestCase):
+    """PRINT_END and CANCEL_PRINT retract first_len over the part, then call YUMI_UNLOAD_TIP
+    SKIP_FIRST=1. The tip is up by first_len all the same: counted as 0, the blade's stub was
+    booked at 60 mm instead of 53 (09/11, after a cancel)."""
+
+    def test_skip_first_skips_the_move_not_the_millimetres(self):
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_UNLOAD_TIP"]
+        self.assertIn("{% set done = first_len %}", body)
+        self.assertNotIn("0.0 if params.SKIP_FIRST", body)
+        self.assertIn("YUMI_CUT_TIP STUB={t.blade_len - done - cut_len}", body)
 
 
 class AnXOnlyHomingLeavesZAlone(unittest.TestCase):
