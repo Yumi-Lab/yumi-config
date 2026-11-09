@@ -644,7 +644,9 @@ class YumiFilamentHead:
         pusher = self._synced_pushers()[0]
         if abs(measured - computed) > self.MEASURE_MAX:
             gcmd.respond_info("switch met after %.1f mm from the park, %.0f computed: off by more "
-                              "than %.0f mm, the tip was moved by hand -- not kept"
+                              "than %.0f mm -- not kept. Either the descent skipped many steps (a "
+                              "very long or tight tube on the weak load current) or the tip was "
+                              "moved by hand; check the filament of this YMS for grind marks"
                               % (measured, computed, self.MEASURE_MAX))
             return
         # The SMALLEST distance is kept, not the last one. On a very long tube the weak load
