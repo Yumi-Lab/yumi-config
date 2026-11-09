@@ -475,10 +475,23 @@ def render_extruder_steppers(p):
         lines.append("  {% if printer.save_variables.variables.printing_start %}")
         lines.append(f"        T{i}")
         lines.append("  {% else %}")
-        lines.append(f"        T{i+1}")
+        # Outside a print the insertion syncs ITS OWN pusher, directly. It used to call T{i+1},
+        # because outside a print T<k>'s else branch doubles as "insertion into YMS-k" -- but only
+        # T0..T{N-1} are generated, so the LAST YMS of every machine called a macro that does not
+        # exist: "Unknown command T2" on a 2-YMS printer, and LOAD_YMS then fed its 50 mm to
+        # whatever pusher happened to be synced. Measured 09/11: filament inserted into YMS-2
+        # advanced YMS-1 by 50 mm (it was synced for a test). With nothing synced, the feed goes
+        # to the fictitious extruder and the insertion silently does nothing.
+        lines.append("        SYNC_EXTRUDER_MOTION EXTRUDER=extruder MOTION_QUEUE=extruder")
+        for j in range(len(steppers)):
+            if j != i:
+                lines.append(f'        SYNC_EXTRUDER_MOTION EXTRUDER=extruder{j} MOTION_QUEUE=""')
+        lines.append(f"        SYNC_EXTRUDER_MOTION EXTRUDER=extruder{i} MOTION_QUEUE=extruder")
+        for j in range(len(steppers)):
+            lines.append(f"        SET_FILAMENT_SENSOR SENSOR=YMS-{j + 1} ENABLE={1 if j == i else 0}")
         lines.append("  {% endif %}")
         lines.append(f"  M117 YMS-{yms_num} Loading")
-        lines.append("  LOAD_YMS")
+        lines.append(f"  LOAD_YMS YMS={yms_num}")
         lines.append("")
 
         # Dryer after YMS-3

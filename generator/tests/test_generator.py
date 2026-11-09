@@ -1236,6 +1236,90 @@ class TipSizingArithmetic(unittest.TestCase):
         self.assertIn("COOL_MOVES=0", msg, "the refusal must say how to proceed anyway")
 
 
+
+class InsertingFilamentFeedsTheRightYms(unittest.TestCase):
+    """Inserting filament into a YMS outside a print must feed THAT YMS and nothing else.
+
+    It used to go through T{i+1}, because outside a print T<k>'s else branch doubles as
+    "insertion into YMS-k" -- but only T0..T{N-1} are generated, so the LAST YMS of every machine
+    called a macro that does not exist. Measured on the C335 on 09/11: filament inserted into
+    YMS-2 printed "Unknown command T2", and LOAD_YMS fed its 50 mm to YMS-1, which happened to be
+    synced. With nothing synced the feed goes to the fictitious extruder and the insertion
+    silently does nothing -- on the last YMS of every multi-YMS printer in the fleet.
+    """
+
+    PRODUCTS = ("C335_CX12_LW_04_2YMS", "C235_CX12_LW_04_7YMS")
+
+    def _inserts(self, product):
+        cfg = generator.generate(product, catalog=CATALOG)
+        blocks = re.findall(r"\ninsert_gcode:\n((?:[ \t]+.*\n)+)", cfg)
+        return cfg, blocks
+
+    def test_no_insertion_calls_a_tool_macro_that_does_not_exist(self):
+        for product in self.PRODUCTS:
+            cfg, blocks = self._inserts(product)
+            defined = set(re.findall(r"^\[gcode_macro (T\d+)\]", cfg, re.M))
+            for b in blocks:
+                called = set(re.findall(r"^\s+(T\d+)\s*$", b, re.M))
+                self.assertTrue(called <= defined, "%s: insertion calls %s, only %s exist"
+                                % (product, sorted(called - defined), sorted(defined)))
+
+    def test_outside_a_print_each_insertion_syncs_its_own_pusher_alone(self):
+        for product in self.PRODUCTS:
+            _, blocks = self._inserts(product)
+            n_yms = len(blocks)
+            self.assertGreater(n_yms, 1, product)
+            for i, b in enumerate(blocks):
+                outside = b.split("{% else %}", 1)[1].split("{% endif %}", 1)[0]
+                self.assertIn("SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=extruder" % i,
+                              outside, "%s YMS-%d: its own pusher is not synced" % (product, i + 1))
+                for j in range(n_yms):
+                    if j != i:
+                        self.assertIn('SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=""' % j,
+                                      outside, "%s YMS-%d: extruder%d left synced, it would move "
+                                      "too" % (product, i + 1, j))
+                self.assertIn("LOAD_YMS YMS=%d" % (i + 1), b,
+                              "%s YMS-%d: LOAD_YMS must be told which YMS it feeds" % (product, i + 1))
+
+    def _load_yms(self, n, pusher):
+        import jinja2
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro LOAD_YMS"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+
+        def raise_error(msg):
+            raise RuntimeError(msg)
+
+        printer = {"yumi_filament_head": {"pusher": pusher},
+                   "save_variables": {"variables": {"printing_start": False}}}
+
+        class P(dict):
+            def __getattr__(self, k):
+                v = self[k]
+                return P(v) if isinstance(v, dict) else v
+        return env.from_string(body).render(printer=P(printer), params={"YMS": str(n)},
+                                            action_raise_error=raise_error)
+
+    def test_load_yms_feeds_when_its_own_pusher_alone_is_synced(self):
+        out = self._load_yms(2, "extruder1")
+        self.assertIn("G1 E50", out)
+
+    def test_load_yms_refuses_another_yms_pusher(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._load_yms(2, "extruder0")
+        msg = str(cm.exception)
+        self.assertIn("extruder1", msg, "the refusal names the pusher it needs")
+        self.assertIn("extruder0", msg, "and the one it found")
+
+    def test_load_yms_refuses_two_pushers_at_once(self):
+        with self.assertRaises(RuntimeError):
+            self._load_yms(2, "extruder0,extruder1")
+
+    def test_load_yms_refuses_the_fictitious_extruder(self):
+        with self.assertRaises(RuntimeError):
+            self._load_yms(2, "")
+
+
 if __name__ == "__main__":
     unittest.main()
 
