@@ -300,11 +300,12 @@
           "rotation_distance: 14.6 #36圆形电机"
         ],
         "tmc2209": {
-          "run_current": 1.2,
+          "run_current": 1.0,
           "hold_current": 0.3,
           "stealthchop_threshold": 0,
           "_comments": {
-            "hold_current": "motor hold current"
+            "hold_current": "motor hold current",
+            "run_current": "1.0 A, whole print included (Nicolas, 09/11): at 1.2 A the YMS motor runs hot, and 1.0 is enough to push the melt at purge_speed. The weak load_current of the filament head module covers the descent down the tube and the head switch only."
           },
           "_notes": [
             "interpolate: True"
