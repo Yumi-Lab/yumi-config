@@ -364,6 +364,235 @@ class Cutter(unittest.TestCase):
         self.assertIn("SAVE_VARIABLE VARIABLE=cut_filament_bypass", setter)
 
 
+class TipSizingIsThePrimaryPathBladeIsTheNetting(unittest.TestCase):
+    """The tip is shaped by COOLING SIZED in the 1.9 mm bore of the PEEK heatbreak, the narrowest
+    point of the head: that was the project's initial objective, and the blade was added only as
+    a safety net (Nicolas, 09/11). The star PTFE below the heatbreak is the widest bore of the
+    path at 2.7-3.0 mm, where warm filament is free to swell, so the sequence must cross it FAST
+    (first_len + cut_len, tip to 17 mm) and only then crawl (slow_len, tip 17 -> 37 mm) so the tip
+    enters the 1.9 bore and cools to size. Arming the blade before cut_len moved that crawl into
+    the wide section instead, warm and free to swell, and the head clogged."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def _tip(self, product):
+        return macros(generator.generate(product, catalog=CATALOG))[
+            "gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+
+    def test_the_fast_transit_reaches_the_sizing_bore_before_any_crawl(self):
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            i_first = tip.index("G1 E-{done}")
+            i_cut = tip.index("G1 E-{cut_len}")
+            i_slow = tip.index("G1 E-{slow_len}")
+            self.assertLess(i_first, i_cut, "%s: first_len then cut_len, both fast" % product)
+            self.assertLess(i_cut, i_slow,
+                            "%s: the crawl comes AFTER the fast transit, never during it" % product)
+            between = tip[i_cut:i_slow]
+            self.assertNotIn("G1 E", between.replace("G1 E-{cut_len}", "", 1),
+                             "%s: nothing may extrude between the transit and the crawl" % product)
+
+    def test_the_blade_is_armed_by_default(self):
+        """Reversed on 09/11, on a measurement, not a preference.
+
+        The sized tip came out in one piece and cleaner than any before it -- and then would not
+        go back in. It jammed, and Nicolas had to cut it by hand, pull the PTFE and start over:
+        "le bout chaud regonfle, il faut absolument qu'il soit froid avant d'etre retire". Shaping
+        cannot beat that, because the tip leaves the nozzle molten whatever the sequence does. A
+        blade cut lands above the heatsink, on cold filament, and cannot swell. His verdict:
+        "couper ne fait pas perdre beaucoup de temps et au moins ca garantit que ca fonctionne".
+        So the cut is the default on every unload path and CUT=0 is what has to be asked for.
+        Machines whose cutter is bypassed (cut_filament_bypass, SET_CUT_FILAMENT_BYPASS) fall back
+        to the shaping path on their own -- CUT_FILAMENT handles the bypass itself."""
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            self.assertIn("params.CUT|default(1)|int == 1", tip,
+                          "%s: the blade is the guarantee, CUT=0 declines it" % product)
+            self.assertNotIn("params.CUT|default(0)", tip,
+                             "%s: no path may leave the blade disarmed by default" % product)
+
+    def test_the_blade_never_cuts_while_the_tip_is_still_hot(self):
+        """One cut per branch, and in both the tip is already out of the melt when it happens.
+
+        Moving the blade earlier on 09/11 clogged the head: the stroke landed on filament still in
+        the hot wide bore, where it swells. In the legacy branch the cut comes after the cut_len
+        transit and before the crawl; in the sizing branch it comes after the dwell, which is the
+        coldest the tip ever gets. Indexes are taken per branch, since both now cut."""
+        for product in self.PRODUCTS:
+            tip = self._tip(product)
+            sizing, _, legacy = tip.partition("{% else %}")
+            calls = [l for l in tip.splitlines()
+                     if re.match(r"\s*(\{%[^%]*%\}\s*)?YUMI_CUT_TIP\b", l)]
+            self.assertEqual(len(calls), 2,
+                             "%s: exactly one cut per unload branch, got %r" % (product, calls))
+            self.assertLess(sizing.index("G4 P{dwell_ms}"), sizing.index("YUMI_CUT_TIP"),
+                            "%s: the sizing branch cuts only once the dwell has set the tip"
+                            % product)
+            self.assertLess(legacy.index("G1 E-{cut_len}"), legacy.index("YUMI_CUT_TIP"),
+                            "%s: the blade never cuts before the tip has left the hot zone"
+                            % product)
+            self.assertLess(legacy.index("YUMI_CUT_TIP"), legacy.index("G1 E-{slow_len}"),
+                            "%s: and never during the sizing crawl" % product)
+
+
+class ConfirmRunoutBeforeGivingUp(unittest.TestCase):
+    """A YMS encoder runout is a suspicion, not a verdict: a flaky read kills a print for
+    nothing (Nicolas, 08/11). The sensor must hand over to a verification that pauses first,
+    checks whether the feeder really delivers, and only then decides."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_every_sensor_hands_over_instead_of_pausing_blind(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            runouts = re.findall(r"runout_gcode:(.*?)insert_gcode:", cfg, re.S)
+            self.assertTrue(runouts, product)
+            for n, block in enumerate(runouts, 1):
+                self.assertIn("YUMI_CONFIRM_RUNOUT SENSOR=YMS-%d" % n, block,
+                              "%s: YMS-%d must hand over, not pause blind" % (product, n))
+                self.assertNotIn("filament encoder runout", block,
+                                 "%s: the bare PAUSE + error is gone from the sensor" % product)
+
+    def test_it_pauses_before_it_verifies(self):
+        """One never keeps depositing on a suspicion: PAUSE comes before any motion or feed."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        self.assertLess(code.index("PAUSE"), code.index("_YUMI_POP_TOOL"))
+        self.assertLess(code.index("PAUSE"), code.index("YUMI_FEEDER_TEST"))
+
+    def test_the_filament_is_extruded_never_pulled_back_to_be_tested(self):
+        """Pulling it back above the head switch and loading it again drew the hot filament out of
+        the melt and blocked the head (Nicolas, 09/11: "tu as juste a extruder")."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        for pull in ("YUMI_UNLOAD_CHECK", "YUMI_LOAD_TO_HEAD", "E-"):
+            self.assertNotIn(pull, code)
+        self.assertIn("YUMI_FEEDER_TEST{% if sensor %} SENSOR={sensor}{% endif %}", code)
+
+    def test_a_confirmed_jam_cuts_and_waits_a_false_reading_resumes(self):
+        for product in self.PRODUCTS:
+            m = macros(generator.generate(product, catalog=CATALOG))
+            code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+            self.assertNotIn("feeder_test", code,
+                             "%s: read here, the verdict would be the previous test's: the "
+                             "template is rendered before YUMI_FEEDER_TEST runs" % product)
+            self.assertLess(code.index("YUMI_FEEDER_TEST"), code.index("_YUMI_RUNOUT_VERDICT"))
+            verdict = m["gcode_macro _YUMI_RUNOUT_VERDICT"].split("gcode:", 1)[1]
+            self.assertIn('printer.yumi_filament_head.feeder_test == "delivers"', verdict,
+                          "%s: the verdict comes from the module, not from a guess" % product)
+            ok, jam = verdict.split("{% else %}", 1)
+            self.assertIn("RESUME", ok, "%s: a false reading resumes the print" % product)
+            self.assertIn("YUMI_UNLOAD_TIP", jam, "%s: a confirmed jam cuts the tip" % product)
+            self.assertNotIn("RESUME", jam, "%s: a confirmed jam never resumes by itself" % product)
+            self.assertFalse(re.search(r"G1 X-?\d", code + verdict), "no hard-coded X")
+
+    def test_nothing_verifiable_keeps_the_old_behaviour(self):
+        """No head sensor, or bypassed: nothing can be checked, so the old message is kept and
+        the print stays paused. A verification that cannot verify must not decide."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        code = m["gcode_macro YUMI_CONFIRM_RUNOUT"].split("gcode:", 1)[1]
+        self.assertIn("head.bypass", code, "a bypassed head sensor verifies nothing")
+        tail = code.rsplit("{% else %}", 1)[1]
+        self.assertIn("filament encoder runout", tail, "the old message is the fallback")
+        self.assertNotIn("RESUME", tail, "an unverifiable runout does not resume")
+
+
+class NoMacroLeavesTheAxisLimits(unittest.TestCase):
+    """The audit rule, made permanent. UNLOAD_FILAMENT walked to a hard-coded X-12 where
+    position_min is -10: Klipper refused the move and the macro died before touching the
+    extruder, so it never unloaded anything (found 08/11). Literal coordinates are only read
+    in ABSOLUTE context -- under G91 the number is a delta, not a position."""
+
+    PRODUCTS = ("C235_DD_LW_04", "C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_every_literal_coordinate_is_reachable(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            settings = parse(cfg)
+            limits = {}
+            for ax in "xyz":
+                s = settings.get("stepper_" + ax, {})
+                if "position_min" in s and "position_max" in s:
+                    limits[ax] = (float(s["position_min"]), float(s["position_max"]))
+            self.assertTrue(limits, product)
+            for name, body in macros(cfg).items():
+                absolute = True   # Klipper boots in G90
+                for line in body.splitlines():
+                    bare = line.split("#", 1)[0].strip()
+                    if re.match(r"^G91\b", bare):
+                        absolute = False
+                    elif re.match(r"^G90\b", bare):
+                        absolute = True
+                    elif absolute and re.match(r"^G[01]\b", bare):
+                        for ax, val in re.findall(r"\b([XYZ])(-?[0-9]+(?:\.[0-9]+)?)\b", bare):
+                            lo, hi = limits.get(ax.lower(), (None, None))
+                            if lo is None:
+                                continue
+                            self.assertGreaterEqual(float(val), lo,
+                                "%s / %s: %s -> %s%s is below position_min %s" % (product, name, bare, ax, val, lo))
+                            self.assertLessEqual(float(val), hi,
+                                "%s / %s: %s -> %s%s is above position_max %s" % (product, name, bare, ax, val, hi))
+
+
+class ManualLoadAndUnload(unittest.TestCase):
+    """UNLOAD_FILAMENT and LOAD_FILAMENT, the two macros the operator presses by hand."""
+
+    def test_unload_delegates_instead_of_rolling_its_own_geometry(self):
+        for product in ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS"):
+            code = macros(generator.generate(product, catalog=CATALOG))["gcode_macro UNLOAD_FILAMENT"]
+            code = code.split("gcode:", 1)[1]
+            self.assertIn("YUMI_UNLOAD_TIP", code, "%s: the single source does the sequence" % product)
+            self.assertFalse(re.search(r"G1 X-?\d", code), "%s: no hand-rolled X any more" % product)
+            self.assertNotIn("G92 E", code, "%s: G92 corrupts the slicer E bookkeeping" % product)
+
+    def test_load_uses_m83_because_g91_does_not_make_e_relative(self):
+        """Klipper overrides absolute_coord with absolute_extrude for the E axis, so under G91
+        the feeds stayed absolute: E50 then E30 fed 50 mm and then pulled 20 mm BACK, and which
+        of the two happened depended on the mode the previous print left behind."""
+        code = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))["gcode_macro LOAD_FILAMENT"]
+        code = code.split("gcode:", 1)[1]
+        self.assertIn("M83", code)
+        self.assertNotIn("G91", code, "G91 does not make E relative")
+        self.assertIn("SAVE_GCODE_STATE NAME=yumi_load_filament", code, "the mode must not leak")
+        self.assertIn("RESTORE_GCODE_STATE NAME=yumi_load_filament", code)
+
+
+class EveryYmsWatchesForJams(unittest.TestCase):
+    """All the YMS are identical hardware (Nicolas, 09/11), so all of them must carry the smart
+    motion sensor. The jam detection used to be emitted for i == 1 only: it sat on YMS-2 while
+    YMS-1 -- the channel actually plugged in -- ran a bare Klipper motion sensor with no pitch
+    and no blockage detection. The jam was watched by nothing, and the only remaining check was
+    an absence over detection_length 50 mm, about 48 s at a normal flow."""
+
+    PRODUCTS = ("C235_CX12_LW_04_7YMS", "C335_CX12_LW_04_2YMS", "C435_CX12_LW_04_2YMS")
+
+    def test_no_channel_is_left_with_a_bare_sensor(self):
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            found = re.findall(r"\[(filament_\w+) (YMS-\d+)\]", cfg)
+            self.assertTrue(found, product)
+            for typ, name in found:
+                self.assertEqual(typ, "filament_yumi_smart_motion_sensor",
+                                 "%s / %s: identical hardware, identical sensor" % (product, name))
+
+    def test_each_channel_watches_its_own_feeder(self):
+        """YMS-n is fed by extruder_stepper extruder{n-1}: a tick counts only when THAT feeder
+        drives, so a wrong mapping would blame the wrong channel for a jam."""
+        for product in self.PRODUCTS:
+            cfg = generator.generate(product, catalog=CATALOG)
+            blocks = re.findall(
+                r"\[filament_yumi_smart_motion_sensor (YMS-(\d+))\]((?:\n(?!\[)[^\n]*)*)", cfg)
+            self.assertTrue(blocks, product)
+            for name, num, body in blocks:
+                self.assertIn("blockage_detection: True", body, "%s / %s" % (product, name))
+                motor = re.search(r"motor: (\S+)", body)
+                self.assertIsNotNone(motor, "%s / %s: no feeder declared" % (product, name))
+                self.assertEqual(motor.group(1), "extruder%d" % (int(num) - 1),
+                                 "%s / %s must watch its own feeder" % (product, name))
+                for option in ("min_pitch:", "max_pitch:", "blockage_threshold:", "pitch_view:"):
+                    self.assertIn(option, body, "%s / %s: %s missing" % (product, name, option))
+
+
 class NoHeadSensor(unittest.TestCase):
     """A machine without the head sensor — an older head, or the per-machine override
     {"filament_head": null} used on the bench (08/09) to rule the module out of an MCU-link
@@ -725,8 +954,9 @@ class CancelSequence(unittest.TestCase):
         self.assertIn("variable_cut_speed: 65", tip)
         self.assertIn("variable_cut_len: 10", tip)
         unload = m["gcode_macro YUMI_UNLOAD_TIP"]
-        for step in ("first_len", "cut_len", "slow_len", "pull_len"):
+        for step in ("done", "cut_len", "slow_len", "pull_len"):
             self.assertIn("G1 E-{%s}" % step, unload)
+        self.assertIn("{% set done = first_len %}", unload)
         self.assertLess(unload.index("M83"), unload.index("G1 E-{cut_len}"))
         test = m["gcode_macro YUMI_TIP_TEST"]
         for key in ("params.CYCLES", "params.TEMP", "params.WAIT", "YUMI_UNLOAD_TIP", "G4 P{(wait * 1000)|int}", "M109 S{temp}"):
@@ -782,7 +1012,16 @@ class FilamentAtHead(unittest.TestCase):
             self.assertIn("YUMI_LOAD_TO_HEAD", body, t)
             # only in the printing branch, never in the filament-insertion (init) mode
             self.assertLess(body.index("YUMI_LOAD_TO_HEAD"), body.index("{% else %}"), t)
-        self.assertIn("YUMI_UNLOAD_CHECK", yms["gcode_macro YUMI_UNLOAD_TIP"])
+        # the release check moved into _YUMI_UNLOAD_VERIFY: a macro's template is rendered BEFORE
+        # its commands run, so read from inside the sequence the stub the cut is about to record
+        # would still hold the previous cut's value. The chain has to stay unbroken.
+        self.assertIn("_YUMI_UNLOAD_VERIFY", yms["gcode_macro YUMI_UNLOAD_TIP"])
+        verify = yms["gcode_macro _YUMI_UNLOAD_VERIFY"]
+        self.assertIn("YUMI_UNLOAD_CHECK", verify)
+        self.assertIn("stub", verify, "it decides on the stub the cut just recorded")
+        self.assertNotIn("t.stub", yms["gcode_macro YUMI_UNLOAD_TIP"],
+                         "the sequence writes the stub (STUB= to the blade) but must never READ "
+                         "it: at render time it still holds the previous cut's value")
         self.assertIn("YUMI_LOAD_TO_HEAD", yms["gcode_macro YUMI_TIP_TEST"])
 
 
@@ -825,6 +1064,357 @@ class Heads(unittest.TestCase):
         for sec, opts in gen.items():
             for opt, val in opts.items():
                 self.assertNotRegex(val, r"[A-Za-z0-9_]+:[!^~]", "%s/%s = %s" % (sec, opt, val))
+
+
+
+class TipSizingArithmetic(unittest.TestCase):
+    """Where the tip actually STOPS, by rendering the macro and adding up its E moves.
+
+    The sizing path only works because the tip stops ABOVE the stuck zone, so the one number that
+    has to be right is the position reached before the dwell. It was NOT right: the sizing retract
+    read ``sizing_len - first_len + push_len`` and subtracted first_len even when the caller had
+    not done that retract. CANCEL_PRINT is such a caller -- it retracts over the part itself and
+    passes SKIP_FIRST=1 -- so there the tip stopped 7 mm short, at 23 mm, inside the 25 mm that
+    stays welded to the walls. That is the two-piece tip this whole path exists to avoid, produced
+    silently, with no error and nothing in the log. Text matching could not see it; only adding the
+    moves up can, which is why this class renders instead of grepping.
+    """
+
+    PRODUCT = "C235_DD_LW_04"
+
+    def _render(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+
+        def raise_error(msg):
+            raise RuntimeError(msg)
+
+        # Klipper's own delimiters (klippy/extras/gcode_macro.py): single braces, not {{ }}
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        out = env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=raise_error,
+        )
+        # tip height above the nozzle = minus the cumulative E. SKIP_FIRST=1: the CALLER already
+        # retracted first_len over the part (PRINT_END, CANCEL_PRINT), so the tip starts there
+        moves, cum = [], (-tip_vars["first_len"] if int(params.get("SKIP_FIRST", 0)) == 1 else 0.0)
+        for line in out.split("\n"):
+            line = line.strip()
+            if line.startswith("G1 E"):
+                cum += float(line.split("E", 1)[1].split()[0])
+                moves.append(("move", -cum))
+            elif line.startswith("G4 P"):
+                moves.append(("dwell", -cum))
+        return tip_vars, moves
+
+    def _sizing_height(self, **params):
+        tip_vars, moves = self._render(SIZE=1, **params)
+        dwells = [h for kind, h in moves if kind == "dwell"]
+        self.assertEqual(len(dwells), 1, "the sizing path holds the tip exactly once")
+        return tip_vars, dwells[0], moves
+
+    def test_the_tip_stops_at_sizing_len_whoever_did_the_first_retract(self):
+        for skip in (0, 1):
+            tip_vars, height, _ = self._sizing_height(SKIP_FIRST=skip)
+            self.assertAlmostEqual(
+                height, tip_vars["sizing_len"], places=6,
+                msg="SKIP_FIRST=%d: the tip is held at %.1f mm, not at sizing_len=%.1f"
+                    % (skip, height, tip_vars["sizing_len"]))
+
+    def test_the_held_tip_is_clear_of_the_stuck_zone(self):
+        for skip in (0, 1):
+            tip_vars, height, _ = self._sizing_height(SKIP_FIRST=skip)
+            self.assertGreater(
+                height, tip_vars["stuck_len"],
+                "SKIP_FIRST=%d: held at %.1f mm, inside the %.1f mm that stays welded -- this is "
+                "the tip that snaps in two" % (skip, height, tip_vars["stuck_len"]))
+
+    def test_the_cooling_moves_never_dip_back_into_the_stuck_zone(self):
+        tip_vars, height, moves = self._sizing_height()
+        stuck = tip_vars["stuck_len"]
+        # everything from the moment the tip first clears the stuck zone up to the dwell
+        after = []
+        for kind, h in moves:
+            if after or h > stuck:
+                after.append(h)
+            if kind == "dwell":
+                break
+        self.assertGreater(len(after), 1, "the cooling moves must show up in the rendered sequence")
+        self.assertGreater(min(after), stuck,
+                           "a cooling move brings the tip down to %.1f mm, inside the %.1f mm "
+                           "stuck zone" % (min(after), stuck))
+
+    def test_the_cooling_moves_are_a_round_trip(self):
+        """They shear the thread; they must not move the tip, or they would undo the sizing."""
+        tip_vars, with_moves, _ = self._sizing_height()
+        _, without, _ = self._sizing_height(COOL_MOVES=0)
+        self.assertAlmostEqual(with_moves, without, places=6,
+                               msg="the cooling moves shifted the held tip by %.3f mm"
+                                   % (with_moves - without))
+
+    def test_a_tip_asked_for_inside_the_stuck_zone_is_refused_not_silently_made(self):
+        tip_vars, _, _ = self._sizing_height()
+        bad = tip_vars["stuck_len"] - 2
+        with self.assertRaises(RuntimeError) as cm:
+            self._render(SIZE=1, SIZING_LEN=bad)
+        msg = str(cm.exception)
+        self.assertIn("SIZING_LEN", msg, "the refusal must name the parameter at fault")
+        self.assertIn(str(bad), msg, "the refusal must quote the value received")
+        self.assertIn("docs/hotend-chromax-x12.md", msg, "the refusal must point at the drawing")
+
+    def test_the_stub_handed_to_the_blade_is_what_the_blade_really_leaves(self):
+        """The cut severs at blade_len, so what stays in the head is blade_len minus wherever the
+        tip is at that moment. The load is told that number and pushes exactly it out through the
+        nozzle, so a wrong one either leaves a plug behind or purges filament for nothing. It has
+        to follow the geometry, not be typed in: both branches are checked, and both cut at a
+        different height."""
+        for params, expected_tip in ((dict(SIZE=1), "sizing_len"), (dict(), "legacy")):
+            tip_vars, moves = self._render(**params)
+            out_lines = self._cut_lines(**params)
+            self.assertEqual(len(out_lines), 1, "exactly one cut per branch taken")
+            stub = float(out_lines[0].split("STUB=")[1].split()[0])
+            if expected_tip == "sizing_len":
+                tip_at_cut = tip_vars["sizing_len"]
+            else:
+                tip_at_cut = tip_vars["first_len"] + tip_vars["cut_len"]
+            self.assertAlmostEqual(
+                stub, tip_vars["blade_len"] - tip_at_cut, places=6,
+                msg="%s branch: told the load %.1f mm, but the blade leaves %.1f"
+                    % (expected_tip, stub, tip_vars["blade_len"] - tip_at_cut))
+            self.assertGreater(stub, 0., "a cut always leaves something below the blade")
+
+    def _cut_lines(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        out = env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
+        return [l.strip() for l in out.split("\n") if l.strip().startswith("YUMI_CUT_TIP")]
+
+    def test_a_cut_ends_the_pulling_there(self):
+        """slow_len + pull_len drag the tip out of the head and up into the PTFE -- 130 mm, for the
+        NO-CUT path. After a cut at blade_len the filament is already above the heatsink, out of
+        the hot zone, so pulling further buys nothing and only makes the reload longer. Nicolas,
+        09/11, seeing the tip parked at 200 mm: "t'es monte super haut, je n'ai jamais demande de
+        monter aussi haut... je dois du faire 70 plus 10." The clearance now lives in YUMI_CUT_TIP,
+        which is the only place that knows whether the blade really fired."""
+        tip_vars, _ = self._render()
+        self.assertAlmostEqual(tip_vars["blade_len"] + tip_vars["cut_clear"], 155., places=6,
+                               msg="the figure Nicolas set on camera: 150, where the tip just "
+                                   "shows at the inlet grommet, plus 5 mm so that it shows on every "
+                                   "inlet, the blue one included")
+        for params, cut in ((dict(SIZE=1), True), (dict(), True),
+                            (dict(SIZE=1, CUT=0), False), (dict(CUT=0), False)):
+            text = self._rendered(**params)
+            has_pull = "E-%g" % tip_vars["pull_len"] in text.replace(" ", "")
+            self.assertEqual(has_pull, not cut,
+                             "%s: the long no-cut pull must be %s"
+                             % (params, "absent after a cut" if cut else "present without one"))
+
+    def _rendered(self, **params):
+        import jinja2
+        m = macros(generator.generate(self.PRODUCT, catalog=CATALOG))
+        tip_vars = {}
+        for line in m["gcode_macro _YUMI_TIP"].split("\n"):
+            if line.startswith("variable_"):
+                k, _, v = line[len("variable_"):].partition(":")
+                tip_vars[k.strip()] = float(v.strip())
+        body = m["gcode_macro YUMI_UNLOAD_TIP"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+        return env.from_string(body).render(
+            printer={"gcode_macro _YUMI_TIP": tip_vars},
+            params={k: str(v) for k, v in params.items()},
+            action_raise_error=lambda m: (_ for _ in ()).throw(RuntimeError(m)))
+
+    def test_the_blade_never_cuts_a_section_that_was_still_soft(self):
+        """The section the blade cuts was, a moment earlier, at the height of the stub's length.
+        CUT_LEN=40 put it at 23 mm, inside the 25 mm stuck zone: it pinched instead of severing,
+        dragged the stub onto the head switch, and the load stalled (09/11). The default must stay
+        clear of that, and a value that is not must be refused before anything moves."""
+        tip_vars, _ = self._render()
+        foot = tip_vars["first_len"] + tip_vars["cut_len"]
+        stub = tip_vars["blade_len"] - foot
+        self.assertLessEqual(foot, tip_vars["stuck_len"],
+                             "the stub's foot at %.0f mm left the hot zone: it freezes swollen and "
+                             "wedges (hotend blocked 09/11 at 30)" % foot)
+        self.assertGreaterEqual(stub, tip_vars["stuck_len"] + 5,
+                                "the default cuts a section from %.0f mm" % stub)
+        for bad in (30, 40):
+            with self.assertRaises(RuntimeError) as cm:
+                self._render(CUT_LEN=bad)
+        msg = str(cm.exception)
+        self.assertIn("CUT_LEN=40", msg)
+        self.assertIn("at most", msg, "the refusal says what is accepted")
+
+    def test_a_cooling_stroke_that_would_dip_into_the_stuck_zone_is_refused(self):
+        tip_vars, _, _ = self._sizing_height()
+        too_long = tip_vars["sizing_len"] - tip_vars["stuck_len"] + 1
+        with self.assertRaises(RuntimeError) as cm:
+            self._render(SIZE=1, COOL_LEN=too_long)
+        msg = str(cm.exception)
+        self.assertIn("COOL_LEN", msg)
+        self.assertIn("COOL_MOVES=0", msg, "the refusal must say how to proceed anyway")
+
+
+
+class InsertingFilamentFeedsTheRightYms(unittest.TestCase):
+    """Inserting filament into a YMS outside a print must feed THAT YMS and nothing else.
+
+    It used to go through T{i+1}, because outside a print T<k>'s else branch doubles as
+    "insertion into YMS-k" -- but only T0..T{N-1} are generated, so the LAST YMS of every machine
+    called a macro that does not exist. Measured on the C335 on 09/11: filament inserted into
+    YMS-2 printed "Unknown command T2", and LOAD_YMS fed its 50 mm to YMS-1, which happened to be
+    synced. With nothing synced the feed goes to the fictitious extruder and the insertion
+    silently does nothing -- on the last YMS of every multi-YMS printer in the fleet.
+    """
+
+    PRODUCTS = ("C335_CX12_LW_04_2YMS", "C235_CX12_LW_04_7YMS")
+
+    def _inserts(self, product):
+        cfg = generator.generate(product, catalog=CATALOG)
+        blocks = re.findall(r"\ninsert_gcode:\n((?:[ \t]+.*\n)+)", cfg)
+        return cfg, blocks
+
+    def test_no_insertion_calls_a_tool_macro_that_does_not_exist(self):
+        for product in self.PRODUCTS:
+            cfg, blocks = self._inserts(product)
+            defined = set(re.findall(r"^\[gcode_macro (T\d+)\]", cfg, re.M))
+            for b in blocks:
+                called = set(re.findall(r"^\s+(T\d+)\s*$", b, re.M))
+                self.assertTrue(called <= defined, "%s: insertion calls %s, only %s exist"
+                                % (product, sorted(called - defined), sorted(defined)))
+
+    def test_outside_a_print_each_insertion_syncs_its_own_pusher_alone(self):
+        for product in self.PRODUCTS:
+            _, blocks = self._inserts(product)
+            n_yms = len(blocks)
+            self.assertGreater(n_yms, 1, product)
+            for i, b in enumerate(blocks):
+                outside = b.split("{% else %}", 1)[1].split("{% endif %}", 1)[0]
+                self.assertIn("SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=extruder" % i,
+                              outside, "%s YMS-%d: its own pusher is not synced" % (product, i + 1))
+                for j in range(n_yms):
+                    if j != i:
+                        self.assertIn('SYNC_EXTRUDER_MOTION EXTRUDER=extruder%d MOTION_QUEUE=""' % j,
+                                      outside, "%s YMS-%d: extruder%d left synced, it would move "
+                                      "too" % (product, i + 1, j))
+                self.assertIn("LOAD_YMS YMS=%d" % (i + 1), b,
+                              "%s YMS-%d: LOAD_YMS must be told which YMS it feeds" % (product, i + 1))
+
+    def _load_yms(self, n, pusher):
+        import jinja2
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro LOAD_YMS"].split("gcode:", 1)[1]
+        env = jinja2.Environment("{%", "%}", "{", "}")
+
+        def raise_error(msg):
+            raise RuntimeError(msg)
+
+        printer = {"yumi_filament_head": {"pusher": pusher},
+                   "save_variables": {"variables": {"printing_start": False}}}
+
+        class P(dict):
+            def __getattr__(self, k):
+                v = self[k]
+                return P(v) if isinstance(v, dict) else v
+        return env.from_string(body).render(printer=P(printer), params={"YMS": str(n)},
+                                            action_raise_error=raise_error)
+
+    def test_load_yms_feeds_when_its_own_pusher_alone_is_synced(self):
+        out = self._load_yms(2, "extruder1")
+        self.assertIn("G1 E50", out)
+
+    def test_load_yms_refuses_another_yms_pusher(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._load_yms(2, "extruder0")
+        msg = str(cm.exception)
+        self.assertIn("extruder1", msg, "the refusal names the pusher it needs")
+        self.assertIn("extruder0", msg, "and the one it found")
+
+    def test_load_yms_refuses_two_pushers_at_once(self):
+        with self.assertRaises(RuntimeError):
+            self._load_yms(2, "extruder0,extruder1")
+
+    def test_load_yms_refuses_the_fictitious_extruder(self):
+        with self.assertRaises(RuntimeError):
+            self._load_yms(2, "")
+
+
+
+class TheCutRecordsWhereItsTipWaits(unittest.TestCase):
+    """The load reads park_<pusher> to go straight to the switch instead of searching step by
+    step. The record has to be written by the cut that parks the tip, with the same two values the
+    unload uses, and only for a single synced pusher."""
+
+    def test_yumi_cut_tip_records_the_park_of_the_synced_pusher(self):
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_CUT_TIP"]
+        self.assertIn("SAVE_VARIABLE VARIABLE=park_{pusher} VALUE={t.blade_len + t.cut_clear}", body)
+        self.assertIn('"," not in pusher', body, "never with two pushers synced")
+        self.assertLess(body.index("CUT_FILAMENT"), body.index("park_{pusher}"),
+                        "recorded only once the blade has actually fired")
+
+    def test_the_pull_back_rides_on_the_way_back_to_the_pop_tool(self):
+        """Once cut, nothing holds the filament: X back to the pop tool and E-cut_clear on ONE line
+        (Nicolas, 09/11: "tu pourrais tout avoir sur la meme ligne"), after the blade fired."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_CUT_TIP"]
+        line = "G1 X{pop_x} E-{t.cut_clear} F{(xy_speed * 60)|int}"
+        self.assertIn(line, body)
+        self.assertLess(body.index("CUT_FILAMENT"), body.index(line))
+        self.assertNotIn("G1 E-{t.cut_clear}", body, "no separate pull with the head standing")
+        self.assertIn('printer["gcode_macro _YUMI_POP_TOOL"]', body,
+                      "the pop tool position comes from its single source")
+
+
+
+class AFirstRetractDoneOverThePartStillCounts(unittest.TestCase):
+    """PRINT_END and CANCEL_PRINT retract first_len over the part, then call YUMI_UNLOAD_TIP
+    SKIP_FIRST=1. The tip is up by first_len all the same: counted as 0, the blade's stub was
+    booked at 60 mm instead of 53 (09/11, after a cancel)."""
+
+    def test_skip_first_skips_the_move_not_the_millimetres(self):
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_UNLOAD_TIP"]
+        self.assertIn("{% set done = first_len %}", body)
+        self.assertNotIn("0.0 if params.SKIP_FIRST", body)
+        self.assertIn("YUMI_CUT_TIP STUB={t.blade_len - done - cut_len}", body)
+
+
+class AnXOnlyHomingLeavesZAlone(unittest.TestCase):
+    """Every G28 lifted Z by 20 mm blind, G28 X included, and the lifts piled up until the head
+    left the cameras' field on the C335 bench (09/11). X alone moves only the head along X at its
+    current height, as the blade stroke does, so it lifts nothing; any homing that moves the bed or
+    taps Z keeps its lift."""
+
+    def _override(self):
+        cfg = generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG)
+        return cfg[cfg.index("[homing_override]"):]
+
+    def test_the_lift_is_skipped_for_x_alone_only(self):
+        o = self._override()
+        self.assertIn("{% if not (has_x and not has_y and not has_z) %}", o)
+        guard = o.index("{% if not (has_x and not has_y and not has_z) %}")
+        lift = o.index("YUMI_Z_LIFT DIST=20")
+        end = o.index("{% endif %}", guard)
+        self.assertTrue(guard < lift < end, "the blind lift sits inside the X-alone guard")
+        self.assertTrue(guard < o.index("SET_KINEMATIC_POSITION Z=0") < end,
+                        "and so does the Z claim it needs")
 
 
 if __name__ == "__main__":

@@ -99,9 +99,15 @@ class Printer:
         self.button_callback = None
         self.handlers = {}
         self.command_error = CommandError
-        self.reactor = types.SimpleNamespace(monotonic=lambda: 0., pause=lambda t: None)
+        # time is the E position: a move at any speed "takes" its length, so the time the switch
+        # reports is where it fired, and find_past_position reads it back
+        self.reactor = types.SimpleNamespace(monotonic=lambda: self.pos[3], pause=lambda t: None)
+        self.pushers = {}   # 'extruder0' -> the extruder it is synced to, None = synced to nothing
         toolhead = types.SimpleNamespace(manual_move=self._manual_move, wait_moves=lambda: None,
-                                         get_position=lambda: list(self.pos))
+                                         get_position=lambda: list(self.pos),
+                                         get_extruder=lambda: types.SimpleNamespace(
+                                             get_name=lambda: "extruder",
+                                             find_past_position=lambda t: t))
         gcode = types.SimpleNamespace(register_command=lambda *a, **k: None,
                                       run_script_from_command=self.scripts.append,
                                       respond_raw=self.scripts.append)
@@ -109,20 +115,41 @@ class Printer:
             "toolhead": toolhead, "gcode": gcode,
             "gcode_move": types.SimpleNamespace(reset_last_position=lambda: self.scripts.append("<resync>")),
             "save_variables": types.SimpleNamespace(allVariables=self.variables),
+            "mcu": types.SimpleNamespace(estimated_print_time=lambda t: t),
         }
 
+    def with_tip(self, stub=None, **variables):
+        """A _YUMI_TIP macro the module can read, as SET_GCODE_VARIABLE would leave it. `stub` goes
+        to variables.cfg instead, which is where the blade records it so it survives a restart."""
+        self.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(variables=dict(variables))
+        if stub is not None:
+            self.variables["head_stub"] = stub
+        return self
+
+    def with_hotend(self, temperature, target=0.):
+        self.objects["extruder"] = types.SimpleNamespace(
+            get_heater=lambda: types.SimpleNamespace(
+                get_status=lambda t: {"temperature": temperature, "target": target}))
+        return self
+
     def _manual_move(self, coord, speed):
+        before = self.pos[3]
         for i, v in enumerate(coord):
             if v is not None:
                 self.pos[i] = v
         self.moves.append((round(self.pos[3], 3), speed))
         for f in self.feeders.values():
             f.moved_to(self.pos[3])
-        self.button_callback(0., 1 if self.pos[3] >= self.switch_at else 0)
+        crossed = before < self.switch_at <= self.pos[3]
+        self.button_callback(self.switch_at if crossed else self.pos[3],
+                             1 if self.pos[3] >= self.switch_at else 0)
 
     def lookup_objects(self, module=None):
         """Klipper's filter: every object, or those named `module` / `module <name>`."""
-        objs = list(self.objects.items()) + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+        objs = (list(self.objects.items())
+                + [("filament_motion_sensor " + n, f) for n, f in self.feeders.items()]
+                + [("extruder_stepper " + n, types.SimpleNamespace(motion_queue=q))
+                   for n, q in self.pushers.items()])
         return [(n, o) for n, o in objs if module is None or n == module or n.startswith(module + " ")]
 
     def lookup_object(self, name, default=KeyError):
@@ -162,16 +189,24 @@ class LoadToHead(unittest.TestCase):
         h, p = head(switch_at=47.)
         g = Gcmd()
         h.cmd_LOAD(g)
-        self.assertEqual(p.pos[3], 50., "47 mm to the switch, 5 mm steps: stops at 50")
+        self.assertEqual(p.pos[3], 50., "47 mm to the switch, 10 mm gentle moves: stops at 50")
         self.assertTrue(h.present)
         self.assertEqual(h.loaded_mm, 50.)
         self.assertIn("reached the head after 50 mm", g.messages[-1])
+
+    def test_a_first_load_meets_the_switch_gently_all_the_way(self):
+        """Tip position unknown: gentle moves at switch_speed from the start, the switch read after
+        each. The switch is a tiny plastic micro-switch, and there is time at the start of a print
+        (Nicolas, 09/11: "le premier chargement, tu peux le faire doux a 100%")."""
+        h, p = head(switch_at=12., switch_speed=2.)
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves, [(10., 2.), (20., 2.)])
         self.assertEqual(p.scripts[-2:], ["<resync>", "M117 Filament loaded"], "g-code E resynced after the feed")
 
     def test_preload_is_one_move_then_steps(self):
         h, p = head(switch_at=47.)
         h.cmd_LOAD(Gcmd(PRELOAD=40))
-        self.assertEqual([m[0] for m in p.moves], [40., 45., 50.])
+        self.assertEqual([m[0] for m in p.moves], [40., 50.])
 
     def test_step_is_the_call_parameter_or_the_default(self):
         """Declared on the call = a longer step for that call; not declared = the config default.
@@ -207,6 +242,47 @@ class LoadToHead(unittest.TestCase):
         self.assertEqual(p.moves, [], "no _YUMI_TIP macro in the stub: blind length 0, nothing fed")
 
 
+class TheFeederIsTestedByExtruding(unittest.TestCase):
+    """After an encoder runout the filament is at the nozzle, hot. It is extruded until the
+    encoder ticks again; pulling it back to reload it blocked the head (Nicolas, 09/11: "tu as
+    juste a extruder")."""
+
+    def _head(self, has_filament, temperature=230.):
+        h, p = head(switch_at=0.)
+        p.pushers = {"extruder1": "extruder"}
+        p.with_tip(purge_speed=3.7).with_hotend(temperature)
+        f = Feeder(has_filament=has_filament, detection_length=50.)
+        f.detected = False          # the runout dropped it
+        p.feeders["YMS-2"] = f
+        return h, p
+
+    def test_a_feeder_that_ticks_again_delivers_at_once(self):
+        h, p = self._head(has_filament=True)
+        h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertEqual(h.get_status(0.)["feeder_test"], "delivers")
+        self.assertEqual(p.moves, [(5., 3.7)], "one purge step, at the melt's flow limit")
+
+    def test_a_silent_feeder_is_jammed_after_its_check_length(self):
+        h, p = self._head(has_filament=False)
+        h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertEqual(h.get_status(0.)["feeder_test"], "jammed")
+        self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps")
+
+    def test_the_filament_is_never_pulled_back(self):
+        for has_filament in (True, False):
+            h, p = self._head(has_filament)
+            h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+            positions = [0.] + [m[0] for m in p.moves]
+            self.assertTrue(all(b > a for a, b in zip(positions, positions[1:])), p.moves)
+
+    def test_a_cold_nozzle_is_refused_before_any_move(self):
+        h, p = self._head(has_filament=True, temperature=150.)
+        with self.assertRaises(CommandError) as e:
+            h.cmd_FEEDER_TEST(Gcmd(SENSOR="YMS-2"))
+        self.assertIn("above 170", str(e.exception))
+        self.assertEqual(p.moves, [])
+
+
 class FeedingYms(unittest.TestCase):
     """SENSOR= names the YMS that feeds: its encoder must tick, or the load gives up early —
     Nicolas 07/09: 'tu vois bien que le motion sensor ne tourne pas, tu devrais détecter qu'il
@@ -217,7 +293,7 @@ class FeedingYms(unittest.TestCase):
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd(SENSOR="YMS-3", MAX=2500))
         self.assertIn("No filament coming from YMS-3", str(cm.exception))
-        self.assertEqual(p.pos[3], 60., "detection_length 50 + two 5 mm steps, not 2500")
+        self.assertEqual(p.pos[3], 70., "detection_length 50 + two 10 mm moves, not 2500")
 
     def test_a_failed_load_during_a_print_pauses_it_and_resume_retries(self):
         """C335 08/11: the YMS cable was unplugged and the print was lost. During a print the
@@ -309,6 +385,392 @@ class UnloadCheck(unittest.TestCase):
         h.cmd_UNLOAD_CHECK(g)
         self.assertEqual(p.moves, [])
         self.assertIn("out of the head", g.messages[0])
+
+
+
+class APusherHasToBeSyncedOrNothingMoves(unittest.TestCase):
+    """On a ChromaX12 an E move turns nothing unless T<n> synced a YMS pusher first.
+
+    [extruder] there is a fictitious motor on free pins; the pushers are the YMS steppers, a metre
+    of tube away. T<n>'s else branch -- the one that runs OUTSIDE a print -- deliberately syncs
+    none of them. So a sequence launched by hand drives the phantom: the g-code E axis advances
+    exactly as commanded, every move reports success, and not one millimetre of filament moves.
+
+    Measured on the C335 on 09/11: a full unload ran that way. 347 mm of commanded retraction, a
+    blade stroke fired on filament that was still whole, and the only visible symptom was a head
+    sensor that would not release -- which sent the whole investigation after the wrong cause for
+    half an hour. The lesson is not "sync first", it is that this must REFUSE instead of pretending.
+    """
+
+    def _head(self, pushers):
+        h, p = head()
+        p.pushers = dict(pushers)
+        return h, p
+
+    def test_no_synced_pusher_refuses_instead_of_feeding_the_phantom(self):
+        h, p = self._head({"extruder0": None, "extruder1": None})
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        msg = str(cm.exception)
+        self.assertIn("No pusher is synced", msg)
+        self.assertIn("extruder", msg, "the refusal names the extruder it found active")
+        self.assertIn("T<n>", msg, "and how to fix it in the normal case")
+        self.assertIn("SYNC_EXTRUDER_MOTION", msg, "and how to fix it by hand, outside a print")
+        self.assertEqual(p.moves, [], "not a single move may be queued")
+
+    def test_a_synced_pusher_lets_the_load_through(self):
+        h, p = self._head({"extruder0": "extruder", "extruder1": None})
+        h.cmd_LOAD(Gcmd())
+        self.assertTrue(p.moves, "with a pusher synced the load feeds normally")
+
+    def test_the_unload_check_refuses_too_rather_than_pulling_on_nothing(self):
+        h, p = self._head({"extruder0": None})
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_UNLOAD_CHECK(Gcmd())
+        self.assertIn("No pusher is synced", str(cm.exception))
+        self.assertEqual(p.moves, [], "it must not report 'unload failed' after pulling on air")
+
+    def test_the_synced_pusher_is_published_for_the_macros(self):
+        """YUMI_UNLOAD_TIP drives E itself, so it needs to read this before retracting."""
+        h, _ = self._head({"extruder0": None, "extruder1": None})
+        self.assertEqual(h.get_status(0.)["pusher"], "")
+        h, _ = self._head({"extruder0": "extruder", "extruder1": None})
+        self.assertEqual(h.get_status(0.)["pusher"], "extruder0")
+
+    def test_a_direct_drive_is_never_refused(self):
+        """No extruder_stepper at all: [extruder] is the real motor and always moves."""
+        h, p = self._head({})
+        self.assertEqual(h.get_status(0.)["pusher"], "extruder")
+        h.cmd_LOAD(Gcmd())
+        self.assertTrue(p.moves)
+
+
+
+class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
+    """Loading pushes filament down a tube; the run current is sized for retractions and for
+    pushing melt through the nozzle. Nicolas 09/11: "il n'y a pas besoin d'avoir de force. Si il y
+    a une contrainte, il ne faut pas qu'on bouffe le filament." A pusher too weak for an
+    obstruction skips and the load reports a failure; one strong enough grinds a flat into the
+    filament and from then on nothing feeds at all. CURRENT= exists because finding the lowest
+    current that still pulls a full metre of tube is a sweep, and a config option costs a restart
+    per value."""
+
+    def _head(self, **cfg):
+        h, p = head(**cfg)
+        p.pushers = {"extruder0": "extruder", "extruder1": None}
+        p.objects["tmc2209 extruder_stepper extruder0"] = types.SimpleNamespace(
+            get_status=lambda t: {"run_current": 1.2, "hold_current": 0.3})
+        return h, p
+
+    def _currents(self, scripts):
+        return [l for l in scripts if isinstance(l, str) and l.startswith("SET_TMC_CURRENT")]
+
+    def test_the_configured_current_is_applied_then_put_back(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd())
+        c = self._currents(p.scripts)
+        self.assertEqual(len(c), 2, "exactly one lowering and one restore")
+        self.assertIn("CURRENT=0.600", c[0])
+        self.assertIn("STEPPER=extruder0", c[0])
+        self.assertIn("CURRENT=1.200", c[1], "the run current must come back, not the weak one")
+
+    def test_the_push_into_the_melt_runs_on_the_run_current(self):
+        """The weak current is for the descent and the switch only. Below the switch the new
+        filament meets the piece the blade left, and from there on it pushes melt: on 09/11 that
+        push at 0.4 A skipped the motor at 3.7 mm/s, while the purge right after, same speed at the
+        run current, went through clean. So the run current is back before the prime starts."""
+        h, p = self._head(load_current=0.4)
+        p.with_hotend(235.).with_tip(purge_speed=3.7)
+        log = []
+        h.gcode.run_script_from_command = lambda line: (p.scripts.append(line),
+                                                        log.append((line, len(p.moves))))
+        h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
+        c = self._currents(p.scripts)
+        self.assertEqual(len(c), 2, "one window, lowered for the descent then restored: %r" % c)
+        self.assertIn("CURRENT=0.400", c[0]); self.assertIn("CURRENT=1.200", c[1])
+        restored = [n for line, n in log if "CURRENT=1.200" in line][0]
+        self.assertTrue(p.moves[restored:], "the prime runs after the restore")
+        self.assertEqual({m[1] for m in p.moves[restored:]} & {2.}, set(),
+                         "the run current is back before any push past the gentle search: %r"
+                         % p.moves[restored:])
+
+    def test_a_prime_without_a_flow_limit_is_refused_and_says_how_to_set_it(self):
+        """The prime speed is purge_speed of _YUMI_TIP, the flow limit the purges obey too. Without
+        it there is no safe speed to guess (5 mm/s made the pusher skip on 09/11)."""
+        h, p = self._head(load_current=0.4)
+        p.with_hotend(235.)
+        with self.assertRaises(Exception) as e:
+            h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=purge_speed", str(e.exception))
+        self.assertIn("CURRENT=1.200", self._currents(p.scripts)[-1],
+                      "the run current comes back even when the prime is refused")
+
+    def test_only_the_synced_pusher_is_touched(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd())
+        self.assertNotIn("extruder1", " ".join(self._currents(p.scripts)),
+                         "an unsynced pusher does not move, so its current is none of our business")
+
+    def test_current_on_the_call_wins_over_the_config(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd(CURRENT="0.4"))
+        self.assertIn("CURRENT=0.400", self._currents(p.scripts)[0])
+
+    def test_zero_leaves_the_current_alone(self):
+        h, p = self._head(load_current=0.6)
+        h.cmd_LOAD(Gcmd(CURRENT="0"))
+        self.assertEqual(self._currents(p.scripts), [],
+                         "0 means do not touch, not set the driver to zero amps")
+
+    def test_unconfigured_leaves_the_current_alone(self):
+        h, p = self._head()
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(self._currents(p.scripts), [])
+
+    def test_the_current_is_restored_even_when_the_load_fails(self):
+        """The restore is the whole point: a machine left at 0.6 A would under-extrude silently."""
+        h, p = self._head(load_current=0.6, max_load=10)
+        p.switch_at = 10000.          # the switch never triggers
+        with self.assertRaises(CommandError):
+            h.cmd_LOAD(Gcmd())
+        c = self._currents(p.scripts)
+        self.assertIn("CURRENT=1.200", c[-1], "the run current comes back on the failure path too")
+
+
+
+class TheBladeLeavesAStubAndTheLoadOwnsIt(unittest.TestCase):
+    """A cut at 70 mm leaves everything below it in the head; the next load expels it through the
+    nozzle on its mandatory prime (see AColourChangeLoadsThroughAFreeSwitch). Where the machine
+    leaves that stub, under the switch, the switch is FREE.
+
+    A switch that reads filament while a stub is booked is therefore not a case to force but the
+    symptom of a failed cut. Measured on the C335 on 09/11: a cut through a section that was still
+    soft pinched instead of severing, the stub rode up with the filament onto the switch, and the
+    blind feed this case used to take pushed 250 mm at full current against it. So it is refused,
+    and nothing moves.
+    """
+
+    def _head(self, stub, switch_present):
+        h, p = head()
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=stub, head_to_nozzle=78., blade_len=70., cut_clear=85.).with_hotend(215.)
+        if switch_present:
+            p.button_callback(0., 1)
+        return h, p
+
+    def test_a_held_switch_with_a_stub_booked_is_refused_not_forced(self):
+        h, p = self._head(53., switch_present=True)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        msg = str(cm.exception)
+        self.assertIn("cut most likely failed", msg, "it says what the held switch means")
+        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", msg, "and how to clear the books")
+        self.assertEqual(p.moves, [], "not a millimetre is fed")
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
+                         "the stub is still there: the books must say so")
+
+    def test_no_stub_leaves_the_normal_path_alone(self):
+        h, p = self._head(0., switch_present=False)
+        h.cmd_LOAD(Gcmd())
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+        self.assertGreater(h.get_status(0.)["loaded_mm"], 0.)
+
+    def test_a_macro_variable_is_not_where_the_stub_lives(self):
+        """It has to survive a restart: a gcode variable lives in RAM, filament in the head does
+        not care about restarts."""
+        h, p = head()
+        p.pushers = {"extruder0": "extruder"}
+        p.with_hotend(215.)
+        p.objects["gcode_macro _YUMI_TIP"] = types.SimpleNamespace(
+            variables={"stub": 53., "head_to_nozzle": 78.})
+        self.assertEqual(h.get_status(0.)["stub"], 0.)
+
+    def test_the_stub_is_published(self):
+        h, _ = self._head(53., switch_present=False)
+        self.assertEqual(h.get_status(0.)["stub"], 53.)
+
+
+class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
+    """The blind feed assumed the filament coming back is the one just cut, parked at 150 mm. A
+    colour change brings ANOTHER filament from another YMS, possibly a metre away: 150 mm blind
+    would stop far short. But where the machine leaves the stub, its top at blade_len, under the
+    switch, the switch is FREE -- it read False after every clean cut on 09/11. So the arriving
+    filament, whichever YMS it comes from, stops at the switch, and the head_to_nozzle prime then
+    brings it to the nozzle and expels the stub on the same travel: verified, not blind."""
+
+    SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.,
+               blade_len=70., cut_clear=80., purge_speed=3.7)
+    STUB = 53.
+
+    def _head(self, switch_at, temperature=215.):
+        h, p = head(switch_at=switch_at, speed=16.7)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=self.STUB, **self.SEQ).with_hotend(temperature)
+        return h, p
+
+    def test_another_filament_far_back_still_reaches_the_nozzle(self):
+        h, p = self._head(switch_at=600.)
+        g = Gcmd()
+        h.cmd_LOAD(g)
+        self.assertNotIn("blind", " ".join(g.messages), "a free switch must be used, not bypassed")
+        loaded = h.get_status(0.)["loaded_mm"]
+        self.assertGreaterEqual(loaded, 600. + self.SEQ["head_to_nozzle"] - 1e-6,
+                                "fed %.1f mm: it stopped before the switch or skipped the prime"
+                                % loaded)
+        self.assertIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts)
+
+    def test_the_prime_that_expels_the_stub_runs_at_nozzle_speed(self):
+        h, p = self._head(switch_at=600.)
+        h.cmd_LOAD(Gcmd())
+        last = p.moves[-1]
+        self.assertEqual(last[1], self.SEQ["purge_speed"],
+                         "the stub goes through the orifice: purge_speed of _YUMI_TIP")
+
+    def test_the_cut_filament_coming_back_is_verified_too(self):
+        """Parked at 150 mm, it meets the switch at 78 after 72 mm, then primes 78."""
+        h, p = self._head(switch_at=72.)
+        g = Gcmd()
+        h.cmd_LOAD(g)
+        self.assertNotIn("blind", " ".join(g.messages))
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 72. + 78., delta=0.01,
+                               msg="to the switch to the millimetre, then the full prime")
+
+    def test_an_unreadable_hotend_temperature_is_not_hot_enough(self):
+        h, p = head(switch_at=72.)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=self.STUB, **self.SEQ)          # no hotend object: unreadable
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        self.assertIn("cannot be read", str(cm.exception))
+
+    def test_a_cold_hotend_stops_before_the_prime_and_keeps_the_books(self):
+        h, p = self._head(switch_at=72., temperature=150.)
+        with self.assertRaises(CommandError) as cm:
+            h.cmd_LOAD(Gcmd())
+        self.assertIn("blocks the head", str(cm.exception))
+        self.assertNotIn("SAVE_VARIABLE VARIABLE=head_stub VALUE=0", p.scripts,
+                         "the stub is still there: the books must say so")
+
+
+
+class AKnownParkIsReachedInOneMove(unittest.TestCase):
+    """After a cut the machine knows where this pusher's tip waits (park_<pusher>, 155 mm) and where
+    the switch is (78 mm): the stretch between them has nothing to detect. The stepped search reads
+    the switch every step and each read stops the motion -- 950 mm took 137 s for a commanded
+    16.7 mm/s on 09/11 -- so that stretch goes in one move and only the end is searched. Nicolas:
+    "le but dans ce changement de fil, c'est d'aller vite"."""
+
+    TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85., purge_speed=3.7)
+
+    def _head(self, park, switch_after, stub=0.):
+        h, p = head(switch_at=switch_after, speed=16.7, step=5, switch_speed=2.)
+        p.pushers = {"extruder0": "extruder"}
+        p.with_tip(stub=stub, **self.TIP).with_hotend(215.)
+        if park:
+            p.variables["park_extruder0"] = park
+        return h, p
+
+    def test_the_known_stretch_is_one_move_then_one_gentle_move_through_the_switch(self):
+        h, p = self._head(park=155., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves, [(72.0, 16.7), (82.0, 2.0)],
+                         "155 - 78 - 5 = 72 in one move, then 10 mm gentle, read once at the end")
+        self.assertIn("SAVE_VARIABLE VARIABLE=park_extruder0 VALUE=0", p.scripts,
+                      "the record is consumed: the tip is no longer parked")
+
+    def test_where_the_switch_fired_is_known_without_stopping(self):
+        """The switch reports its time; the step history gives the position then: 77, not 82."""
+        h, p = self._head(park=155., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=77.0", p.scripts)
+
+    def test_the_measured_distance_is_kept_for_the_next_fast_move(self):
+        """From 155 the switch came after 84 mm on YMS-1 and 89 on YMS-2 on 09/11, the same every
+        time, not the computed 77: the next fast move goes to 5 mm before the measured point
+        (Nicolas: "tu connais la distance")."""
+        h, p = self._head(park=155., switch_after=89.)
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=89.0", p.scripts)
+        h, p = self._head(park=155., switch_after=89.)
+        p.variables["switch_extruder0"] = 89.
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves, [(84.0, 16.7), (94.0, 2.0)])
+
+    def test_the_heat_up_runs_during_the_descent_and_is_waited_for_before_the_prime(self):
+        """A nozzle cooled by the ejection fan (226 for 235) is waited for, but only once the
+        descent and the switch are done: they need no heat (09/11: a wait before the load cost
+        9-10 s per change)."""
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        p.with_hotend(226., target=235.)
+        log = []
+        h.gcode.run_script_from_command = lambda line: (p.scripts.append(line),
+                                                        log.append((line, len(p.moves))))
+        h.cmd_LOAD(Gcmd())
+        waits = [(line, n) for line, n in log if line.startswith("TEMPERATURE_WAIT")]
+        self.assertEqual([w[0] for w in waits], ["TEMPERATURE_WAIT SENSOR=extruder MINIMUM=233"])
+        self.assertEqual(waits[0][1], 2, "after the fast move and the gentle one, before the prime")
+
+    def test_a_nozzle_at_temperature_is_not_waited_for(self):
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        p.with_hotend(234., target=235.)
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if str(x).startswith("TEMPERATURE_WAIT")])
+
+    def test_the_smallest_distance_is_kept_so_that_skipped_steps_never_overshoot(self):
+        """YMS-2 skipped steps on its 1.4 m tube (88 then 98 mm on 09/11): keeping 98 would send
+        the next fast move 10 mm past a switch met at 88 by a descent that lost fewer steps."""
+        h, p = self._head(park=155., switch_after=98.)
+        p.variables["switch_extruder0"] = 88.
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if "VARIABLE=switch_extruder0" in str(x)],
+                         "a longer distance does not replace the smaller one")
+        h, p = self._head(park=155., switch_after=85.)
+        p.variables["switch_extruder0"] = 88.
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=85.0", p.scripts)
+
+    def test_a_tip_moved_by_hand_is_not_kept(self):
+        """Keeping a 145 mm error would send the next fast move straight into the switch."""
+        h, p = self._head(park=155., switch_after=222.)
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if isinstance(x, str) and "switch_extruder0" in x])
+
+    def test_past_the_switch_the_melt_speed_before_the_piece(self):
+        """Switch at 78 from the nozzle, cut at 70: 8 mm of empty bore, then the piece the blade
+        left. The gentle move ends 5 mm past the switch, then purge_speed BEFORE the new filament
+        meets the piece (Nicolas, 09/11: "apres le capteur tu peux maximum pousser 10 mm a vitesse
+        et apres tu ralentis"); the prime counts what the gentle move already pushed."""
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        h.cmd_LOAD(Gcmd())
+        after = [m for m in p.moves if m[0] > 77. + 1e-6]
+        self.assertEqual(after, [(82., 2.), (155., self.TIP["purge_speed"])])
+        self.assertLess(5., self.TIP["head_to_nozzle"] - self.TIP["blade_len"])
+
+    def test_a_wrong_record_only_costs_time(self):
+        """The tip was pulled further back by hand: the stepped search simply goes on."""
+        h, p = self._head(park=155., switch_after=300.)
+        h.cmd_LOAD(Gcmd())
+        self.assertGreaterEqual(h.get_status(0.)["loaded_mm"], 300.)
+
+    def test_without_a_record_there_is_no_big_move(self):
+        h, p = self._head(park=0., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        steps = [b[0] - a[0] for a, b in zip([(0., 0.)] + p.moves, p.moves)]
+        self.assertTrue(all(x <= 10. + 1e-6 for x in steps) and {m[1] for m in p.moves} == {2.},
+                        "a fresh feeder is searched gently from the start: %r" % p.moves[:4])
+
+    def test_the_whole_prime_runs_at_nozzle_speed(self):
+        """The bore under the stub is not empty: melt stays stuck to the walls over the first
+        25 mm. A fast first stretch on the opposite premise pushed hard into that residue and
+        stalled the pusher on 09/11 ("tu pousses super fort alors que tu es deja en train
+        d'extruder")."""
+        h, p = self._head(park=0., switch_after=10., stub=53.)
+        h.cmd_LOAD(Gcmd())
+        at_switch = h.get_status(0.)["loaded_mm"] - 78.
+        prime = [sp for pos, sp in p.moves if pos > at_switch + 5. + 1e-6]
+        self.assertEqual(set(prime), {self.TIP["purge_speed"]},
+                         "past the switch, the prime pushes melt: purge_speed of _YUMI_TIP only, "
+                         "got %r" % sorted(set(prime)))
 
 
 if __name__ == "__main__":

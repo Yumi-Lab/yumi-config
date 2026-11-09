@@ -434,9 +434,13 @@ def render_extruder_steppers(p):
         lines.append(render_extruder_stepper(p, i, slot))
         lines.append("")
 
-        # Filament sensor — YMS-2 carries the smart motion sensor (jam detection)
+        # Filament sensor. EVERY channel carries the smart motion sensor: the hardware is the
+        # same on all of them (Nicolas, 09/11), and the jam detection used to be emitted for
+        # i == 1 only -- so it sat on YMS-2 while YMS-1, the channel actually plugged in on the
+        # bench, ran a bare Klipper motion sensor with no pitch and no blockage detection at all.
+        # The jam the operator suffered was watched by nothing.
         yms_num = i + 1
-        sensor_type = "filament_yumi_smart_motion_sensor" if i == 1 else "filament_motion_sensor"
+        sensor_type = "filament_yumi_smart_motion_sensor"
         if sensor_type in DOCUMENTED_MODULES:
             lines.append(module_doc(sensor_type))
         lines.append(f"[{sensor_type} YMS-{yms_num}]")
@@ -447,21 +451,22 @@ def render_extruder_steppers(p):
         # no dead time after an event: a re-insertion right after "INSERT NEXT FILAMENT" would
         # otherwise flip the state without firing (Klipper's default event_delay is 3 s)
         lines.append("event_delay: 0.0001")
-        if i == 1:
-            lines.append(f"motor: extruder{i}  # this YMS's feeder: a tick while the extruder moves counts only when it drives")
-            lines.append("blockage_detection: True")
-            lines.append("min_pitch: 0.7")
-            lines.append("max_pitch: 2.6")
-            lines.append("blockage_threshold: 2")
-            lines.append("reset_motion_sensor_threshold: 16")
-            lines.append("pitch_view: True")
-            lines.append("low_pitch_filter: 0.015")
+        # YMS-n is fed by extruder_stepper extruder{n-1}, so extruder{i} for every channel
+        lines.append(f"motor: extruder{i}  # this YMS's feeder: a tick while the extruder moves counts only when it drives")
+        lines.append("blockage_detection: True")
+        lines.append("min_pitch: 0.7")
+        lines.append("max_pitch: 2.6")
+        lines.append("blockage_threshold: 2")
+        lines.append("reset_motion_sensor_threshold: 16")
+        lines.append("pitch_view: True")
+        lines.append("low_pitch_filter: 0.015")
         lines.append("runout_gcode:")
         lines.append(f"  SAVE_VARIABLE VARIABLE=yms{yms_num}_sensor VALUE=False")
         lines.append("   {% set print_state = printer.print_stats.state %}")
         lines.append("    {% if print_state in ['printing', 'paused'] %}")
-        lines.append("        PAUSE")
-        lines.append(f"        RESPOND TYPE=error MSG=\"YMS-{yms_num} filament encoder runout\"")
+        # YUMI: a runout is a suspicion. YUMI_CONFIRM_RUNOUT pauses, then verifies the feeder
+        # and decides: resume on a false reading, cut and wait on a confirmed jam.
+        lines.append(f"        YUMI_CONFIRM_RUNOUT SENSOR=YMS-{yms_num}")
         lines.append("    {% else %}")
         lines.append(f"        RESPOND TYPE=error MSG=\"YMS-{yms_num} No printing running!\"")
         lines.append("    {% endif %}")
@@ -470,10 +475,23 @@ def render_extruder_steppers(p):
         lines.append("  {% if printer.save_variables.variables.printing_start %}")
         lines.append(f"        T{i}")
         lines.append("  {% else %}")
-        lines.append(f"        T{i+1}")
+        # Outside a print the insertion syncs ITS OWN pusher, directly. It used to call T{i+1},
+        # because outside a print T<k>'s else branch doubles as "insertion into YMS-k" -- but only
+        # T0..T{N-1} are generated, so the LAST YMS of every machine called a macro that does not
+        # exist: "Unknown command T2" on a 2-YMS printer, and LOAD_YMS then fed its 50 mm to
+        # whatever pusher happened to be synced. Measured 09/11: filament inserted into YMS-2
+        # advanced YMS-1 by 50 mm (it was synced for a test). With nothing synced, the feed goes
+        # to the fictitious extruder and the insertion silently does nothing.
+        lines.append("        SYNC_EXTRUDER_MOTION EXTRUDER=extruder MOTION_QUEUE=extruder")
+        for j in range(len(steppers)):
+            if j != i:
+                lines.append(f'        SYNC_EXTRUDER_MOTION EXTRUDER=extruder{j} MOTION_QUEUE=""')
+        lines.append(f"        SYNC_EXTRUDER_MOTION EXTRUDER=extruder{i} MOTION_QUEUE=extruder")
+        for j in range(len(steppers)):
+            lines.append(f"        SET_FILAMENT_SENSOR SENSOR=YMS-{j + 1} ENABLE={1 if j == i else 0}")
         lines.append("  {% endif %}")
         lines.append(f"  M117 YMS-{yms_num} Loading")
-        lines.append("  LOAD_YMS")
+        lines.append(f"  LOAD_YMS YMS={yms_num}")
         lines.append("")
 
         # Dryer after YMS-3
