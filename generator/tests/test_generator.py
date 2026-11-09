@@ -1355,6 +1355,18 @@ class TheCutRecordsWhereItsTipWaits(unittest.TestCase):
         self.assertLess(body.index("CUT_FILAMENT"), body.index("park_{pusher}"),
                         "recorded only once the blade has actually fired")
 
+    def test_the_pull_back_rides_on_the_way_back_to_the_pop_tool(self):
+        """Once cut, nothing holds the filament: X back to the pop tool and E-cut_clear on ONE line
+        (Nicolas, 09/11: "tu pourrais tout avoir sur la meme ligne"), after the blade fired."""
+        m = macros(generator.generate("C335_CX12_LW_04_2YMS", catalog=CATALOG))
+        body = m["gcode_macro YUMI_CUT_TIP"]
+        line = "G1 X{pop_x} E-{t.cut_clear} F{(xy_speed * 60)|int}"
+        self.assertIn(line, body)
+        self.assertLess(body.index("CUT_FILAMENT"), body.index(line))
+        self.assertNotIn("G1 E-{t.cut_clear}", body, "no separate pull with the head standing")
+        self.assertIn('printer["gcode_macro _YUMI_POP_TOOL"]', body,
+                      "the pop tool position comes from its single source")
+
 
 
 class AnXOnlyHomingLeavesZAlone(unittest.TestCase):
