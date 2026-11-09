@@ -45,6 +45,8 @@
 # Options ([yumi_filament_head], values in the printer.cfg generator's catalog):
 #   pin               the head switch (^!PA8: pull-up, the line floats otherwise; ! = filament pulls it low)
 #   speed             mm/s of the load steps (default 16.7, the QC feed rate)
+#   switch_speed      mm/s of the gentle stretch around the head switch when its position is known
+#                     (default 2): SWITCH_MARGIN mm before it in SWITCH_STEP mm steps, SWITCH_PASS after
 #   step              mm fed between two readings of the switch = maximum overshoot (default 5),
 #                     the default when the call carries no STEP=
 #   settle            s left after each step for the switch state to reach the host (default 0.02)
@@ -105,6 +107,9 @@ class YumiFilamentHead:
         self.present = False
         self.speed = config.getfloat('speed', 16.7, above=0.)               # mm/s, feed steps
         self.step = config.getfloat('step', 5., above=0.)                   # mm between two readings
+        # mm/s over the last SWITCH_MARGIN mm before the head switch and the SWITCH_PASS mm after
+        # it: the switch is a tiny plastic micro-switch, the filament must not hit its lever
+        self.switch_speed = config.getfloat('switch_speed', 2., above=0.)
         self.settle = config.getfloat('settle', 0.02, minval=0.)            # s, switch state latency
         self.max_load = config.getfloat('max_load', 800., above=0.)
         self.feeder_check = config.getfloat('feeder_check', 0., minval=0.)   # mm, 0 = from the sensor
@@ -496,8 +501,13 @@ class YumiFilamentHead:
         # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
         # runs outside the window: a current chosen to be too weak to chew would simply stall there.
         with self._reduced_current(gcmd):
-            fed = self._approach_from_park(gcmd)
-            fed += self._feed_to_switch(gcmd)
+            approach, expected = self._approach_from_park(gcmd)
+            if expected is None:
+                fed = self._feed_to_switch(gcmd)
+            else:
+                fed = approach + self._feed_to_switch(gcmd, step=self.SWITCH_STEP,
+                                                      speed=self.switch_speed)
+                self._learn_slack(gcmd, expected, fed)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         # a stub left by the blade has to come out even when head_to_nozzle is 0 (the slicer owns
         # the prime by decision): a head with a plug in it is not loaded, and the slicer's own
@@ -550,16 +560,57 @@ class YumiFilamentHead:
             # capteur, il faut que tu pousses doucement"). Against a resistance the motor stalls
             # instead of chewing; the change raises the nozzle temperature so that the melt takes
             # the flow without needing force.
+            nozzle_speed = self._nozzle_speed(gcmd)
             with self._reduced_current(gcmd):
-                self._move_e(prime, self._nozzle_speed(gcmd))
+                # past the switch lever gently first, then back up to the melt's flow limit
+                # (Nicolas, 09/11: "tu descends tout doucement, tu le passes et apres tu peux
+                # reaccelerer")
+                passing = min(self.SWITCH_PASS, prime)
+                self._move_e(passing, self.switch_speed)
+                if prime > passing:
+                    self._move_e(prime - passing, nozzle_speed)
             fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.loaded_mm = fed
         self.gcode.run_script_from_command("M117 Filament loaded")
 
-    # mm before the switch where a known-park approach hands over to the stepped search
-    APPROACH_MARGIN = 10.
+    # Around the head switch, when the machine knows where it is: one fast move down to
+    # SWITCH_MARGIN mm before it, then SWITCH_STEP mm steps at switch_speed until it triggers, then
+    # SWITCH_PASS mm at switch_speed before the prime speeds up. Nicolas, 09/11: "il faut que tu
+    # t'arretes 5 mm avant, tu descends tout doucement, tu le passes et apres tu peux reaccelerer"
+    # -- "avance d'un millimetre jusqu'a ce qu'il se detecte et tu sauras exactement ou il est".
+    SWITCH_MARGIN = 5.
+    SWITCH_STEP = 1.
+    SWITCH_PASS = 5.
+    # mm the measured distance may differ from the geometry and still be learned. The filament
+    # takes up slack in the tube: from a tip parked at 155 the switch (78) came after 87 mm on
+    # YMS-1 and 92 on YMS-2 on 09/11, not 77. Beyond this bound the tip was moved by hand: learning
+    # it would send the next fast move into the switch.
+    SLACK_MAX = 30.
+
+    def _slack_of(self, pusher):
+        sv = self.printer.lookup_object('save_variables', None)
+        if sv is None or not pusher:
+            return 0.
+        try:
+            return float(sv.allVariables.get('slack_' + pusher, 0.))
+        except (TypeError, ValueError):
+            return 0.
+
+    def _learn_slack(self, gcmd, expected, fed):
+        """Record how far beyond the geometry this pusher actually met the switch."""
+        pusher = self._synced_pushers()[0]
+        slack = round(fed - expected, 1)
+        if abs(slack) > self.SLACK_MAX:
+            gcmd.respond_info("switch met after %.0f mm from the park, %.0f expected: off by more "
+                              "than %.0f mm, the tip was moved by hand -- not learned"
+                              % (fed, expected, self.SLACK_MAX))
+            return
+        gcmd.respond_info("switch met after %.1f mm from the park (geometry %.0f): slack %+.1f mm "
+                          "learned for %s" % (fed, expected, slack, pusher))
+        self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=slack_%s VALUE=%s"
+                                           % (pusher, slack))
 
     def _park_of(self, pusher):
         sv = self.printer.lookup_object('save_variables', None)
@@ -571,12 +622,13 @@ class YumiFilamentHead:
             return 0.
 
     def _approach_from_park(self, gcmd):
-        """One move over the stretch where there is nothing to detect.
+        """One move over the stretch where there is nothing to detect. Returns (mm fed, mm at
+        which the switch is expected), the latter None when the tip position is not known.
 
         The stepped search reads the switch every `step` mm, and each read stops the motion: 950 mm
         took 137 s for a commanded 16.7 mm/s on 09/11. After a cut the machine KNOWS where this
         pusher's tip waits -- YUMI_CUT_TIP records park_<pusher> -- and where the switch is, so the
-        stretch between them is fed in a single move, down to APPROACH_MARGIN before the switch,
+        stretch between them is fed in a single move, down to SWITCH_MARGIN before the switch,
         and the stepped search only covers the end (Nicolas, 09/11: "tu sais exactement de combien
         tu veux charger, tu sais a combien tu attends ton capteur, donc ce n'est pas la peine de
         faire plein d'essais" -- the point of a colour change is to be fast). A wrong record costs
@@ -584,24 +636,29 @@ class YumiFilamentHead:
         record is consumed by the load."""
         pushers = self._synced_pushers()
         if len(pushers) != 1 or self._present():
-            return 0.
+            return 0., None
         park = self._park_of(pushers[0])
         if park <= 0.:
-            return 0.
+            return 0., None
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=park_%s VALUE=0" % pushers[0])
-        approach = park - self._switch_to_nozzle() - self.APPROACH_MARGIN
-        if approach <= 0.:
-            return 0.
-        gcmd.respond_info("tip parked at %.0f mm: %.0f mm in one move, then the stepped search"
-                          % (park, approach))
-        self._move_e(approach, self.speed)
-        return approach
+        geometry = park - self._switch_to_nozzle()
+        expected = geometry + self._slack_of(pushers[0])
+        approach = max(0., expected - self.SWITCH_MARGIN)
+        gcmd.respond_info("tip parked at %.0f mm, switch expected after %.0f mm: %.0f mm in one "
+                          "move, then %.0f mm steps at %.1f mm/s"
+                          % (park, expected, approach, self.SWITCH_STEP, self.switch_speed))
+        if approach > 0.:
+            self._move_e(approach, self.speed)
+        return approach, geometry
 
-    def _feed_to_switch(self, gcmd):
-        """Down the tube until the head switch sees it; returns the mm fed."""
-        speed = gcmd.get_float('SPEED', self.speed, above=0.)
+    def _feed_to_switch(self, gcmd, step=None, speed=None):
+        """Down the tube until the head switch sees it; returns the mm fed. step/speed: the
+        gentle search around a switch whose position is known."""
+        if speed is None:
+            speed = gcmd.get_float('SPEED', self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
-        step = self.load_step(gcmd)
+        if step is None:
+            step = self.load_step(gcmd)
         preload = gcmd.get_float('PRELOAD', 0., minval=0.)
         feeder = self._feeder(gcmd, step)
         if self.bypass:

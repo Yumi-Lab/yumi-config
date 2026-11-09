@@ -598,23 +598,60 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
 
     TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85., purge_speed=3.7)
 
-    def _head(self, park, switch_after, stub=0.):
-        h, p = head(switch_at=switch_after, speed=16.7, step=5)
+    def _head(self, park, switch_after, stub=0., slack=None):
+        h, p = head(switch_at=switch_after, speed=16.7, step=5, switch_speed=2.)
         p.pushers = {"extruder0": "extruder"}
         p.with_tip(stub=stub, **self.TIP).with_hotend(215.)
         if park:
             p.variables["park_extruder0"] = park
+        if slack is not None:
+            p.variables["slack_extruder0"] = slack
         return h, p
 
     def test_the_known_stretch_is_one_move_then_the_end_is_searched(self):
         h, p = self._head(park=155., switch_after=77.)
         h.cmd_LOAD(Gcmd())
-        self.assertEqual(p.moves[0], (67.0, 16.7),
-                         "155 - 78 - 10 = 67 mm in a single move, got %r" % (p.moves[:3],))
-        self.assertTrue(77. <= h.get_status(0.)["loaded_mm"] <= 82.,
-                        "then stepped onto the switch: %.1f" % h.get_status(0.)["loaded_mm"])
+        self.assertEqual(p.moves[0], (72.0, 16.7),
+                         "155 - 78 - 5 = 72 mm in a single move, got %r" % (p.moves[:3],))
+        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 77., delta=0.01,
+                               msg="the switch is found to the millimetre")
         self.assertIn("SAVE_VARIABLE VARIABLE=park_extruder0 VALUE=0", p.scripts,
                       "the record is consumed: the tip is no longer parked")
+
+    def test_the_last_millimetres_before_the_switch_are_gentle(self):
+        """The switch is a tiny plastic micro-switch (Nicolas, 09/11: "c'est hyper fragile"): from
+        5 mm before it, 1 mm steps at switch_speed until it triggers."""
+        h, p = self._head(park=155., switch_after=77.)
+        h.cmd_LOAD(Gcmd())
+        search = [m for m in p.moves if 72. < m[0] <= 77. + 1e-6]
+        self.assertEqual(search, [(73., 2.), (74., 2.), (75., 2.), (76., 2.), (77., 2.)])
+
+    def test_the_switch_is_passed_gently_then_the_prime_speeds_up(self):
+        """"tu le passes et apres tu peux reaccelerer": 5 mm at switch_speed, then purge_speed."""
+        h, p = self._head(park=155., switch_after=77., stub=53.)
+        h.cmd_LOAD(Gcmd())
+        after = [m for m in p.moves if m[0] > 77. + 1e-6]
+        self.assertEqual(after, [(82., 2.), (155., self.TIP["purge_speed"])])
+
+    def test_the_real_distance_is_measured_and_learned_per_pusher(self):
+        """The filament takes up slack in the tube: from 155 the switch came after 87 mm on
+        YMS-1 on 09/11, not 77. The measured difference is kept for this pusher."""
+        h, p = self._head(park=155., switch_after=87.)
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=slack_extruder0 VALUE=10.0", p.scripts)
+
+    def test_a_learned_slack_moves_the_fast_stretch(self):
+        h, p = self._head(park=155., switch_after=87., slack=10.)
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves[0], (82.0, 16.7), "77 + 10 - 5 in one move: %r" % (p.moves[:2],))
+        self.assertEqual(len([m for m in p.moves if 82. < m[0] <= 87. + 1e-6]), 5,
+                         "then the same five gentle millimetres")
+
+    def test_a_tip_moved_by_hand_is_not_learned(self):
+        """Learning a 145 mm error would send the next fast move straight into the switch."""
+        h, p = self._head(park=155., switch_after=222.)
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([s for s in p.scripts if isinstance(s, str) and "slack_" in s])
 
     def test_a_wrong_record_only_costs_time(self):
         """The tip was pulled further back by hand: the stepped search simply goes on."""
@@ -637,10 +674,10 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         h, p = self._head(park=0., switch_after=10., stub=53.)
         h.cmd_LOAD(Gcmd())
         at_switch = h.get_status(0.)["loaded_mm"] - 78.
-        prime = [sp for pos, sp in p.moves if pos > at_switch + 1e-6]
+        prime = [sp for pos, sp in p.moves if pos > at_switch + 5. + 1e-6]
         self.assertEqual(set(prime), {self.TIP["purge_speed"]},
-                         "the prime pushes melt: purge_speed of _YUMI_TIP only, got %r"
-                         % sorted(set(prime)))
+                         "past the switch, the prime pushes melt: purge_speed of _YUMI_TIP only, "
+                         "got %r" % sorted(set(prime)))
 
 
 if __name__ == "__main__":
