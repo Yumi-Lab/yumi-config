@@ -54,7 +54,8 @@
 #                     the earliest point where "no tick" is a verdict and not a lag
 #   head_to_nozzle    mm fed after the trigger, towards the nozzle. 0 by decision: the load stops at the
 #                     switch and the slicer's G-code drives the rest (prime, purge), tunable in Orca
-#   nozzle_speed      mm/s of that last stretch into the melt zone (default 5)
+#   (speed of that last stretch into the melt zone: purge_speed of the _YUMI_TIP macro, the one
+#    flow limit every push into the melt obeys, head or no head sensor)
 #   max_unload_extra  mm pulled at most by YUMI_UNLOAD_CHECK while the switch still sees filament (default 200)
 #   blind_load        mm fed when the sensor is bypassed; 0 = the unload total of _YUMI_TIP (default 0)
 #   min_temp          degC the hotend must have reached before head_to_nozzle is fed (default 170)
@@ -108,7 +109,6 @@ class YumiFilamentHead:
         self.max_load = config.getfloat('max_load', 800., above=0.)
         self.feeder_check = config.getfloat('feeder_check', 0., minval=0.)   # mm, 0 = from the sensor
         self.head_to_nozzle = config.getfloat('head_to_nozzle', 0., minval=0.)
-        self.nozzle_speed = config.getfloat('nozzle_speed', 5., above=0.)    # mm/s, into the melt zone
         self.max_unload_extra = config.getfloat('max_unload_extra', 200., minval=0.)
         self.load_current = config.getfloat('load_current', 0., minval=0.)
         self.blind_load = config.getfloat('blind_load', 0., minval=0.)
@@ -380,6 +380,21 @@ class YumiFilamentHead:
             return 0.
         return max(0., float(tip.variables.get('head_to_nozzle', 0.)))
 
+    def _nozzle_speed(self, gcmd):
+        """mm/s of any push into the melt zone: purge_speed of _YUMI_TIP. One flow limit for the
+        prime here and for the purges of the macros, which run on machines without a head sensor
+        too. 09/11: 5 mm/s (12 mm3/s) made the pusher skip during the prime; Nicolas: 9 mm3/s at
+        235 degC."""
+        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
+        speed = float(tip.variables.get('purge_speed', 0.)) if tip is not None else 0.
+        if speed <= 0.:
+            raise gcmd.error(
+                "YUMI_LOAD_TO_HEAD: no speed for the prime into the nozzle: purge_speed of "
+                "[gcode_macro _YUMI_TIP] is %s. Set it (mm/s; 3.7 = 9 mm3/s of 1.75 mm filament), "
+                "e.g. SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=purge_speed VALUE=3.7, and load "
+                "again." % ("missing" if tip is None else tip.variables.get('purge_speed')))
+        return speed
+
     def _stub(self):
         """mm the blade left in the head, from variables.cfg (head_stub, set by YUMI_CUT_TIP).
 
@@ -536,7 +551,7 @@ class YumiFilamentHead:
             # instead of chewing; the change raises the nozzle temperature so that the melt takes
             # the flow without needing force.
             with self._reduced_current(gcmd):
-                self._move_e(prime, self.nozzle_speed)
+                self._move_e(prime, self._nozzle_speed(gcmd))
             fed += prime
             if stub > 0:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")

@@ -423,12 +423,23 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
         well (a forced load jammed the blue on 09/11). Two windows, descent then prime, each put
         back to the run current."""
         h, p = self._head(load_current=0.4)
-        p.with_hotend(235.)
+        p.with_hotend(235.).with_tip(purge_speed=3.7)
         h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
         c = self._currents(p.scripts)
         self.assertEqual(len(c), 4, "lower+restore for the descent, then for the prime: %r" % c)
         self.assertIn("CURRENT=0.400", c[0]); self.assertIn("CURRENT=1.200", c[1])
         self.assertIn("CURRENT=0.400", c[2]); self.assertIn("CURRENT=1.200", c[3])
+
+    def test_a_prime_without_a_flow_limit_is_refused_and_says_how_to_set_it(self):
+        """The prime speed is purge_speed of _YUMI_TIP, the flow limit the purges obey too. Without
+        it there is no safe speed to guess (5 mm/s made the pusher skip on 09/11)."""
+        h, p = self._head(load_current=0.4)
+        p.with_hotend(235.)
+        with self.assertRaises(Exception) as e:
+            h.cmd_LOAD(Gcmd(HEAD_TO_NOZZLE="78"))
+        self.assertIn("SET_GCODE_VARIABLE MACRO=_YUMI_TIP VARIABLE=purge_speed", str(e.exception))
+        self.assertIn("CURRENT=1.200", self._currents(p.scripts)[-1],
+                      "the run current comes back even when the prime is refused")
 
     def test_only_the_synced_pusher_is_touched(self):
         h, p = self._head(load_current=0.6)
@@ -524,11 +535,11 @@ class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
     brings it to the nozzle and expels the stub on the same travel: verified, not blind."""
 
     SEQ = dict(first_len=7., cut_len=10., slow_len=20., pull_len=110., head_to_nozzle=78.,
-               blade_len=70., cut_clear=80.)
+               blade_len=70., cut_clear=80., purge_speed=3.7)
     STUB = 53.
 
     def _head(self, switch_at, temperature=215.):
-        h, p = head(switch_at=switch_at, nozzle_speed=5., speed=16.7)
+        h, p = head(switch_at=switch_at, speed=16.7)
         p.pushers = {"extruder0": "extruder"}
         p.with_tip(stub=self.STUB, **self.SEQ).with_hotend(temperature)
         return h, p
@@ -548,7 +559,8 @@ class AColourChangeLoadsThroughAFreeSwitch(unittest.TestCase):
         h, p = self._head(switch_at=600.)
         h.cmd_LOAD(Gcmd())
         last = p.moves[-1]
-        self.assertEqual(last[1], 5., "the stub goes through the orifice: nozzle speed")
+        self.assertEqual(last[1], self.SEQ["purge_speed"],
+                         "the stub goes through the orifice: purge_speed of _YUMI_TIP")
 
     def test_the_cut_filament_coming_back_is_verified_too(self):
         """Parked at 150 mm, it meets the switch at 78 after ~72 mm, then primes 78."""
@@ -584,10 +596,10 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
     16.7 mm/s on 09/11 -- so that stretch goes in one move and only the end is searched. Nicolas:
     "le but dans ce changement de fil, c'est d'aller vite"."""
 
-    TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85.)
+    TIP = dict(head_to_nozzle=78., blade_len=70., cut_clear=85., purge_speed=3.7)
 
     def _head(self, park, switch_after, stub=0.):
-        h, p = head(switch_at=switch_after, speed=16.7, nozzle_speed=5., step=5)
+        h, p = head(switch_at=switch_after, speed=16.7, step=5)
         p.pushers = {"extruder0": "extruder"}
         p.with_tip(stub=stub, **self.TIP).with_hotend(215.)
         if park:
@@ -626,7 +638,8 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         h.cmd_LOAD(Gcmd())
         at_switch = h.get_status(0.)["loaded_mm"] - 78.
         prime = [sp for pos, sp in p.moves if pos > at_switch + 1e-6]
-        self.assertEqual(set(prime), {5.0}, "the prime pushes melt: nozzle speed only, got %r"
+        self.assertEqual(set(prime), {self.TIP["purge_speed"]},
+                         "the prime pushes melt: purge_speed of _YUMI_TIP only, got %r"
                          % sorted(set(prime)))
 
 
