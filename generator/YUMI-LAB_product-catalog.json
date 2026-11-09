@@ -554,7 +554,7 @@
         "nozzle_speed": 5,
         "max_unload_extra": 200,
         "blind_load": 0,
-        "load_current": 0.2,
+        "load_current": 0.4,
         "min_temp": 170,
         "_comments": {
           "pin": "^ = tirage interne : sans lui la ligne du capteur flotte (lectures differentes d'un redemarrage a l'autre au banc)",
@@ -565,7 +565,7 @@
           "head_to_nozzle": "0 PAR DECISION (Nicolas 06/09) : T<n> s'arrete au capteur de tete et ne touche plus a rien ; la suite (amorce jusqu'a la buse, purge) est le G-code du slicer, pour rester reglable dans Orca sans mise a jour machine",
           "blind_load": "capteur bypasse : la charge tourne quand meme, a l'aveugle, sur cette longueur (0 = total de la sequence _YUMI_TIP)",
           "min_temp": "chauffe minimale pour la partie head_to_nozzle (zone de fusion)",
-          "load_current": "A on the pusher driver(s) while the filament travels DOWN THE TUBE, restored right after (0 = leave the configured current alone). CURRENT= on the call overrides it without a restart, which is how the window below was measured. Excludes the head_to_nozzle prime, which pushes melt through the orifice and keeps the full current. WHY so low: the descent needs almost no force, while the 1.2 A run current is sized for retractions and for pushing melt. A pusher strong enough to win against an obstruction wins by grinding a flat into the filament, and from then on NOTHING feeds -- the failure that stops machines. A pusher too weak skips, the load runs past max_load and says so, and the filament is intact. MEASURED on the C335 bench on 09/11, on the LONGEST tube (1 m), cold filament, 950 mm per load: 0.09 A fails outright (the YMS sensor saw nothing over 60 mm); 0.15, 0.21, 0.30 and 0.61 A all complete in 137-138 s, the same time, so there is no slip anywhere in that range and the tube is satisfied from 0.15. At 0.40 A the pusher still CHEWS the filament when it meets a real blockage (Nicolas, seen on the filament). So the usable window is about 0.12 to 0.40 and 0.2 sits in the middle of it: twice the measured floor, half the current that chews."
+          "load_current": "A on the pusher driver(s) while the filament travels DOWN THE TUBE, restored right after (0 = leave the configured current alone). CURRENT= on the call overrides it without a restart. Excludes the head_to_nozzle prime and the stub feed, which push melt through the orifice and keep the full current. WHY low at all: a pusher strong enough to win against an obstruction wins by grinding a flat into the filament, and from then on nothing feeds; one too weak stalls and the load reports it, filament intact (Nicolas: 'le moteur qui decroche, c'est mieux'). WHY 0.4 and not lower -- it is set by the LONGEST, most winding path, not by one channel. Measured on the C335 bench on 09/11: on YMS-1 (1 m of tube) 0.09 A fails and 0.15 to 0.61 A all load 950 mm in the same 137 s, so 0.2 was chosen. YMS-2 (about 1.3 m of tube, entering the head through another inlet) then stalled inside the head at 0.2 A and again at 0.3 A, buzzing, and passed at 0.4 A ('filament reached the head after 535 mm'). Trade-off accepted by Nicolas: at 0.4 A the pusher did chew once that morning, against a COLD nozzle (155 degC), so the margin against grinding is thinner than at 0.2. If a longer tube ever stalls at 0.4, the honest fix is per-YMS currents, not a blanket raise."
         }
       },
       "probe_pressure": {
