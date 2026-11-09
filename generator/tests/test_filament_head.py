@@ -675,6 +675,19 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         h.cmd_LOAD(Gcmd())
         self.assertFalse([x for x in p.scripts if str(x).startswith("TEMPERATURE_WAIT")])
 
+    def test_the_smallest_distance_is_kept_so_that_skipped_steps_never_overshoot(self):
+        """YMS-2 skipped steps on its 1.4 m tube (88 then 98 mm on 09/11): keeping 98 would send
+        the next fast move 10 mm past a switch met at 88 by a descent that lost fewer steps."""
+        h, p = self._head(park=155., switch_after=98.)
+        p.variables["switch_extruder0"] = 88.
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if "VARIABLE=switch_extruder0" in str(x)],
+                         "a longer distance does not replace the smaller one")
+        h, p = self._head(park=155., switch_after=85.)
+        p.variables["switch_extruder0"] = 88.
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=85.0", p.scripts)
+
     def test_a_tip_moved_by_hand_is_not_kept(self):
         """Keeping a 145 mm error would send the next fast move straight into the switch."""
         h, p = self._head(park=155., switch_after=222.)

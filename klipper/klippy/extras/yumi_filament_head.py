@@ -647,6 +647,16 @@ class YumiFilamentHead:
                               "than %.0f mm, the tip was moved by hand -- not kept"
                               % (measured, computed, self.MEASURE_MAX))
             return
+        # The SMALLEST distance is kept, not the last one. On a very long tube the weak load
+        # current skips steps on the fast descent (YMS-2 on 09/11: 88 then 98 mm, ~1.4 m of tube
+        # with a loop; Nicolas: better skipping than grinding). The fewer steps lost, the earlier
+        # the switch comes: aiming before the smallest distance, a fast move never reaches it, and
+        # a descent that lost more steps only costs gentle millimetres.
+        kept = self._measured_switch(pusher)
+        if kept > 0. and measured >= kept:
+            gcmd.respond_info("switch met after %.1f mm from the park (computed %.0f), %.1f kept "
+                              "for %s" % (measured, computed, kept, pusher))
+            return
         gcmd.respond_info("switch met after %.1f mm from the park (computed %.0f), kept for %s"
                           % (measured, computed, pusher))
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=switch_%s VALUE=%.1f"
