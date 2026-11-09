@@ -604,6 +604,9 @@ class ZTap:
         self._jog_without_homing(gcmd, 0., lambda: result.extend(self._lift(gcmd, dist, speed)))
         self._report_lift(gcmd, dist, *result)
 
+    # a stop shorter than this is the jolt of the Z motor starting, not a contact
+    START_KNOCK_MM = 1.0
+
     def cmd_Z_DOWN(self, gcmd):
         """Down without homing is only safe if contact stops it: the move runs as a homing move on
         the nozzle pressure switch, the same that taps Z, so touching the bed (or a part) ends it.
@@ -613,15 +616,34 @@ class ZTap:
         toolhead = self.printer.lookup_object('toolhead')
         phoming = self.printer.lookup_object('homing')
         probe = self.printer.lookup_object('probe_pressure')
+        gcode = self.printer.lookup_object('gcode')
         moved = []
 
         def down():
-            start = toolhead.get_position()
-            pos = list(start)
-            pos[2] = start[2] - dist
-            phoming.manual_home(toolhead, [(probe.mcu_probe, "z_down")], pos, speed,
-                                probe_pos=True, triggered=True, check_triggered=False)
-            moved.append(start[2] - toolhead.get_position()[2])
+            # The switch also fires on the jolt of the Z motor starting (09/11: stopped after
+            # 0.1 mm, head in the air, switch open at rest). The tap handles the same thing with
+            # settle_retries and probe_delay; the descent uses the same two settings: a stop
+            # within the first START_KNOCK_MM is a knock, so wait and go on with what remains. A
+            # nozzle really resting on something stops at once on every try, and nothing presses.
+            start = toolhead.get_position()[2]
+            remaining = dist
+            for i in range(self.settle_retries + 1):
+                pos = toolhead.get_position()
+                before = pos[2]
+                pos[2] = before - remaining
+                phoming.manual_home(toolhead, [(probe.mcu_probe, "z_down")], pos, speed,
+                                    probe_pos=True, triggered=True, check_triggered=False)
+                step = before - toolhead.get_position()[2]
+                remaining -= step
+                if remaining <= 0.01 or step >= self.START_KNOCK_MM:
+                    break
+                if i < self.settle_retries:
+                    gcmd.respond_info("YUMI_Z_DOWN: pressure switch fired at the start (motor "
+                                      "jolt) -> wait %.1fs and go on (%d/%d)"
+                                      % (self.probe_delay, i + 1, self.settle_retries))
+                    gcode.run_script_from_command("M400")
+                    gcode.run_script_from_command("G4 P%d" % int(self.probe_delay * 1000))
+            moved.append(start - toolhead.get_position()[2])
         self._jog_without_homing(gcmd, dist, down)
         if moved and moved[0] < dist - 0.01:
             gcmd.respond_info("YUMI_Z_DOWN: stopped after %.1f of %.1f mm: nozzle contact"
