@@ -398,6 +398,19 @@ class YumiFilamentHead:
         except (TypeError, ValueError):
             return 0.
 
+    # mm before the stub where the reload drops from tube speed to nozzle speed: the arriving tip
+    # must not ram the stub at tube speed, and the tip's exact position carries a few mm of slack
+    # from a metre of bowden
+    CONTACT_MARGIN = 5.
+
+    def _cut_geometry(self):
+        """(blade_len, cut_clear) from _YUMI_TIP, the single source the macros read."""
+        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
+        if tip is None:
+            return 0., 0.
+        v = tip.variables
+        return float(v.get('blade_len', 0)), float(v.get('cut_clear', 0))
+
     def _cut_wait_len(self):
         """mm from the nozzle where a cut leaves the upstream tip: blade_len + cut_clear.
 
@@ -405,11 +418,7 @@ class YumiFilamentHead:
         the unload and the reload together. Nicolas set the figure on 09/11 after seeing the tip
         parked at 200 mm: it has to come back 70 plus 10, so 80 mm after a cut.
         """
-        tip = self.printer.lookup_object('gcode_macro _YUMI_TIP', None)
-        if tip is None:
-            return 0.
-        v = tip.variables
-        return sum(float(v.get(k, 0)) for k in ('blade_len', 'cut_clear'))
+        return sum(self._cut_geometry())
 
     def _blind_load_len(self):
         """Blind load length: blind_load, or the tip-shaping unload total (single source)."""
@@ -454,7 +463,13 @@ class YumiFilamentHead:
 
     def _load(self, gcmd):
         self._require_pusher(gcmd)
-        if self._stub() > 0:
+        # A stub on the books does NOT by itself make the switch useless. Where the machine leaves
+        # it -- top at blade_len, under the switch -- the switch is FREE (read False after every
+        # clean cut on 09/11), so the normal path works and is verified: the arriving filament,
+        # whichever YMS it comes from, stops at the switch, and the prime below expels the stub on
+        # its way. Only a switch that reads present while a stub is booked is ambiguous -- the stub
+        # or something else could be holding it -- and only then is the load blind.
+        if self._stub() > 0 and self._present():
             return self._load_over_a_stub(gcmd)
         # the weak current covers the descent down the tube ONLY. The prime into the nozzle after
         # it pushes melt through a 0.4 mm orifice and genuinely needs the configured current, so it
@@ -512,7 +527,7 @@ class YumiFilamentHead:
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     def _load_over_a_stub(self, gcmd):
-        """Load when the blade left a piece in the head: the switch cannot be believed.
+        """Load when a stub is booked AND the switch reads present: it cannot be believed.
 
         That piece sits at the head switch and holds it, so `filament already at the head` is true
         of the STUB and says nothing about the filament arriving behind it. Measured on 09/11: the
@@ -566,9 +581,19 @@ class YumiFilamentHead:
         # ~40 mm3/s, about twice what a 0.4 mm nozzle melts, so the pusher skips and the tip stops
         # well short while the books say the full distance was fed. Measured 09/11: after a 200 mm
         # blind load at 16.7 mm/s, a 30 mm push at 2 mm/s flowed for only 2-3 s of its 15.
+        # Two speeds. From where the tip waits down to the top of the stub there is nothing ahead of
+        # it -- empty inlet, junction and head bore, all cold -- so that stretch runs at tube speed;
+        # from CONTACT_MARGIN before the stub on, the feed pushes the stub and then melt, so nozzle
+        # speed. With a park at 150 that is ~20 s instead of 30. A distance given by MAX= says
+        # nothing about where the stub sits, so it runs entirely at nozzle speed.
         feeder = self._feeder(gcmd, self.load_step(gcmd))
-        fed = self._stepped_feed(+1, distance, self.load_step(gcmd), self.nozzle_speed, None,
-                                 feeder)
+        step = self.load_step(gcmd)
+        blade_len, cut_clear = self._cut_geometry()
+        fast = 0. if given is not None else max(0., min(distance, cut_clear - self.CONTACT_MARGIN))
+        fed = 0.
+        if fast > 0.:
+            fed += self._stepped_feed(+1, fast, step, self.speed, None, feeder)
+        fed += self._stepped_feed(+1, distance - fast, step, self.nozzle_speed, None, feeder)
         self.loaded_mm = fed
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=head_stub VALUE=0")
         self.gcode.run_script_from_command("M117 Filament loaded")

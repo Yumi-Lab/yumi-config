@@ -1200,8 +1200,9 @@ class TipSizingArithmetic(unittest.TestCase):
         monter aussi haut... je dois du faire 70 plus 10." The clearance now lives in YUMI_CUT_TIP,
         which is the only place that knows whether the blade really fired."""
         tip_vars, _ = self._render()
-        self.assertAlmostEqual(tip_vars["blade_len"] + tip_vars["cut_clear"], 80., places=6,
-                               msg="the agreed figure is 70 + 10")
+        self.assertAlmostEqual(tip_vars["blade_len"] + tip_vars["cut_clear"], 150., places=6,
+                               msg="the figure Nicolas picked on camera: the tip just showing at "
+                                   "the inlet grommet, 150 mm from the nozzle")
         for params, cut in ((dict(SIZE=1), True), (dict(), True),
                             (dict(SIZE=1, CUT=0), False), (dict(CUT=0), False)):
             text = self._rendered(**params)
