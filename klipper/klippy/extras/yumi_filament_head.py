@@ -45,8 +45,9 @@
 # Options ([yumi_filament_head], values in the printer.cfg generator's catalog):
 #   pin               the head switch (^!PA8: pull-up, the line floats otherwise; ! = filament pulls it low)
 #   speed             mm/s of the load steps (default 16.7, the QC feed rate)
-#   switch_speed      mm/s at which the head switch is ALWAYS met (default 2), in 1 mm steps: from 5 mm
-#                     before it after a cut (fast before that), all the way on a first load
+#   switch_speed      mm/s at which the head switch is ALWAYS met (default 2), in moves of 10 mm read at
+#                     their end: from 5 mm before it after a cut (fast before that, to the distance this
+#                     YMS measured last time), all the way on a first load
 #   step              mm fed between two readings of the switch = maximum overshoot (default 5),
 #                     the default when the call carries no STEP=
 #   settle            s left after each step for the switch state to reach the host (default 0.02)
@@ -105,6 +106,8 @@ class YumiFilamentHead:
         buttons = self.printer.load_object(config, 'buttons')
         buttons.register_buttons([config.get('pin')], self._button_handler)
         self.present = False
+        self._trigger_time = None   # host time of the first "filament seen" since last armed
+        self._past_switch = 0.      # mm fed beyond the switch trigger by the last gentle search
         self.speed = config.getfloat('speed', 16.7, above=0.)               # mm/s, feed steps
         self.step = config.getfloat('step', 5., above=0.)                   # mm between two readings
         # mm/s over the last SWITCH_MARGIN mm before the head switch and the SWITCH_PASS mm after
@@ -139,6 +142,14 @@ class YumiFilamentHead:
 
     def _button_handler(self, eventtime, state):
         self.present = bool(state)
+        if state and self._trigger_time is None:
+            self._trigger_time = eventtime
+
+    def _e_at(self, eventtime):
+        """Extruder position at a past host time, from the step history: no MCU query."""
+        mcu = self.printer.lookup_object('mcu')
+        extruder = self.printer.lookup_object('toolhead').get_extruder()
+        return extruder.find_past_position(mcu.estimated_print_time(eventtime))
 
     def _present(self):
         """The switch state once the queued moves are done and the MCU had time to report it.
@@ -505,11 +516,10 @@ class YumiFilamentHead:
             # search is gentle, there is time at the start of a print (Nicolas, 09/11: "le premier
             # chargement, tu peux le faire doux a 100%"). Known position (after a cut): fast down
             # to 5 mm before the computed switch, gentle from there.
-            approach, expected = self._approach_from_park(gcmd)
+            approach, computed = self._approach_from_park(gcmd)
             fed = approach + self._feed_to_switch(gcmd, gentle=True)
-            if expected is not None:
-                gcmd.respond_info("switch met after %.0f mm from the park (computed %.0f)"
-                                  % (fed, expected))
+            if computed is not None:
+                self._record_switch(gcmd, fed - self._past_switch, computed)
         to_nozzle = gcmd.get_float('HEAD_TO_NOZZLE', self.head_to_nozzle, minval=0.)
         # a stub left by the blade has to come out even when head_to_nozzle is 0 (the slicer owns
         # the prime by decision): a head with a plug in it is not loaded, and the slicer's own
@@ -570,8 +580,11 @@ class YumiFilamentHead:
             # 3.7 mm/s skipped the motor as soon as the new filament met the piece, while the
             # purge right after, same speed at the run current, went through clean (Nicolas:
             # "apres le capteur tu peux maximum pousser 10 mm a vitesse et apres tu ralentis").
-            passing = min(self.SWITCH_PASS, prime)
-            self._move_e(passing, self.speed)
+            # the gentle move already went self._past_switch mm beyond the switch
+            prime = max(0., prime - self._past_switch)
+            passing = min(max(0., self.SWITCH_PASS - self._past_switch), prime)
+            if passing > 0.:
+                self._move_e(passing, self.speed)
             if prime > passing:
                 self._move_e(prime - passing, nozzle_speed)
             fed += prime
@@ -581,14 +594,42 @@ class YumiFilamentHead:
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     # Around the head switch: when the machine knows where it is, one fast move down to
-    # SWITCH_MARGIN mm before it; then (or from the start, on a first load) SWITCH_STEP mm steps at
-    # switch_speed until it triggers, then
-    # SWITCH_PASS mm at switch_speed before the prime speeds up. Nicolas, 09/11: "il faut que tu
-    # t'arretes 5 mm avant, tu descends tout doucement, tu le passes et apres tu peux reaccelerer"
-    # -- "avance d'un millimetre jusqu'a ce qu'il se detecte et tu sauras exactement ou il est".
+    # SWITCH_MARGIN mm before it; then (or from the start, on a first load) gentle moves of
+    # SWITCH_STEP mm at switch_speed, the switch read at the end of each, until it has fired.
+    # Nicolas, 09/11: "il faut que tu t'arretes 5 mm avant, tu descends tout doucement, tu le
+    # passes et apres tu peux reaccelerer".
     SWITCH_MARGIN = 5.
-    SWITCH_STEP = 1.
     SWITCH_PASS = 5.
+    # one gentle move covers the switch from SWITCH_MARGIN before to SWITCH_PASS after where it is
+    # expected, without a stop: the switch is read at the end, and where it fired is taken from
+    # the time it reported (Nicolas, 09/11: "tu vas doucement et tu traverses le capteur, une fois
+    # que tu as fini ton mouvement, tu verifies si le capteur a change")
+    SWITCH_STEP = SWITCH_MARGIN + SWITCH_PASS
+    # mm the measured switch distance may differ from the computed one and still be kept: beyond
+    # it the tip was moved by hand, and keeping it would send the next fast move into the switch
+    MEASURE_MAX = 30.
+    def _measured_switch(self, pusher):
+        sv = self.printer.lookup_object('save_variables', None)
+        if sv is None or not pusher:
+            return 0.
+        try:
+            return max(0., float(sv.allVariables.get('switch_' + pusher, 0.)))
+        except (TypeError, ValueError):
+            return 0.
+
+    def _record_switch(self, gcmd, measured, computed):
+        """Keep where this YMS met the switch from its park, for its next fast move."""
+        pusher = self._synced_pushers()[0]
+        if abs(measured - computed) > self.MEASURE_MAX:
+            gcmd.respond_info("switch met after %.1f mm from the park, %.0f computed: off by more "
+                              "than %.0f mm, the tip was moved by hand -- not kept"
+                              % (measured, computed, self.MEASURE_MAX))
+            return
+        gcmd.respond_info("switch met after %.1f mm from the park (computed %.0f), kept for %s"
+                          % (measured, computed, pusher))
+        self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=switch_%s VALUE=%.1f"
+                                           % (pusher, measured))
+
     def _park_of(self, pusher):
         sv = self.printer.lookup_object('save_variables', None)
         if sv is None or not pusher:
@@ -618,21 +659,29 @@ class YumiFilamentHead:
         if park <= 0.:
             return 0., None
         self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=park_%s VALUE=0" % pushers[0])
-        expected = park - self._switch_to_nozzle()
+        computed = park - self._switch_to_nozzle()
+        measured = self._measured_switch(pushers[0])
+        # the distance this YMS really needed last time: the filament does not meet the switch
+        # where the geometry says (from 155: 84 mm on YMS-1, 89 on YMS-2 on 09/11, computed 77),
+        # and it is the same every time for a given YMS
+        expected = measured if measured > 0. else computed
         approach = max(0., expected - self.SWITCH_MARGIN)
-        gcmd.respond_info("tip parked at %.0f mm, switch expected after %.0f mm: %.0f mm in one "
-                          "move, then %.0f mm steps at %.1f mm/s"
-                          % (park, expected, approach, self.SWITCH_STEP, self.switch_speed))
+        gcmd.respond_info("tip parked at %.0f mm, switch expected after %.0f mm (%s): %.0f mm in "
+                          "one move, then one gentle move through the switch at %.1f mm/s"
+                          % (park, expected, "measured last time" if measured > 0. else "computed",
+                             approach, self.switch_speed))
         if approach > 0.:
             self._move_e(approach, self.speed)
-        return approach, expected
+        return approach, computed
 
     def _feed_to_switch(self, gcmd, gentle=False):
-        """Down the tube until the head switch sees it; returns the mm fed. gentle: SWITCH_STEP
-        steps at switch_speed by default, so that the switch is met softly (STEP=/SPEED= of the
-        call still win). A bypassed switch is broken and never read: nothing to spare there, the
+        """Down the tube until the head switch sees it; returns the mm fed. gentle: moves of
+        SWITCH_STEP mm at switch_speed by default, so that the switch is met softly (STEP=/SPEED=
+        of the call still win), and self._past_switch = how far the last move went beyond the
+        point where the switch fired, from the time it reported. A bypassed switch is broken and never read: nothing to spare there, the
         blind load keeps the feed speed."""
         gentle = gentle and not self.bypass
+        self._past_switch = 0.
         speed = gcmd.get_float('SPEED', self.switch_speed if gentle else self.speed, above=0.)
         max_load = gcmd.get_float('MAX', self.max_load, above=0.)
         step = gcmd.get_float('STEP', self.SWITCH_STEP, above=0.) if gentle else self.load_step(gcmd)
@@ -657,6 +706,7 @@ class YumiFilamentHead:
                 fed = min(preload, max_load)
                 self._check_feeder(feeder, fed)
             if not self._present():
+                self._trigger_time = None
                 try:
                     fed += self._stepped_feed(+1, max_load - fed, step, speed, True, feeder)
                 except self.printer.command_error as e:
@@ -664,6 +714,10 @@ class YumiFilamentHead:
                         raise gcmd.error("No filament at the head after %.0f mm: check the spool and the feeder "
                                          "(SET_HEAD_SENSOR_BYPASS ENABLE=1 if the sensor is broken)" % max_load)
                     raise
+                if self._trigger_time is not None:
+                    # where in the last move the switch fired, from the time it reported
+                    now = self.printer.get_reactor().monotonic()
+                    self._past_switch = max(0., self._e_at(now) - self._e_at(self._trigger_time))
             gcmd.respond_info("filament reached the head after %.0f mm%s"
                               % (fed, (" (preload %.0f)" % preload) if preload > 0 else ""))
         return fed

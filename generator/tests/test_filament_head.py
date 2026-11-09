@@ -99,12 +99,15 @@ class Printer:
         self.button_callback = None
         self.handlers = {}
         self.command_error = CommandError
-        self.reactor = types.SimpleNamespace(monotonic=lambda: 0., pause=lambda t: None)
+        # time is the E position: a move at any speed "takes" its length, so the time the switch
+        # reports is where it fired, and find_past_position reads it back
+        self.reactor = types.SimpleNamespace(monotonic=lambda: self.pos[3], pause=lambda t: None)
         self.pushers = {}   # 'extruder0' -> the extruder it is synced to, None = synced to nothing
         toolhead = types.SimpleNamespace(manual_move=self._manual_move, wait_moves=lambda: None,
                                          get_position=lambda: list(self.pos),
                                          get_extruder=lambda: types.SimpleNamespace(
-                                             get_name=lambda: "extruder"))
+                                             get_name=lambda: "extruder",
+                                             find_past_position=lambda t: t))
         gcode = types.SimpleNamespace(register_command=lambda *a, **k: None,
                                       run_script_from_command=self.scripts.append,
                                       respond_raw=self.scripts.append)
@@ -112,6 +115,7 @@ class Printer:
             "toolhead": toolhead, "gcode": gcode,
             "gcode_move": types.SimpleNamespace(reset_last_position=lambda: self.scripts.append("<resync>")),
             "save_variables": types.SimpleNamespace(allVariables=self.variables),
+            "mcu": types.SimpleNamespace(estimated_print_time=lambda t: t),
         }
 
     def with_tip(self, stub=None, **variables):
@@ -129,13 +133,16 @@ class Printer:
         return self
 
     def _manual_move(self, coord, speed):
+        before = self.pos[3]
         for i, v in enumerate(coord):
             if v is not None:
                 self.pos[i] = v
         self.moves.append((round(self.pos[3], 3), speed))
         for f in self.feeders.values():
             f.moved_to(self.pos[3])
-        self.button_callback(0., 1 if self.pos[3] >= self.switch_at else 0)
+        crossed = before < self.switch_at <= self.pos[3]
+        self.button_callback(self.switch_at if crossed else self.pos[3],
+                             1 if self.pos[3] >= self.switch_at else 0)
 
     def lookup_objects(self, module=None):
         """Klipper's filter: every object, or those named `module` / `module <name>`."""
@@ -182,24 +189,24 @@ class LoadToHead(unittest.TestCase):
         h, p = head(switch_at=47.)
         g = Gcmd()
         h.cmd_LOAD(g)
-        self.assertEqual(p.pos[3], 47., "47 mm to the switch, 1 mm steps: stops at 47")
+        self.assertEqual(p.pos[3], 50., "47 mm to the switch, 10 mm gentle moves: stops at 50")
         self.assertTrue(h.present)
-        self.assertEqual(h.loaded_mm, 47.)
-        self.assertIn("reached the head after 47 mm", g.messages[-1])
+        self.assertEqual(h.loaded_mm, 50.)
+        self.assertIn("reached the head after 50 mm", g.messages[-1])
 
     def test_a_first_load_meets_the_switch_gently_all_the_way(self):
-        """Tip position unknown: 1 mm steps at switch_speed from the start. The switch is a tiny
-        plastic micro-switch, and there is time at the start of a print (Nicolas, 09/11: "le
-        premier chargement, tu peux le faire doux a 100%")."""
+        """Tip position unknown: gentle moves at switch_speed from the start, the switch read after
+        each. The switch is a tiny plastic micro-switch, and there is time at the start of a print
+        (Nicolas, 09/11: "le premier chargement, tu peux le faire doux a 100%")."""
         h, p = head(switch_at=12., switch_speed=2.)
         h.cmd_LOAD(Gcmd())
-        self.assertEqual(p.moves, [(float(i), 2.) for i in range(1, 13)])
+        self.assertEqual(p.moves, [(10., 2.), (20., 2.)])
         self.assertEqual(p.scripts[-2:], ["<resync>", "M117 Filament loaded"], "g-code E resynced after the feed")
 
     def test_preload_is_one_move_then_steps(self):
         h, p = head(switch_at=47.)
         h.cmd_LOAD(Gcmd(PRELOAD=40))
-        self.assertEqual([m[0] for m in p.moves], [40., 41., 42., 43., 44., 45., 46., 47.])
+        self.assertEqual([m[0] for m in p.moves], [40., 50.])
 
     def test_step_is_the_call_parameter_or_the_default(self):
         """Declared on the call = a longer step for that call; not declared = the config default.
@@ -245,7 +252,7 @@ class FeedingYms(unittest.TestCase):
         with self.assertRaises(CommandError) as cm:
             h.cmd_LOAD(Gcmd(SENSOR="YMS-3", MAX=2500))
         self.assertIn("No filament coming from YMS-3", str(cm.exception))
-        self.assertEqual(p.pos[3], 52., "detection_length 50 + two 1 mm steps, not 2500")
+        self.assertEqual(p.pos[3], 70., "detection_length 50 + two 10 mm moves, not 2500")
 
     def test_a_failed_load_during_a_print_pauses_it_and_resume_retries(self):
         """C335 08/11: the YMS cable was unplugged and the print was lost. During a print the
@@ -268,8 +275,8 @@ class FeedingYms(unittest.TestCase):
         p.feeders["YMS-3"] = Feeder(has_filament=True)
         g = Gcmd(SENSOR="YMS-3")
         h.cmd_LOAD(g)
-        self.assertEqual(p.pos[3], 147.)
-        self.assertIn("reached the head after 147 mm", g.messages[-1])
+        self.assertEqual(p.pos[3], 150.)
+        self.assertIn("reached the head after 150 mm", g.messages[-1])
 
     def test_without_sensor_only_the_head_switch_is_watched(self):
         h, p = head(switch_at=10000.)
@@ -440,11 +447,11 @@ class TheLoadCurrentIsWeakOnPurpose(unittest.TestCase):
         c = self._currents(p.scripts)
         self.assertEqual(len(c), 2, "one window, lowered for the descent then restored: %r" % c)
         self.assertIn("CURRENT=0.400", c[0]); self.assertIn("CURRENT=1.200", c[1])
-        moves_when_restored = [n for line, n in log if "CURRENT=1.200" in line][0]
-        at_switch = h.get_status(0.)["loaded_mm"] - 78.
-        self.assertEqual(moves_when_restored,
-                         len([m for m in p.moves if m[0] <= at_switch + 1e-6]),
-                         "the run current comes back right at the switch, before any prime move")
+        restored = [n for line, n in log if "CURRENT=1.200" in line][0]
+        self.assertTrue(p.moves[restored:], "the prime runs after the restore")
+        self.assertEqual({m[1] for m in p.moves[restored:]} & {2.}, set(),
+                         "the run current is back before any push past the gentle search: %r"
+                         % p.moves[restored:])
 
     def test_a_prime_without_a_flow_limit_is_refused_and_says_how_to_set_it(self):
         """The prime speed is purge_speed of _YUMI_TIP, the flow limit the purges obey too. Without
@@ -622,44 +629,48 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
             p.variables["park_extruder0"] = park
         return h, p
 
-    def test_the_known_stretch_is_one_move_then_the_end_is_searched(self):
+    def test_the_known_stretch_is_one_move_then_one_gentle_move_through_the_switch(self):
         h, p = self._head(park=155., switch_after=77.)
         h.cmd_LOAD(Gcmd())
-        self.assertEqual(p.moves[0], (72.0, 16.7),
-                         "155 - 78 - 5 = 72 mm in a single move, got %r" % (p.moves[:3],))
-        self.assertAlmostEqual(h.get_status(0.)["loaded_mm"], 77., delta=0.01,
-                               msg="the switch is found to the millimetre")
+        self.assertEqual(p.moves, [(72.0, 16.7), (82.0, 2.0)],
+                         "155 - 78 - 5 = 72 in one move, then 10 mm gentle, read once at the end")
         self.assertIn("SAVE_VARIABLE VARIABLE=park_extruder0 VALUE=0", p.scripts,
                       "the record is consumed: the tip is no longer parked")
 
-    def test_the_last_millimetres_before_the_switch_are_gentle(self):
-        """The switch is a tiny plastic micro-switch (Nicolas, 09/11: "c'est hyper fragile"): from
-        5 mm before it, 1 mm steps at switch_speed until it triggers."""
+    def test_where_the_switch_fired_is_known_without_stopping(self):
+        """The switch reports its time; the step history gives the position then: 77, not 82."""
         h, p = self._head(park=155., switch_after=77.)
         h.cmd_LOAD(Gcmd())
-        search = [m for m in p.moves if 72. < m[0] <= 77. + 1e-6]
-        self.assertEqual(search, [(73., 2.), (74., 2.), (75., 2.), (76., 2.), (77., 2.)])
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=77.0", p.scripts)
 
-    def test_past_the_switch_fast_through_the_empty_bore_then_the_melt_speed(self):
+    def test_the_measured_distance_is_kept_for_the_next_fast_move(self):
+        """From 155 the switch came after 84 mm on YMS-1 and 89 on YMS-2 on 09/11, the same every
+        time, not the computed 77: the next fast move goes to 5 mm before the measured point
+        (Nicolas: "tu connais la distance")."""
+        h, p = self._head(park=155., switch_after=89.)
+        h.cmd_LOAD(Gcmd())
+        self.assertIn("SAVE_VARIABLE VARIABLE=switch_extruder0 VALUE=89.0", p.scripts)
+        h, p = self._head(park=155., switch_after=89.)
+        p.variables["switch_extruder0"] = 89.
+        h.cmd_LOAD(Gcmd())
+        self.assertEqual(p.moves, [(84.0, 16.7), (94.0, 2.0)])
+
+    def test_a_tip_moved_by_hand_is_not_kept(self):
+        """Keeping a 145 mm error would send the next fast move straight into the switch."""
+        h, p = self._head(park=155., switch_after=222.)
+        h.cmd_LOAD(Gcmd())
+        self.assertFalse([x for x in p.scripts if isinstance(x, str) and "switch_extruder0" in x])
+
+    def test_past_the_switch_the_melt_speed_before_the_piece(self):
         """Switch at 78 from the nozzle, cut at 70: 8 mm of empty bore, then the piece the blade
-        left. 5 mm at the feed speed, then purge_speed BEFORE the new filament meets the piece
-        (Nicolas, 09/11: "apres le capteur tu peux maximum pousser 10 mm a vitesse et apres tu
-        ralentis")."""
+        left. The gentle move ends 5 mm past the switch, then purge_speed BEFORE the new filament
+        meets the piece (Nicolas, 09/11: "apres le capteur tu peux maximum pousser 10 mm a vitesse
+        et apres tu ralentis"); the prime counts what the gentle move already pushed."""
         h, p = self._head(park=155., switch_after=77., stub=53.)
         h.cmd_LOAD(Gcmd())
         after = [m for m in p.moves if m[0] > 77. + 1e-6]
-        self.assertEqual(after, [(82., 16.7), (155., self.TIP["purge_speed"])])
-        self.assertLess(5., self.TIP["head_to_nozzle"] - self.TIP["blade_len"],
-                        "the fast part ends before the piece the blade left")
-
-    def test_nothing_is_learned_the_switch_is_computed_every_time(self):
-        """Nicolas, 09/11: "je veux juste que tu calcules". A switch met further than computed only
-        adds gentle 1 mm steps, it never moves the next fast stretch."""
-        h, p = self._head(park=155., switch_after=87.)
-        h.cmd_LOAD(Gcmd())
-        self.assertFalse([x for x in p.scripts if isinstance(x, str) and "slack" in x])
-        self.assertEqual(p.moves[0], (72.0, 16.7))
-        self.assertEqual(len([m for m in p.moves if 72. < m[0] <= 87. + 1e-6]), 15)
+        self.assertEqual(after, [(82., 2.), (155., self.TIP["purge_speed"])])
+        self.assertLess(5., self.TIP["head_to_nozzle"] - self.TIP["blade_len"])
 
     def test_a_wrong_record_only_costs_time(self):
         """The tip was pulled further back by hand: the stepped search simply goes on."""
@@ -671,8 +682,8 @@ class AKnownParkIsReachedInOneMove(unittest.TestCase):
         h, p = self._head(park=0., switch_after=77.)
         h.cmd_LOAD(Gcmd())
         steps = [b[0] - a[0] for a, b in zip([(0., 0.)] + p.moves, p.moves)]
-        self.assertTrue(all(x <= 1. + 1e-6 for x in steps),
-                        "a fresh feeder is searched gently from the start: %r" % steps[:4])
+        self.assertTrue(all(x <= 10. + 1e-6 for x in steps) and {m[1] for m in p.moves} == {2.},
+                        "a fresh feeder is searched gently from the start: %r" % p.moves[:4])
 
     def test_the_whole_prime_runs_at_nozzle_speed(self):
         """The bore under the stub is not empty: melt stays stuck to the walls over the first
