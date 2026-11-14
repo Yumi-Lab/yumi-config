@@ -234,6 +234,10 @@ def _extruder_on_e0(model):
     pins = {_key(l): l for l in e0.splitlines() if _key(l) in E0_PIN_KEYS}
     pin = pins["dir_pin"].split(":", 1)[1].split("#")[0].strip().lstrip("!")
     pins["dir_pin"] = "dir_pin: %s%s" % ("!" if _dir_inverted(model) else "", pin)
+    # the head's own drive (rotation_distance / gear_ratio), not the YMS's BMG (14/11)
+    drive = {k: "%s: %s" % (k, v) for k, v in _head(model)["extruder"].items()
+             if k in ("rotation_distance", "gear_ratio")}
+    pins.update(drive)
     ext = "\n".join(pins.get(_key(l), l) for l in ext.splitlines())
     # the head motor's own current (catalog extruder_motor), not the YMS driver's
     current = _head(model).get("extruder_motor", {}).get("tmc2209", {})

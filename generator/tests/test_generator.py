@@ -138,6 +138,8 @@ class QCReference(unittest.TestCase):
         ("extruder", "step_pin"): "QC declares [extruder] on the fictive pins (CHROMAX-style cfg on a DD head); "
                                   "the direct drive product wires the real motor on E0",
         ("extruder", "dir_pin"): "same",
+        ("extruder", "rotation_distance"): "the DD head's own geared drive (36 mm round motor, 14.6 with 50:17, 14/11); "
+                                           "the QC cfg's [extruder] is the fictive ChromaX12 one (BMG 22.68)",
         ("extruder", "enable_pin"): "same",
         ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
         ("autotune_tmc stepper_y", "motor"): "same",
@@ -810,6 +812,8 @@ class Heads(unittest.TestCase):
         self.assertEqual(gen["autotune_tmc extruder"]["motor"], "36BYG1204-9M-6QHT")
         self.assertIn("motor_constants 36BYG1204-9M-6QHT", gen)
         self.assertEqual(float(gen["tmc2209 extruder"]["run_current"]), 0.8)
+        # its own geared drive (36 mm round motor), not the YMS's BMG 22.68
+        self.assertEqual(float(gen["extruder"]["rotation_distance"]), 14.6)
         self.assertFalse([s for s in gen if s.startswith("extruder_stepper")])
         self.assertEqual(gen["filament_motion_sensor filament_sensor"]["switch_pin"], slot0["filament_sensor_pin"])
 
