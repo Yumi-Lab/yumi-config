@@ -276,7 +276,8 @@ def render_tmc_autotune(p):
     at = p.get('extruder_stepper', {}).get('autotune')
     if at and at.get('motor'):
         if extruder_motor_slot(p) is not None:
-            blocks.append(emit("autotune_tmc extruder", at, AUTOTUNE_ORDER))
+            blocks.append(emit("autotune_tmc extruder",
+                               deep_merge(at, p.get('extruder_motor', {}).get('autotune', {})), AUTOTUNE_ORDER))
         for i, _slot in enumerate(extruder_steppers(p)):
             blocks.append(emit(f"autotune_tmc extruder_stepper extruder{i}", at, AUTOTUNE_ORDER))
     return join(*blocks)
@@ -358,7 +359,10 @@ def render_extruder(p):
         dir_pin = ('!' if e['dir_invert'] else '') + dir_pin.lstrip('!')
     e.update({"step_pin": _slot_pin(slot, 'step_pin'), "dir_pin": dir_pin,
               "enable_pin": _slot_pin(slot, 'enable_pin')})
-    tmc = deep_merge(p.get('extruder_stepper', {}).get('tmc2209', {}), {"uart_pin": _slot_pin(slot, 'uart_pin')})
+    # the head's own motor (extruder_motor) over the common E slot driver settings
+    tmc = deep_merge(deep_merge(p.get('extruder_stepper', {}).get('tmc2209', {}),
+                                p.get('extruder_motor', {}).get('tmc2209', {})),
+                     {"uart_pin": _slot_pin(slot, 'uart_pin')})
     return join(emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot", "dir_invert")),
                 emit("tmc2209 extruder", tmc, TMC_ORDER))
 

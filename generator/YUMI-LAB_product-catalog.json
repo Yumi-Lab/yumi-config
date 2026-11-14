@@ -694,6 +694,14 @@
           "max_current": 1.5,
           "steps_per_revolution": 200
         },
+        "36BYG1204-9M-6QHT": {
+          "_comment": "E: direct drive head motor, 36 mm geared (Shengyang datasheet YUMI C SERIES MOTORS, position E): 1.0 A, 2.5 ohm, 1.3 mH, >=110 mN.m",
+          "resistance": 2.5,
+          "inductance": 0.0013,
+          "holding_torque": 0.11,
+          "max_current": 1.0,
+          "steps_per_revolution": 200
+        },
         "42BYGH0728-B-20DH": {
           "_comment": "YMS (firmware descriptor name)",
           "resistance": 1.5,
@@ -1005,6 +1013,15 @@
         "extruder": {
           "motor_slot": 0,
           "dir_invert": true
+        },
+        "extruder_motor": {
+          "_doc": "The head motor is not a YMS motor: its own autotune constants and current (Nicolas 14/11). 0.8 A under its 1.0 A rating",
+          "tmc2209": {
+            "run_current": 0.8
+          },
+          "autotune": {
+            "motor": "36BYG1204-9M-6QHT"
+          }
         }
       },
       "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens inverse (!PB10, Nicolas 14/11 : le moteur de la tete DD tourne a l'envers du YMS sur le meme driver ; PB10 non inverse venait du QC C235) ; ratio 50:17."

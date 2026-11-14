@@ -806,6 +806,10 @@ class Heads(unittest.TestCase):
         self.assertEqual(gen["extruder"]["dir_pin"], "!" + slot0["dir_pin"].lstrip("!"))
         self.assertEqual(gen["tmc2209 extruder"]["uart_pin"], slot0["uart_pin"])
         self.assertIn("autotune_tmc extruder", gen)
+        # the head's own motor (Shengyang position E), not the YMS motor, under its 1.0 A rating
+        self.assertEqual(gen["autotune_tmc extruder"]["motor"], "36BYG1204-9M-6QHT")
+        self.assertIn("motor_constants 36BYG1204-9M-6QHT", gen)
+        self.assertEqual(float(gen["tmc2209 extruder"]["run_current"]), 0.8)
         self.assertFalse([s for s in gen if s.startswith("extruder_stepper")])
         self.assertEqual(gen["filament_motion_sensor filament_sensor"]["switch_pin"], slot0["filament_sensor_pin"])
 

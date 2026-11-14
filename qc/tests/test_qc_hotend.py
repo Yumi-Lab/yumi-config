@@ -89,6 +89,8 @@ class TestCfg(unittest.TestCase):
         self.assertNotIn("PA12", ext)
         tmc = dd[dd.index("[tmc2209 extruder]"):]
         self.assertIn("uart_pin: PB14", tmc[:tmc.index("\n[")])
+        # its own motor (36BYG1204-9M-6QHT, 1.0 A rated): 0.8 A, not the YMS driver's 1.2 A
+        self.assertIn("run_current: 0.8\n", tmc[:tmc.index("\n[")])
         self.assertIn("step_pin: PA12", x12)
         self.assertNotIn("[tmc2209 extruder]", x12)
         # the DD cleanup has no head switch loop to stop (UPDATE_DELAYED_GCODE unknown there)

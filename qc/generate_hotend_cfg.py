@@ -218,10 +218,13 @@ def _key(line):
     return None if line.lstrip().startswith("#") else line.split(":")[0].strip()
 
 
-def _dir_inverted(model):
+def _head(model):
     with open(CATALOG) as f:
-        comp = json.load(f)["components"][HEAD_COMPONENT[model]]
-    return bool(comp["config"]["extruder"].get("dir_invert"))
+        return json.load(f)["components"][HEAD_COMPONENT[model]]["config"]
+
+
+def _dir_inverted(model):
+    return bool(_head(model)["extruder"].get("dir_invert"))
 
 
 def _extruder_on_e0(model):
@@ -232,7 +235,13 @@ def _extruder_on_e0(model):
     pin = pins["dir_pin"].split(":", 1)[1].split("#")[0].strip().lstrip("!")
     pins["dir_pin"] = "dir_pin: %s%s" % ("!" if _dir_inverted(model) else "", pin)
     ext = "\n".join(pins.get(_key(l), l) for l in ext.splitlines())
-    tmc = "\n".join(["[tmc2209 extruder]"] + tmc.splitlines()[1:])
+    # the head motor's own current (catalog extruder_motor), not the YMS driver's
+    current = _head(model).get("extruder_motor", {}).get("tmc2209", {})
+    lines = []
+    for l in tmc.splitlines()[1:]:
+        key = _key(l)
+        lines.append("%s: %s" % (key, current[key]) if key in current else l)
+    tmc = "\n".join(["[tmc2209 extruder]"] + lines)
     return _section(ext) + _section(tmc)
 
 
