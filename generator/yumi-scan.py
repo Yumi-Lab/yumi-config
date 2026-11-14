@@ -8,7 +8,7 @@ Pour le QC usine et le SAV (carte vierge de config, printer.cfg casse, klippy en
 on doit pouvoir interroger la carte quand meme. Ce script parle directement au MCU avec
 le protocole Klipper (recupere le data dictionary, qui contient les constantes gravees).
 
-Tourne SUR LE PAD (host NanoPi/Pi), pas sur le VPS. Reutilise les libs de ~/klipper/klippy.
+Tourne SUR LE PAD (host SmartPi), pas sur le VPS. Reutilise les libs de ~/klipper/klippy.
 
 IMPORTANT : Klipper doit etre ARRETE (il occupe les ports serie) :
     sudo systemctl stop klipper

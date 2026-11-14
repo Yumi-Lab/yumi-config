@@ -536,7 +536,7 @@ def render_fans(p):
 
 
 def render_temp_sensors(p):
-    return emit("temperature_sensor NanoPi", p.get('host_temperature_sensor'))
+    return emit("temperature_sensor SmartPi", p.get('host_temperature_sensor'))
 
 
 def render_probe(p):
