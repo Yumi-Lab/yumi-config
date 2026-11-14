@@ -66,8 +66,8 @@
 #       first, -1 = driver not readable). Run at boot and by PRINT_START. REQUIRE=n: YMS-n must
 #       be plugged. SIGNATURE=1 (boot): also what is plugged on each output, from the PWM offset
 #       the driver learns at standstill (YMS motor, direct drive head motor, two motors on one
-#       driver); two motors (the head and YMS-1 on E0), or on a direct drive anything but the
-#       head motor alone on E0 (nothing, a YMS motor) = alert + Done prompt, saved as
+#       driver, nothing; a YMS motor and the head motor overlap, not told apart); two motors (the
+#       head and YMS-1 on E0), or on a direct drive no motor on E0 = alert + Done prompt, saved as
 #       `yms_motor_fault` ("E0", "" once fixed). BLOCK=1 (PRINT_START while a fault is on
 #       record): error if it is still there, so the print does not start.
 #   YUMI_RETRY_PENDING
@@ -223,14 +223,15 @@ class YumiFilamentHead:
     # drives that current through the coils (AT#1, pwm_ofs_auto): it follows the coil resistance.
     # AT#1 runs only at IRUN after a step (hold current set to run current, a 0.01 mm nudge back
     # and forth) and only in real stealthChop (en_spreadcycle 0 AND tpwmthrs 0). Measured on the
-    # C235 14/11 at 0.98 A, 3 readings each: direct drive head motor alone on E0 55-59, one YMS
-    # motor 42-47, the head and YMS-1 both on E0 (star wiring from the driver) 35, nothing 255.
+    # C235 14/11 at 0.98 A, 3 readings each: direct drive head motor alone on E0 52-59, YMS-2 motor
+    # 42-47, YMS-1 motor alone on E0 48-53, the head and YMS-1 both on E0 (star wiring from the
+    # driver) 35, nothing 255. One motor of either kind overlaps: only "two motors" and "nothing"
+    # are told apart reliably; a YMS motor vs the head needs a motion signature (not built).
     # Taken at boot, motors cold (Nicolas: the check runs when the customer starts the machine).
     SIGNATURE_NUDGE_MM = 0.01
     SIGNATURE_SETTLE_S = 1.5
-    SIGNATURE_TWO_MOTORS_MAX = 38   # below one YMS motor: two coils sets in parallel
-    SIGNATURE_YMS_MAX = 50          # one YMS motor
-    SIGNATURE_HEAD_MAX = 70         # the direct drive head motor; above: unknown
+    SIGNATURE_TWO_MOTORS_MAX = 38   # below any single motor seen (42): two coil sets in parallel
+    SIGNATURE_ONE_MOTOR_MAX = 70    # one motor, YMS or head (42-59 seen); above: nothing / unknown
     SIGNATURE_FIELDS = ("en_spreadcycle", "tpwmthrs")
     FAULT_VARIABLE = "yms_motor_fault"
 
@@ -280,25 +281,19 @@ class YumiFilamentHead:
     def _signature_kind(self, ofs):
         if ofs <= self.SIGNATURE_TWO_MOTORS_MAX:
             return "two motors"
-        if ofs <= self.SIGNATURE_YMS_MAX:
-            return "YMS motor"
-        if ofs <= self.SIGNATURE_HEAD_MAX:
-            return "direct drive head motor"
-        return "unknown"
+        if ofs <= self.SIGNATURE_ONE_MOTOR_MAX:
+            return "one motor"
+        return "nothing connected"
 
     def _head_fault_message(self, kind, ofs):
-        """None when E0 carries the direct drive head motor alone, else what to do."""
-        if kind == "direct drive head motor":
+        """None when E0 carries one motor, else what to do (which motor it is, a YMS or the head,
+        the standstill signature cannot tell)."""
+        if kind == "one motor":
             return None
         if kind == "two motors":
             return self._two_motors_message(1)
-        if kind == "YMS motor":
-            return ("A YMS motor is on E0 where the direct drive head motor is expected (signature %d): "
-                    "plug the head cable on E0, or choose the ChromaX12 head in Printer Config, then "
-                    "press Done. Printing is blocked until then." % ofs)
-        return ("No direct drive head motor on E0 (signature %d: nothing connected, or a motor this "
-                "check does not know): plug the head cable on E0, then press Done. Printing is "
-                "blocked until then." % ofs)
+        return ("No motor on E0 (signature %d): the direct drive head motor is not connected. Plug "
+                "the head cable on E0, then press Done. Printing is blocked until then." % ofs)
 
     def _two_motors_message(self, n):
         # the direct drive head always takes E0 = the YMS-1 output (Nicolas 14/11)

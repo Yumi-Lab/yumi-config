@@ -236,18 +236,17 @@ class FeedingYms(unittest.TestCase):
         self.assertFalse(h.get_status(0.)["pending"])
 
     def test_motor_signature_kinds_follow_the_c235_measurements(self):
-        """C235 14/11, pwm_ofs_auto at 0.98 A, 3 readings each: head 55-59, one YMS 42-47, the head
-        and YMS-1 on one driver 35, nothing 255."""
+        """C235 14/11, pwm_ofs_auto at 0.98 A: head 52-59, YMS-1 48-53, YMS-2 42-47 (one motor of
+        either kind, not told apart), head + YMS-1 on one driver 35, nothing 255."""
         h, p = head(switch_at=1.)
-        for ofs, kind in ((35, "two motors"), (42, "YMS motor"), (47, "YMS motor"),
-                          (55, "direct drive head motor"), (59, "direct drive head motor"), (255, "unknown")):
+        for ofs, kind in ((35, "two motors"), (42, "one motor"), (48, "one motor"), (53, "one motor"),
+                          (59, "one motor"), (255, "nothing connected")):
             self.assertEqual(h._signature_kind(ofs), kind, ofs)
         self.assertIn("Unplug the YMS-1 cable", h._two_motors_message(1))
         self.assertIn("(E0)", h._two_motors_message(1))
         # 14/11: head unplugged, nothing on E0 (255) went through without a word
-        self.assertIsNone(h._head_fault_message("direct drive head motor", 54))
-        self.assertIn("No direct drive head motor on E0", h._head_fault_message("unknown", 255))
-        self.assertIn("A YMS motor is on E0", h._head_fault_message("YMS motor", 43))
+        self.assertIsNone(h._head_fault_message("one motor", 52))
+        self.assertIn("No motor on E0", h._head_fault_message("nothing connected", 255))
         self.assertIn("Unplug the YMS-1 cable", h._head_fault_message("two motors", 35))
 
     def test_yms_with_filament_loads_to_the_head_as_before(self):
