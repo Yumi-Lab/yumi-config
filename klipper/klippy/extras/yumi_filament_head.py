@@ -66,7 +66,8 @@
 #       first, -1 = driver not readable). Run at boot and by PRINT_START. REQUIRE=n: YMS-n must
 #       be plugged. SIGNATURE=1 (boot): also what is plugged on each output, from the PWM offset
 #       the driver learns at standstill (YMS motor, direct drive head motor, two motors on one
-#       driver); two motors (the head and YMS-1 on E0) = alert + Done prompt, saved as
+#       driver); two motors (the head and YMS-1 on E0), or on a direct drive anything but the
+#       head motor alone on E0 (nothing, a YMS motor) = alert + Done prompt, saved as
 #       `yms_motor_fault` ("E0", "" once fixed). BLOCK=1 (PRINT_START while a fault is on
 #       record): error if it is still there, so the print does not start.
 #   YUMI_RETRY_PENDING
@@ -285,6 +286,20 @@ class YumiFilamentHead:
             return "direct drive head motor"
         return "unknown"
 
+    def _head_fault_message(self, kind, ofs):
+        """None when E0 carries the direct drive head motor alone, else what to do."""
+        if kind == "direct drive head motor":
+            return None
+        if kind == "two motors":
+            return self._two_motors_message(1)
+        if kind == "YMS motor":
+            return ("A YMS motor is on E0 where the direct drive head motor is expected (signature %d): "
+                    "plug the head cable on E0, or choose the ChromaX12 head in Printer Config, then "
+                    "press Done. Printing is blocked until then." % ofs)
+        return ("No direct drive head motor on E0 (signature %d: nothing connected, or a motor this "
+                "check does not know): plug the head cable on E0, then press Done. Printing is "
+                "blocked until then." % ofs)
+
     def _two_motors_message(self, n):
         # the direct drive head always takes E0 = the YMS-1 output (Nicolas 14/11)
         return ("Direct drive head detected with the YMS-%d plugged on the same driver (E%d): the "
@@ -437,7 +452,7 @@ class YumiFilamentHead:
     def cmd_YMS_SCAN(self, gcmd):
         """Which YMS are plugged (0.1 mm back and forth each), saved as yms_connected; REQUIRE=<n>: YMS-n must be; SIGNATURE=1: what is plugged (two motors on one driver = printing blocked); BLOCK=1: error if so"""
         signature = gcmd.get_int('SIGNATURE', 0, minval=0, maxval=1)
-        flags, words, two_motors = [], [], None
+        flags, words, fault = [], [], None   # fault: (output, message), the first one found
         for n, short, obj in self._yms_motors():
             unplugged = self._yms_unplugged(short, obj)
             flags.append(-1 if unplugged is None else 0 if unplugged else 1)
@@ -449,8 +464,8 @@ class YumiFilamentHead:
                 ofs = self._signature(short, tmc, es, es.motion_queue)
                 kind = self._signature_kind(ofs)
                 word += " (%s, signature %d)" % (kind, ofs)
-                if kind == "two motors" and two_motors is None:
-                    two_motors = n
+                if kind == "two motors" and fault is None:
+                    fault = ("E%d" % (n - 1), self._two_motors_message(n))
             words.append(word)
         head = self._head_motor() if signature else None
         if head is not None:
@@ -458,8 +473,10 @@ class YumiFilamentHead:
             ofs = self._signature("extruder", head[0], head[1], "extruder")
             kind = self._signature_kind(ofs)
             words.append("head on E0 (%s, signature %d)" % (kind, ofs))
-            if kind == "two motors" and two_motors is None:
-                two_motors = 1
+            # the head is not optional: anything but the head motor alone on E0 blocks printing
+            message = self._head_fault_message(kind, ofs)
+            if message is not None and fault is None:
+                fault = ("E0", message)
         self.yms_connected = flags
         save = self.printer.lookup_object('save_variables', None) is not None
         if save:
@@ -469,14 +486,13 @@ class YumiFilamentHead:
                                                      self.SCAN_VARIABLE, flags))
         if signature:
             # PRINT_START reads it: a fault on record makes it measure again before anything heats
-            fault = "" if two_motors is None else "E%d" % (two_motors - 1)
             if save:
                 self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=\"'%s'\""
-                                                   % (self.FAULT_VARIABLE, fault))
-            if two_motors is None:
+                                                   % (self.FAULT_VARIABLE, fault[0] if fault else ""))
+            if fault is None:
                 self.gcode.respond_raw("// action:prompt_end")
             else:
-                message = self._two_motors_message(two_motors)
+                message = fault[1]
                 self.gcode.respond_raw("!! %s" % message)
                 self._prompt(message)
                 if gcmd.get_int('BLOCK', 0, minval=0, maxval=1):

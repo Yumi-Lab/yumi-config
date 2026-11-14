@@ -244,6 +244,11 @@ class FeedingYms(unittest.TestCase):
             self.assertEqual(h._signature_kind(ofs), kind, ofs)
         self.assertIn("Unplug the YMS-1 cable", h._two_motors_message(1))
         self.assertIn("(E0)", h._two_motors_message(1))
+        # 14/11: head unplugged, nothing on E0 (255) went through without a word
+        self.assertIsNone(h._head_fault_message("direct drive head motor", 54))
+        self.assertIn("No direct drive head motor on E0", h._head_fault_message("unknown", 255))
+        self.assertIn("A YMS motor is on E0", h._head_fault_message("YMS motor", 43))
+        self.assertIn("Unplug the YMS-1 cable", h._head_fault_message("two motors", 35))
 
     def test_yms_with_filament_loads_to_the_head_as_before(self):
         h, p = head(switch_at=147.)
