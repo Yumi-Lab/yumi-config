@@ -75,6 +75,23 @@ class TestPlugged(unittest.TestCase):
 
 
 class TestCfg(unittest.TestCase):
+    def test_dd_head_motor_is_driven_on_e0(self):
+        """14/11: the DD bench copied the C235 [extruder], the ChromaX12's fictitious motor on free
+        pins (PA12/PA11/PA3): the head never moved. A head with its own motor takes E0's pins and
+        driver ([extruder_stepper extruder0] and its TMC in the C235 cfg); the X12 keeps the
+        fictitious one (YMS-3 feeds it)."""
+        gen = _generator()
+        dd, x12 = gen.build("DD"), gen.build("X12")
+        ext = dd[dd.index("[extruder]"):]
+        ext = ext[:ext.index("\n[")]
+        for line in ("step_pin: PB12", "dir_pin: PB10", "enable_pin: !PB13"):
+            self.assertIn(line, ext)
+        self.assertNotIn("PA12", ext)
+        tmc = dd[dd.index("[tmc2209 extruder]"):]
+        self.assertIn("uart_pin: PB14", tmc[:tmc.index("\n[")])
+        self.assertIn("step_pin: PA12", x12)
+        self.assertNotIn("[tmc2209 extruder]", x12)
+
     def test_committed_cfgs_are_generated(self):
         gen = _generator()
         for model in HOTEND_DEVICES:

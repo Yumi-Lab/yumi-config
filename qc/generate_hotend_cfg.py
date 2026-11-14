@@ -34,6 +34,12 @@ C235_SECTIONS = [
     "gcode_macro QC_FAN_HOTEND",
     "gcode_macro QC_FAN_PART",
 ]
+# A head with its own motor (DD) is driven by the board's E0 driver. In the C235 cfg that driver is
+# the YMS-1 feeder ([extruder_stepper extruder0] + its TMC on PB14) and [extruder] is the
+# ChromaX12's fictitious motor on free pins: copied as is, the DD bench stepped PA12/PA11/PA3 and
+# the head never moved (14/11). Such a head takes E0's pins and driver, read from the C235 cfg.
+E0_STEPPER = "extruder_stepper extruder0"
+E0_PIN_KEYS = ("step_pin", "dir_pin", "enable_pin")
 # Head switch check (qc_engine head_switch test): switch from the C235, YMS-3 from the HyperDrive.
 SWITCH_C235_SECTIONS = ["filament_switch_sensor head_sensor"]
 SWITCH_HD_SECTIONS = ["mcu hyperdrive_uart", "extruder_stepper " + HOTEND_FEEDER,
@@ -202,8 +208,28 @@ def _printer_limits():
     return "\n".join(l for l in printer if l.split(":")[0].strip() in ("max_velocity", "max_accel"))
 
 
+def _key(line):
+    return None if line.lstrip().startswith("#") else line.split(":")[0].strip()
+
+
+def _extruder_on_e0():
+    """[extruder] with E0's step/dir/enable pins, and E0's TMC as [tmc2209 extruder]."""
+    ext, e0, tmc = _sections(SRC, ["extruder", E0_STEPPER, "tmc2209 " + E0_STEPPER])
+    pins = {_key(l): l for l in e0.splitlines() if _key(l) in E0_PIN_KEYS}
+    ext = "\n".join(pins.get(_key(l), l) for l in ext.splitlines())
+    tmc = "\n".join(["[tmc2209 extruder]"] + tmc.splitlines()[1:])
+    return _section(ext) + _section(tmc)
+
+
+def _own_motor(model):
+    """The head extrudes with its own motor: an extrude test without a feeder synced to it."""
+    return any(t["id"] == "hotend_extrude" and "FEEDER=" not in t["macro"] for t in HOTEND_TESTS[model])
+
+
 def build(model):
-    cfg = HEADER % {"model": model, "limits": _printer_limits()} + _copy(SRC, C235_SECTIONS)
+    cfg = HEADER % {"model": model, "limits": _printer_limits()}
+    for name in C235_SECTIONS:
+        cfg += _extruder_on_e0() if name == "extruder" and _own_motor(model) else _copy(SRC, [name])
     if any(t["id"] == "head_switch" for t in HOTEND_TESTS[model]):
         cfg += _copy(SRC, SWITCH_C235_SECTIONS) + _copy(HD_SRC, SWITCH_HD_SECTIONS) + SWITCH_MACROS
     return cfg + MACROS
