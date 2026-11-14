@@ -112,6 +112,13 @@ class Select(unittest.TestCase):
         self.assertEqual(sel["product"], "C235_CX12_LW_04_7YMS")
         self.assertEqual(sel["overrides"]["smartbox"], {"serial": "/dev/ttyS2"})
 
+    def test_direct_drive_chosen_wins_over_a_hyperdrive(self):
+        """Nicolas 14/11: a HyperDrive is an accessory, a direct drive C235 can carry one. The head
+        chosen on the screen is the head; YMS products with a direct drive do not exist yet."""
+        sel = compose.select(C235_HD, CATALOG, {"hotend": "DIRECT_DRIVE"})
+        self.assertEqual(sel["product"], "C235_DD_LW_04")
+        self.assertTrue(any("DIRECT_DRIVE (preference)" in r for r in sel["reasons"]), sel["reasons"])
+
     def test_prefs_chromax_without_smartbox_is_2yms(self):
         sel = compose.select(C235, CATALOG, {"hotend": "CHROMAX_X12", "hotend_type": "HIGH_FLOW"})
         self.assertEqual(sel["product"], "C235_CX12_HF_04_2YMS")

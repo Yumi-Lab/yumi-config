@@ -193,9 +193,16 @@ def select(composition, catalog, prefs=None):
     # The board component: from the descriptor for a Yumi board, else the machine's parent.
     board_comp = rules["main_boards"].get(main.get("board")) or catalog["components"][main["device"]].get("parent")
     defaults = rules["defaults"]
-    if smartbox is not None:
-        hotend, yms = rules["with_smartbox"]["hotend"], rules["with_smartbox"]["yms"]
+    # A HyperDrive is an accessory, not a head (Nicolas 14/11: direct drive C235 with one): the
+    # head chosen on the screen wins; without a choice a HyperDrive means the ChromaX12 + YMS.
+    with_box = rules["with_smartbox"]
+    if smartbox is not None and prefs.get("hotend", with_box["hotend"]) == with_box["hotend"]:
+        hotend, yms = with_box["hotend"], with_box["yms"]
         sel["reasons"].append("smartbox %s on %s -> %s + %s" % (smartbox.get("device"), smartbox.get("port"), hotend, yms))
+    elif smartbox is not None:
+        hotend, yms = prefs["hotend"], None
+        sel["reasons"].append("smartbox %s on %s, hotend %s (preference): no YMS product with this head yet"
+                              % (smartbox.get("device"), smartbox.get("port"), hotend))
     else:
         hotend = prefs.get("hotend", defaults["hotend"])
         yms = rules["chromax_without_smartbox_yms"] if hotend == rules["with_smartbox"]["hotend"] else None

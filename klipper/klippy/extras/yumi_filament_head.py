@@ -233,12 +233,10 @@ class YumiFilamentHead:
     SIGNATURE_FIELDS = ("en_spreadcycle", "tpwmthrs")
     FAULT_VARIABLE = "yms_motor_fault"
 
-    def _yms_signature(self, short, obj):
-        """pwm_ofs_auto learned at standstill at the run current, None without a UART driver."""
-        tmc = self.printer.lookup_object('tmc2209 extruder_stepper ' + short, None)
-        if tmc is None:
-            return None
-        es = obj.extruder_stepper
+    def _signature(self, short, tmc, es, queue):
+        """pwm_ofs_auto learned at standstill at the run current. short: the TMC stepper name
+        (extruder0, extruder), es: its ExtruderStepper, queue: the motion queue it is synced to
+        afterwards (force_move drove it on its own position)."""
         stepper = es.stepper
         force_move = self.printer.lookup_object('force_move')
         enable = self.printer.lookup_object('stepper_enable')
@@ -262,12 +260,21 @@ class YumiFilamentHead:
         finally:
             for field, value in mode.items():
                 run("SET_TMC_FIELD STEPPER=%s FIELD=%s VALUE=%d" % (short, field, value))
-            if es.motion_queue:
-                es.sync_to_extruder(es.motion_queue)
+            if queue:
+                es.sync_to_extruder(queue)
             run("SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
                 % (short, cur['run_current'], cur['hold_current']))
             if not was_enabled:
                 enable.set_motors_enable([stepper.get_name()], False)
+
+    def _head_motor(self):
+        """(tmc, ExtruderStepper) of the [extruder] when it drives a real motor on its own driver
+        (direct drive head, E0), None otherwise (ChromaX12: [extruder] is fictitious)."""
+        tmc = self.printer.lookup_object('tmc2209 extruder', None)
+        extruder = self.printer.lookup_object('extruder', None)
+        if tmc is None or extruder is None or getattr(extruder, 'extruder_stepper', None) is None:
+            return None
+        return tmc, extruder.extruder_stepper
 
     def _signature_kind(self, ofs):
         if ofs <= self.SIGNATURE_TWO_MOTORS_MAX:
@@ -436,13 +443,23 @@ class YumiFilamentHead:
             flags.append(-1 if unplugged is None else 0 if unplugged else 1)
             word = "YMS-%d %s" % (n, {1: "plugged", 0: "NOT plugged",
                                       -1: "unknown (driver not on UART)"}[flags[-1]])
-            if signature and flags[-1] == 1:
-                ofs = self._yms_signature(short, obj)
+            tmc = self.printer.lookup_object('tmc2209 extruder_stepper ' + short, None)
+            if signature and flags[-1] == 1 and tmc is not None:
+                es = obj.extruder_stepper
+                ofs = self._signature(short, tmc, es, es.motion_queue)
                 kind = self._signature_kind(ofs)
                 word += " (%s, signature %d)" % (kind, ofs)
                 if kind == "two motors" and two_motors is None:
                     two_motors = n
             words.append(word)
+        head = self._head_motor() if signature else None
+        if head is not None:
+            # direct drive: E0 is the head; a YMS-1 wired on it too is the double connection
+            ofs = self._signature("extruder", head[0], head[1], "extruder")
+            kind = self._signature_kind(ofs)
+            words.append("head on E0 (%s, signature %d)" % (kind, ofs))
+            if kind == "two motors" and two_motors is None:
+                two_motors = 1
         self.yms_connected = flags
         save = self.printer.lookup_object('save_variables', None) is not None
         if save:
