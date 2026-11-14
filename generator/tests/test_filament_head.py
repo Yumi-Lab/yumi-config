@@ -235,6 +235,16 @@ class FeedingYms(unittest.TestCase):
         self.assertEqual(p.scripts[-1], "YUMI_LOAD_TO_HEAD SENSOR=YMS-3", "RESUME runs the same load again")
         self.assertFalse(h.get_status(0.)["pending"])
 
+    def test_motor_signature_kinds_follow_the_c235_measurements(self):
+        """C235 14/11, pwm_ofs_auto at 0.98 A, 3 readings each: head 55-59, one YMS 42-47, the head
+        and YMS-1 on one driver 35, nothing 255."""
+        h, p = head(switch_at=1.)
+        for ofs, kind in ((35, "two motors"), (42, "YMS motor"), (47, "YMS motor"),
+                          (55, "direct drive head motor"), (59, "direct drive head motor"), (255, "unknown")):
+            self.assertEqual(h._signature_kind(ofs), kind, ofs)
+        self.assertIn("Unplug the YMS-1 cable", h._two_motors_message(1))
+        self.assertIn("(E0)", h._two_motors_message(1))
+
     def test_yms_with_filament_loads_to_the_head_as_before(self):
         h, p = head(switch_at=147.)
         p.feeders["YMS-3"] = Feeder(has_filament=True)

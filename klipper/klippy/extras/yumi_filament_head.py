@@ -60,11 +60,15 @@
 # pull the previous filament before loading another tool), loaded_mm (last load), bypass,
 # yms_connected (last YMS_SCAN), pending (the command RESUME will run again).
 #
-#   YMS_SCAN [REQUIRE=<n>]
+#   YMS_SCAN [REQUIRE=<n>] [SIGNATURE=1] [BLOCK=1]
 #       turns each YMS motor 0.1 mm back then forward (slowly, low current) and reads its
 #       driver: plugged or not, saved in save_variables `yms_connected` as [1, 0, ...] (YMS-1
 #       first, -1 = driver not readable). Run at boot and by PRINT_START. REQUIRE=n: YMS-n must
-#       be plugged.
+#       be plugged. SIGNATURE=1 (boot): also what is plugged on each output, from the PWM offset
+#       the driver learns at standstill (YMS motor, direct drive head motor, two motors on one
+#       driver); two motors (the head and YMS-1 on E0) = alert + Done prompt, saved as
+#       `yms_motor_fault` ("E0", "" once fixed). BLOCK=1 (PRINT_START while a fault is on
+#       record): error if it is still there, so the print does not start.
 #   YUMI_RETRY_PENDING
 #       first line of RESUME: runs again the load / check that paused the print.
 # During a print a failed load or a required YMS unplugged no longer stops the print: alert,
@@ -213,6 +217,81 @@ class YumiFilamentHead:
         return ("YMS-%d motor not connected (its driver reads both coils open): plug the YMS-%d "
                 "cable back in" % (n, n))
 
+    # ── what is plugged on a YMS output: its electrical signature ──────
+    # In stealthChop at the run current the driver learns, at standstill, the PWM offset that
+    # drives that current through the coils (AT#1, pwm_ofs_auto): it follows the coil resistance.
+    # AT#1 runs only at IRUN after a step (hold current set to run current, a 0.01 mm nudge back
+    # and forth) and only in real stealthChop (en_spreadcycle 0 AND tpwmthrs 0). Measured on the
+    # C235 14/11 at 0.98 A, 3 readings each: direct drive head motor alone on E0 55-59, one YMS
+    # motor 42-47, the head and YMS-1 both on E0 (star wiring from the driver) 35, nothing 255.
+    # Taken at boot, motors cold (Nicolas: the check runs when the customer starts the machine).
+    SIGNATURE_NUDGE_MM = 0.01
+    SIGNATURE_SETTLE_S = 1.5
+    SIGNATURE_TWO_MOTORS_MAX = 38   # below one YMS motor: two coils sets in parallel
+    SIGNATURE_YMS_MAX = 50          # one YMS motor
+    SIGNATURE_HEAD_MAX = 70         # the direct drive head motor; above: unknown
+    SIGNATURE_FIELDS = ("en_spreadcycle", "tpwmthrs")
+    FAULT_VARIABLE = "yms_motor_fault"
+
+    def _yms_signature(self, short, obj):
+        """pwm_ofs_auto learned at standstill at the run current, None without a UART driver."""
+        tmc = self.printer.lookup_object('tmc2209 extruder_stepper ' + short, None)
+        if tmc is None:
+            return None
+        es = obj.extruder_stepper
+        stepper = es.stepper
+        force_move = self.printer.lookup_object('force_move')
+        enable = self.printer.lookup_object('stepper_enable')
+        toolhead = self.printer.lookup_object('toolhead')
+        reactor = self.printer.get_reactor()
+        cur = tmc.get_status(reactor.monotonic())
+        mode = {f: tmc.fields.get_field(f) for f in self.SIGNATURE_FIELDS}
+        was_enabled = enable.lookup_enable(stepper.get_name()).is_motor_enabled()
+        run = self.gcode.run_script_from_command
+        run("SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
+            % (short, cur['run_current'], cur['run_current']))
+        try:
+            for field in self.SIGNATURE_FIELDS:
+                run("SET_TMC_FIELD STEPPER=%s FIELD=%s VALUE=0" % (short, field))
+            enable.set_motors_enable([stepper.get_name()], True)
+            for dist in (self.SIGNATURE_NUDGE_MM, -self.SIGNATURE_NUDGE_MM):
+                force_move.manual_move(stepper, dist, self.SCAN_SPEED)
+            toolhead.wait_moves()
+            reactor.pause(reactor.monotonic() + self.SIGNATURE_SETTLE_S)
+            return tmc.fields.get_field('pwm_ofs_auto', tmc.mcu_tmc.get_register('PWM_AUTO'))
+        finally:
+            for field, value in mode.items():
+                run("SET_TMC_FIELD STEPPER=%s FIELD=%s VALUE=%d" % (short, field, value))
+            if es.motion_queue:
+                es.sync_to_extruder(es.motion_queue)
+            run("SET_TMC_CURRENT STEPPER=%s CURRENT=%.3f HOLDCURRENT=%.3f"
+                % (short, cur['run_current'], cur['hold_current']))
+            if not was_enabled:
+                enable.set_motors_enable([stepper.get_name()], False)
+
+    def _signature_kind(self, ofs):
+        if ofs <= self.SIGNATURE_TWO_MOTORS_MAX:
+            return "two motors"
+        if ofs <= self.SIGNATURE_YMS_MAX:
+            return "YMS motor"
+        if ofs <= self.SIGNATURE_HEAD_MAX:
+            return "direct drive head motor"
+        return "unknown"
+
+    def _two_motors_message(self, n):
+        # the direct drive head always takes E0 = the YMS-1 output (Nicolas 14/11)
+        return ("Direct drive head detected with the YMS-%d plugged on the same driver (E%d): the "
+                "direct drive head cannot work with the YMS-%d plugged. Unplug the YMS-%d cable, then "
+                "press Done. Printing is blocked until then." % (n, n - 1, n, n))
+
+    def _prompt(self, message):
+        """Klipper's prompt dialog (KlipperScreen, Mainsail): Done measures again."""
+        r = self.gcode.respond_raw
+        r("// action:prompt_begin Motor connection")
+        r("// action:prompt_text %s" % message)
+        r("// action:prompt_footer_button Done|YMS_SCAN SIGNATURE=1|primary")
+        r("// action:prompt_show")
+
     # ── a print is paused, not lost ────────────────────────────────────
     def _printing(self):
         ps = self.printer.lookup_object('print_stats', None)
@@ -349,19 +428,42 @@ class YumiFilamentHead:
         self.gcode.run_script_from_command("M117 Filament loaded")
 
     def cmd_YMS_SCAN(self, gcmd):
-        """Which YMS are plugged (0.1 mm back and forth each), saved as yms_connected; REQUIRE=<n>: YMS-n must be"""
-        flags, words = [], []
+        """Which YMS are plugged (0.1 mm back and forth each), saved as yms_connected; REQUIRE=<n>: YMS-n must be; SIGNATURE=1: what is plugged (two motors on one driver = printing blocked); BLOCK=1: error if so"""
+        signature = gcmd.get_int('SIGNATURE', 0, minval=0, maxval=1)
+        flags, words, two_motors = [], [], None
         for n, short, obj in self._yms_motors():
             unplugged = self._yms_unplugged(short, obj)
             flags.append(-1 if unplugged is None else 0 if unplugged else 1)
-            words.append("YMS-%d %s" % (n, {1: "plugged", 0: "NOT plugged",
-                                            -1: "unknown (driver not on UART)"}[flags[-1]]))
+            word = "YMS-%d %s" % (n, {1: "plugged", 0: "NOT plugged",
+                                      -1: "unknown (driver not on UART)"}[flags[-1]])
+            if signature and flags[-1] == 1:
+                ofs = self._yms_signature(short, obj)
+                kind = self._signature_kind(ofs)
+                word += " (%s, signature %d)" % (kind, ofs)
+                if kind == "two motors" and two_motors is None:
+                    two_motors = n
+            words.append(word)
         self.yms_connected = flags
-        if self.printer.lookup_object('save_variables', None) is not None:
+        save = self.printer.lookup_object('save_variables', None) is not None
+        if save:
             self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=%s"
                                                % (self.SCAN_VARIABLE, json.dumps(flags).replace(" ", "")))
         gcmd.respond_info("YMS scan: %s -> %s=%s" % (", ".join(words) or "no YMS declared",
                                                      self.SCAN_VARIABLE, flags))
+        if signature:
+            # PRINT_START reads it: a fault on record makes it measure again before anything heats
+            fault = "" if two_motors is None else "E%d" % (two_motors - 1)
+            if save:
+                self.gcode.run_script_from_command("SAVE_VARIABLE VARIABLE=%s VALUE=\"'%s'\""
+                                                   % (self.FAULT_VARIABLE, fault))
+            if two_motors is None:
+                self.gcode.respond_raw("// action:prompt_end")
+            else:
+                message = self._two_motors_message(two_motors)
+                self.gcode.respond_raw("!! %s" % message)
+                self._prompt(message)
+                if gcmd.get_int('BLOCK', 0, minval=0, maxval=1):
+                    raise gcmd.error(message)
         need = gcmd.get_int('REQUIRE', None, minval=1)
         if need is None or not flags:
             return  # no YMS declared: the head feeds itself, nothing to require

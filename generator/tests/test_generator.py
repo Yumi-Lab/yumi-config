@@ -702,9 +702,11 @@ class CancelSequence(unittest.TestCase):
         """Which YMS are plugged (C335 08/11: a print lost on an unplugged YMS cable): scanned
         at boot for the screen, again by PRINT_START, the starting tool's YMS required there."""
         m = macros(generator.generate("C235_DD_LW_04", catalog=CATALOG))
-        self.assertIn("YMS_SCAN", m["delayed_gcode welcome"])
+        self.assertIn("YMS_SCAN SIGNATURE=1", m["delayed_gcode welcome"], "the boot check reads what is plugged")
         start = m["gcode_macro PRINT_START"]
-        scan = start.index("YMS_SCAN{% if params.TOOL is defined %} REQUIRE={params.TOOL|int + 1}")
+        scan = start.index("YMS_SCAN{% if motor_fault %} SIGNATURE=1 BLOCK=1{% endif %}"
+                           "{% if params.TOOL is defined %} REQUIRE={params.TOOL|int + 1}{% endif %}")
+        self.assertIn("yms_motor_fault", start, "a double motor connection on record blocks the print")
         self.assertLess(start.index("SET_KINEMATIC_POSITION CLEAR=Z"), scan, "nozzle off the bed first")
         self.assertLess(start.index("CANCEL_PRINT_DEFAULT"), scan, "a refused file never moves")
 
