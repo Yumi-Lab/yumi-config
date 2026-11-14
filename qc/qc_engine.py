@@ -256,13 +256,14 @@ HOTEND_TEMP = 220
 # not conform (210 and 215 pass, 200 fails).
 HOTEND_WALL_READING = HOTEND_TEMP - 10
 HOTEND_WALL_TOLERANCE_C = 8
-HOTEND_EXTRUDE_MM = 100        # DD: its own motor, the filament already at the nozzle; 30 mm at
-                               # 2.5 mm/s was too little to judge the head (Nicolas 14/11: at least 10 cm)
+HOTEND_EXTRUDE_MM = 150        # DD: its own motor, the filament already at the nozzle; 30 mm at
+                               # 2.5 mm/s then 100 mm at 12 mm3/s were too little to judge the head
+                               # (Nicolas 14/11)
 HOTEND_X12_EXTRUDE_MM = 60     # X12: YMS-3 pushes from the head switch out of the nozzle (the
                                # machine QC cutter purge, 21/10)
 HOTEND_FEEDER = "extruder2"    # the bench's YMS-3 (HyperDrive slot 1) feeds the X12 heads
 HOTEND_EXTRUDE_MM_S = 2.5
-HOTEND_DD_FLOW_MM3_S = 12      # DD: a real flow through the hot nozzle (Nicolas 14/11)
+HOTEND_DD_FLOW_MM3_S = 15      # DD: a real flow through the hot nozzle (Nicolas 14/11: 12 too slow)
 HOTEND_FILAMENT_MM = 1.75
 HOTEND_DD_EXTRUDE_MM_S = round(HOTEND_DD_FLOW_MM3_S / (math.pi * (HOTEND_FILAMENT_MM / 2) ** 2), 2)
 HOTEND_DEVICES = {"X12": "HOTEND-X12", "DD": "HOTEND-DD"}   # bench model -> report device=
