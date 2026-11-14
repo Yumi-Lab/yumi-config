@@ -420,7 +420,10 @@ def apply(composition, catalog, config_dir, prefs=None, factory=False, minimal=F
         if summary["mode"] == "factory":
             summary["variables_cleared"] = clear_measured_variables(cfg, config_dir)
 
-    if not dry_run:
+    # An alert (no board, or no main board, answered) is not a machine: the record keeps the
+    # last machine configured. Recorded, it erased the C335 on two silent boots and the C235
+    # that answered next was not seen as a machine change (14/11: C335 mesh kept on a C235).
+    if not dry_run and summary["mode"] != "alert":
         state = {"ts": ts, "main": summary["main"], "smartbox": summary["smartbox"],
                  "product": summary["product"], "chain": summary["chain"], "mode": summary["mode"],
                  "situation": summary["situation"], "recipe": recipe_hash(),

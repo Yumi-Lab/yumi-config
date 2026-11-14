@@ -197,6 +197,23 @@ class Build(unittest.TestCase):
         self.assertIn("fan_speed = 255.0", left)
         self.assertIn("machine_model", left)
 
+    def test_a_boot_without_any_board_keeps_the_last_machine(self):
+        """14/11: the C335 pad moved to a C235. Two boots found no board answering; each one
+        recorded that empty scan as the machine, so when the C235 answered the change was not
+        seen: preserve mode, C335 mesh and reference point kept. An alert keeps the record."""
+        c335 = {"boards": [board("/dev/ttyS1", "C335", "aaaaaa")], "cameras": []}
+        c235 = {"boards": [board("/dev/ttyS1", "C235", "bbbbbb")], "cameras": []}
+        code, summary = compose.apply(c335, CATALOG, self.dir)
+        self.assertEqual(code, compose.EXIT_APPLIED)
+        for _ in range(2):
+            code, summary = compose.apply({"boards": [], "cameras": []}, CATALOG, self.dir)
+            self.assertEqual(summary["alert"], "no MCU answered")
+            self.assertEqual(summary["mode"], "alert", "every boot without a board says so")
+        code, summary = compose.apply(c235, CATALOG, self.dir)
+        self.assertEqual(summary["mode"], "factory")
+        self.assertTrue(any("aaaaaa -> bbbbbb" in r and "factory reset" in r for r in summary["reasons"]),
+                        summary["reasons"])
+
     def test_other_board_is_factory(self):
         self._state("ffffff")
         (self.dir / "printer.cfg").write_text(SAVE_BLOCK)
