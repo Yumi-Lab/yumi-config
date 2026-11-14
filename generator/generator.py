@@ -353,10 +353,13 @@ def render_extruder(p):
     if slot is None:
         return emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot",))
     # Direct drive: real motor on the slot's driver. TMC (and autotune) as any E slot motor.
-    e.update({"step_pin": _slot_pin(slot, 'step_pin'), "dir_pin": _slot_pin(slot, 'dir_pin'),
+    dir_pin = _slot_pin(slot, 'dir_pin')
+    if 'dir_invert' in e:
+        dir_pin = ('!' if e['dir_invert'] else '') + dir_pin.lstrip('!')
+    e.update({"step_pin": _slot_pin(slot, 'step_pin'), "dir_pin": dir_pin,
               "enable_pin": _slot_pin(slot, 'enable_pin')})
     tmc = deep_merge(p.get('extruder_stepper', {}).get('tmc2209', {}), {"uart_pin": _slot_pin(slot, 'uart_pin')})
-    return join(emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot",)),
+    return join(emit("extruder", e, EXTRUDER_ORDER, skip=("motor_slot", "dir_invert")),
                 emit("tmc2209 extruder", tmc, TMC_ORDER))
 
 

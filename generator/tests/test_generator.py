@@ -802,7 +802,8 @@ class Heads(unittest.TestCase):
         gen = parse(generator.generate("C235_DD_LW_04", catalog=CATALOG))
         slot0 = CATALOG["components"]["SMART_MAKER_1X"]["extruder_slots"][0]
         self.assertEqual(gen["extruder"]["step_pin"], slot0["step_pin"])
-        self.assertEqual(gen["extruder"]["dir_pin"], slot0["dir_pin"])
+        # the DD head motor turns the other way from a YMS on the same driver (Nicolas 14/11)
+        self.assertEqual(gen["extruder"]["dir_pin"], "!" + slot0["dir_pin"].lstrip("!"))
         self.assertEqual(gen["tmc2209 extruder"]["uart_pin"], slot0["uart_pin"])
         self.assertIn("autotune_tmc extruder", gen)
         self.assertFalse([s for s in gen if s.startswith("extruder_stepper")])

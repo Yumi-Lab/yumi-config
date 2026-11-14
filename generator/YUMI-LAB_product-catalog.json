@@ -1003,10 +1003,11 @@
         "has_smartbox": false,
         "has_dryer": false,
         "extruder": {
-          "motor_slot": 0
+          "motor_slot": 0,
+          "dir_invert": true
         }
       },
-      "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens PB10 non inverse et ratio 50:17 = valeurs du QC C235 en tete DD."
+      "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens inverse (!PB10, Nicolas 14/11 : le moteur de la tete DD tourne a l'envers du YMS sur le meme driver ; PB10 non inverse venait du QC C235) ; ratio 50:17."
     },
     "CHROMAX_X12": {
       "layer": "hotend",

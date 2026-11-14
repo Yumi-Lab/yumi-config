@@ -84,13 +84,15 @@ class TestCfg(unittest.TestCase):
         dd, x12 = gen.build("DD"), gen.build("X12")
         ext = dd[dd.index("[extruder]"):]
         ext = ext[:ext.index("\n[")]
-        for line in ("step_pin: PB12", "dir_pin: PB10", "enable_pin: !PB13"):
+        for line in ("step_pin: PB12", "dir_pin: !PB10", "enable_pin: !PB13"):
             self.assertIn(line, ext)
         self.assertNotIn("PA12", ext)
         tmc = dd[dd.index("[tmc2209 extruder]"):]
         self.assertIn("uart_pin: PB14", tmc[:tmc.index("\n[")])
         self.assertIn("step_pin: PA12", x12)
         self.assertNotIn("[tmc2209 extruder]", x12)
+        # the DD cleanup has no head switch loop to stop (UPDATE_DELAYED_GCODE unknown there)
+        self.assertNotIn("UPDATE_DELAYED_GCODE", _macro_body(dd, "QC_CLEANUP"))
 
     def test_committed_cfgs_are_generated(self):
         gen = _generator()

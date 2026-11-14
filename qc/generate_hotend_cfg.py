@@ -11,6 +11,7 @@ verbatim. The test sequences live in qc_engine.HOTEND_TESTS.
 
 Usage:  python3 generate_hotend_cfg.py   (from yumi-config/qc/)
 """
+import json
 import os
 import sys
 
@@ -40,6 +41,10 @@ C235_SECTIONS = [
 # the head never moved (14/11). Such a head takes E0's pins and driver, read from the C235 cfg.
 E0_STEPPER = "extruder_stepper extruder0"
 E0_PIN_KEYS = ("step_pin", "dir_pin", "enable_pin")
+# The DD head motor turns the other way from the YMS on the same driver (Nicolas 14/11): the
+# printer.cfg generator's Direct Drive layer holds that, the bench reads it there.
+CATALOG = os.path.join(HERE, "..", "generator", "YUMI-LAB_product-catalog.json")
+HEAD_COMPONENT = {"DD": "DIRECT_DRIVE"}
 # Head switch check (qc_engine head_switch test): switch from the C235, YMS-3 from the HyperDrive.
 SWITCH_C235_SECTIONS = ["filament_switch_sensor head_sensor"]
 SWITCH_HD_SECTIONS = ["mcu hyperdrive_uart", "extruder_stepper " + HOTEND_FEEDER,
@@ -74,6 +79,7 @@ kinematics: none
 
 """
 
+STOP_SWITCH_LOOP = "    UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0\n"
 MACROS = """\
 [gcode_macro QC_HOTEND_HEAT_START]
 description: QC hot end - hotend fan on, start heating (the fan checks run while it heats)
@@ -212,10 +218,19 @@ def _key(line):
     return None if line.lstrip().startswith("#") else line.split(":")[0].strip()
 
 
-def _extruder_on_e0():
-    """[extruder] with E0's step/dir/enable pins, and E0's TMC as [tmc2209 extruder]."""
+def _dir_inverted(model):
+    with open(CATALOG) as f:
+        comp = json.load(f)["components"][HEAD_COMPONENT[model]]
+    return bool(comp["config"]["extruder"].get("dir_invert"))
+
+
+def _extruder_on_e0(model):
+    """[extruder] with E0's step/dir/enable pins (direction as the head's catalog layer says),
+    and E0's TMC as [tmc2209 extruder]."""
     ext, e0, tmc = _sections(SRC, ["extruder", E0_STEPPER, "tmc2209 " + E0_STEPPER])
     pins = {_key(l): l for l in e0.splitlines() if _key(l) in E0_PIN_KEYS}
+    pin = pins["dir_pin"].split(":", 1)[1].split("#")[0].strip().lstrip("!")
+    pins["dir_pin"] = "dir_pin: %s%s" % ("!" if _dir_inverted(model) else "", pin)
     ext = "\n".join(pins.get(_key(l), l) for l in ext.splitlines())
     tmc = "\n".join(["[tmc2209 extruder]"] + tmc.splitlines()[1:])
     return _section(ext) + _section(tmc)
@@ -229,10 +244,13 @@ def _own_motor(model):
 def build(model):
     cfg = HEADER % {"model": model, "limits": _printer_limits()}
     for name in C235_SECTIONS:
-        cfg += _extruder_on_e0() if name == "extruder" and _own_motor(model) else _copy(SRC, [name])
+        cfg += _extruder_on_e0(model) if name == "extruder" and _own_motor(model) else _copy(SRC, [name])
     if any(t["id"] == "head_switch" for t in HOTEND_TESTS[model]):
         cfg += _copy(SRC, SWITCH_C235_SECTIONS) + _copy(HD_SRC, SWITCH_HD_SECTIONS) + SWITCH_MACROS
-    return cfg + MACROS
+        return cfg + MACROS
+    # no head switch loop here: nothing to stop, and UPDATE_DELAYED_GCODE does not even exist
+    # without a [delayed_gcode] ("Unknown command" at the DD cleanup, 14/11)
+    return cfg + MACROS.replace(STOP_SWITCH_LOOP, "")
 
 
 def main():
