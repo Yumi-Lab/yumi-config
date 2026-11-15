@@ -1,22 +1,30 @@
 #!/bin/bash
-# Assign stable /dev/webcamN name based on device order
+# Name a USB camera /dev/webcamN from its physical USB port, so a camera keeps
+# its number across boots as long as it stays plugged into the same port.
 # Called by udev: PROGRAM="/usr/local/bin/webcam-enumerate.sh %k"
-# Outputs symlink name to stdout
+# Outputs the symlink name to stdout.
+#
+# The rank used to come from the /dev/videoN numbers, which follow the kernel
+# probe order: two cameras swapped between boots, and both got webcam0 when
+# they were probed together (webcam1 was then never created).
+# The USB devices are enumerated long before the video driver loads, so the
+# list of camera ports is already complete when this runs.
+# ponytail: a camera hot-plugged on a lower port than a running one does not
+# rename the running one until the next boot ("udevadm trigger" would).
 
-DEVICE="$1"
+USB_VIDEO_CONTROL="0e01"  # bInterfaceClass + bInterfaceSubClass
 
-# Count existing USB webcams with lower device numbers
+own=$(basename "$(readlink -f "/sys/class/video4linux/$1/device")")
+if [ ! -e "/sys/bus/usb/devices/$own" ]; then
+    echo "webcam-enumerate: $1 is not on a USB port" >&2
+    exit 1
+fi
+
 N=0
-for dev in /sys/class/video4linux/video*; do
-    name=$(basename "$dev")
-    # Skip metadata devices (index != 0)
-    idx=$(cat "$dev/index" 2>/dev/null)
-    [ "$idx" != "0" ] && continue
-    # Skip non-USB devices
-    bus=$(udevadm info -q property "/dev/$name" 2>/dev/null | grep "^ID_BUS=usb$")
-    [ -z "$bus" ] && continue
-    # If this device comes before ours, increment counter
-    if [ "$name" \< "$DEVICE" ]; then
+for iface in /sys/bus/usb/devices/*:*; do
+    kind="$(cat "$iface/bInterfaceClass" 2>/dev/null)$(cat "$iface/bInterfaceSubClass" 2>/dev/null)"
+    [ "$kind" = "$USB_VIDEO_CONTROL" ] || continue
+    if [[ "$(basename "$iface")" < "$own" ]]; then
         N=$((N + 1))
     fi
 done
