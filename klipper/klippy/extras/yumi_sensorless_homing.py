@@ -61,6 +61,14 @@
 #   fine_current_x, fine_current_y, fine_sgthrs_x, fine_sgthrs_y   obsoletes, ignores
 # Command: YUMI_SENSORLESS_HOME AXIS=X|Y [SAMPLES=] [WARMUP=] [TOLERANCE=]
 #   [MAX_TAPS=] [SPEED=] [SKIP_BASE=1]  -- a appeler depuis le homing_override.
+# Command: YUMI_SENSORLESS_RETRACT AXIS=X|Y DIST= SPEED=  -- recul SURVEILLE avant le home de
+#   base. L'override declare la position SUR la butee de homing, donc son recul ne degage un axe
+#   que s'il y est vraiment ; quand le chariot est a l'autre bout, le meme mouvement l'enfonce
+#   dans la butee opposee et force toute la course (mesure banc C335 09/11 : Y broute puis 10 taps
+#   pour 0.1950 de spread contre 0.1970 de tolerance, contre 0.0000 en 5 taps pour X). Le recul
+#   passe donc en homing move avec la fenetre StallGuard ouverte, comme YUMI_Z_LIFT pour la levee
+#   Z aveugle : la butee termine le mouvement au lieu d'etre poussee. Ne leve jamais : c'est le
+#   home qui suit qui tranche.
 # Etat (printer.yumi_sensorless_homing): homed = axes vraiment homes par ce module ("xy"),
 #   effaces a l'abort et a la coupure des moteurs ; c'est la preuve de homing a tester dans les
 #   macros a mouvement, jamais toolhead.homed_axes (truque par SET_KINEMATIC_POSITION, plr.cfg au boot).
@@ -164,6 +172,64 @@ class YumiSensorless:
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('YUMI_SENSORLESS_HOME', self.cmd_home,
                                desc="Home sensorless contre hard-stop + check")
+        gcode.register_command('YUMI_SENSORLESS_RETRACT', self.cmd_retract,
+                               desc="Recul surveille avant le home de base")
+
+    def cmd_retract(self, gcmd):
+        """Watched retract before the base home. The override fakes the position AT the homing
+        stop (SET_KINEMATIC_POSITION X=x_max Y=y_min) and then retracts from there, so when the
+        axis actually sits at the OTHER end the retract drives it into that end and forces for the
+        whole move. Measured on the C335 bench 09/11: Y ground and needed 10 taps for a 0.1950 mm
+        spread against a 0.1970 tolerance, 1 % of margin, while X -- which happened to be near its
+        own stop -- did 0.0000 mm in 5 taps. Same answer as YUMI_Z_LIFT for the blind Z lift: run
+        the retract as a HOMING MOVE with the StallGuard window open, so an end stop ends it like
+        a switch would instead of being pushed into. A retract must never abort the homing, so any
+        error is reported and swallowed: the home that follows is what decides."""
+        axis = gcmd.get('AXIS').upper()
+        if axis not in ('X', 'Y'):
+            raise gcmd.error("YUMI_SENSORLESS_RETRACT: AXIS must be X or Y, got '%s'" % axis)
+        ai = 0 if axis == 'X' else 1
+        st = axis.lower()
+        dist = gcmd.get_float('DIST', above=0.)
+        speed = gcmd.get_float('SPEED', above=0.)
+        toolhead = self.printer.lookup_object('toolhead')
+        phoming = self.printer.lookup_object('homing')
+        rail = self._rail(ai)
+        mcu_endstop = rail.get_endstops()[0][0]
+        hi = rail.get_homing_info()
+        # away = the direction that LEAVES the homing stop, the same rule the taps use
+        away = -1.0 if hi.positive_dir else 1.0
+        self._open_sg_window(st)
+        cc = self.coarse_current[axis]
+        if cc > 0:
+            gcmd.respond_info(
+                "YUMI_SENSORLESS_RETRACT %s: %.1f mm at %.0f mm/s, watched (%.2fA)"
+                % (axis, dist, speed, cc))
+            self.printer.lookup_object('gcode').run_script_from_command(
+                "SET_TMC_CURRENT STEPPER=stepper_%s CURRENT=%.3f" % (st, cc))
+        else:
+            gcmd.respond_info("YUMI_SENSORLESS_RETRACT %s: %.1f mm at %.0f mm/s, watched"
+                              % (axis, dist, speed))
+        start = toolhead.get_position()[ai]
+        target = list(toolhead.get_position())
+        target[ai] = start + away * dist
+        reason = None
+        try:
+            phoming.manual_home(toolhead, [(mcu_endstop, "%s_retract" % st)],
+                                target, speed, True, True, False)
+        except self.printer.command_error as e:
+            reason = str(e).split('\n')[0]
+        moved = abs(toolhead.get_position()[ai] - start)
+        if reason is not None:
+            gcmd.respond_info("YUMI_SENSORLESS_RETRACT %s: stopped after %.1f of %.1f mm (%s)"
+                              % (axis, moved, dist, reason))
+        elif moved < dist - 0.01:
+            gcmd.respond_info("YUMI_SENSORLESS_RETRACT %s: opposite end stop reached after %.1f of "
+                              "%.1f mm (motor stall), stopped there instead of forcing"
+                              % (axis, moved, dist))
+        else:
+            gcmd.respond_info("YUMI_SENSORLESS_RETRACT %s: retracted %.1f mm, clear of both stops"
+                              % (axis, moved))
 
     def _rail(self, ai):
         kin = self.printer.lookup_object('toolhead').get_kinematics()

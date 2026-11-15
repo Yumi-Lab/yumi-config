@@ -1,49 +1,157 @@
-# Filament Yumi Smart_Motion Sensor Module -V0.24.0.Beta
+# Filament Yumi Smart Motion Sensor — V0.25.0.Beta
 #
 # Copyright (C) 2021 Xtrack33 by YUMI
-# Modifications: Dual-mode (free/hold), sliding window pitch averaging
-#
-# Presence contract (same as Klipper's filament_motion_sensor, which the YMS insertion
-# flow was designed against):
-#   * PRESENT  only when the encoder ticks — filament really moving through the YMS;
-#   * ABSENT   when the tracked extruder travelled `detection_length` since the last tick,
-#     checked every 250 ms while the toolhead moves and once more when it stops.
-# No grace period after a tick: T0's MOTION_SENSOR_INIT re-arms every YMS by moving the
-# (fictive) extruder 50 mm with no feeder synced, less than 2 s after the loading YMS
-# ticked for the last time. A time-based grace swallowed that move, the sensor stayed
-# "present" and a second insertion into the same YMS was never seen.
-#
-# Which ticks count (bench 2026-09-06: ticks arriving at rest right after the load sequence,
-# once the motors were released, re-armed "present" and the next insertion was never seen):
-#   * FEEDING    the extruder moves and this YMS's motor is synced to it — filament driven;
-#   * INSERTION  the toolhead is idle (idle_timeout not "Printing") and the filament moves by hand;
-#   * ignored    a tick while the extruder moves but another feeder drives it (drag, vibration,
-#                EMI), or at rest while the toolhead has not settled yet (filament relaxing after
-#                the motors were released) — logged in klippy.log as "encoder tick ignored".
-#
-# Options ([filament_yumi_smart_motion_sensor <name>]):
-#   switch_pin                     encoder pin of the YMS
-#   extruder                       extruder whose travel is compared with the ticks (default extruder)
-#   motor                          this YMS's feeder, an [extruder_stepper <name>]: a tick while the
-#                                  extruder moves is filament fed only when that feeder is synced to it
-#                                  (default: none declared, any tick while moving is feeding)
-#   detection_length               mm of extruder travel without a tick = filament absent (default 7)
-#   mode                           free (default): a tick = present, nothing more; hold: pitch analysis
-#   pitch_view                     echo every pitch in the console (default False)
-#   data_logging, log_file_path    CSV log of every tick (default False, /tmp/filament_sensor_log.csv)
-#   low_pitch_filter               mm; ticks closer than this are noise, left out of the pitch (default 0.015)
-#   blockage_detection             hold only: pause when the averaged pitch leaves [min_pitch, max_pitch] (default False)
-#   min_pitch, max_pitch           mm per tick considered normal (defaults 1.0, 2.4)
-#   blockage_threshold             abnormal windows in a row before the blockage is declared (default 2)
-#   reset_motion_sensor_threshold  normal windows that clear an anomaly, or re-arm after a pause (default 16)
-#   pitch_window                   ticks averaged per window (default 4)
-#   post_retract_skip              windows ignored after a travel / retraction artefact (default 2)
-#   retraction_min                 mm; smaller negative deltas are pressure-advance micro-retractions (default 0.1)
-#   pause_on_runout, runout_gcode, insert_gcode, event_delay, pause_delay  as Klipper's filament sensors
-# Commands: SET_FILAMENT_SENSOR SENSOR=<name> ENABLE=0|1, QUERY_FILAMENT_SENSOR SENSOR=<name>.
-# Status (printer["filament_yumi_smart_motion_sensor <name>"]): filament_detected, enabled.
-#
 # This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# READ THIS FIRST: THE HARDWARE DECIDES EVERYTHING BELOW
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# The YMS encoder wheel does not sit still. The whole sensor body rides on a SLIDE, and the
+# filament is gripped inside it by silicone, so there is real friction between the two.
+#
+#   FILAMENT ADVANCES   the body is already against its end stop, so it cannot follow. The
+#                       filament is forced to slip past the wheel -> THE WHEEL TURNS -> a tick.
+#   FILAMENT RETRACTS   the body is free to travel back, about 10 mm of it. It rides along with
+#                       the filament instead of letting it slip -> THE WHEEL DOES NOT TURN ->
+#                       no tick at all.
+#
+# So this sensor measures REAL ADVANCES ONLY. It is blind to retractions by design, and that is
+# not a limitation: it is the point.
+#
+# WHY THE SLIDE EXISTS — the history, because it explains the two modes
+# ---------------------------------------------------------------------
+# The sensor used to be FIXED, and the pitch analysis below (hold mode) was written for it.
+# Then pressure advance was enabled, and it broke: PA modulates the extruder constantly, the
+# pitch left its bounds, and the analysis had no way to tell PA apart from a jam. It paused
+# prints that were perfectly healthy. Retractions were never the problem — PA was.
+#
+# The fix was MECHANICAL, not software: the slide. PA's modulation is of the order of a
+# millimetre; the slide absorbs ten. The body moves, the wheel does not, and the encoder never
+# sees PA at all. No threshold to tune, no PA value it stops working at.
+#
+# THE TWO MODES ARE TWO MECHANICAL STATES OF THE SAME SENSOR
+# ---------------------------------------------------------
+#   mode: free   the body is free on its slide. The production configuration. A tick means
+#                "filament really advanced", and nothing finer can be read, because small
+#                movements never reach the wheel.
+#   mode: hold   the body is mechanically BLOCKED. Every movement now turns the wheel, so the
+#                spacing between ticks (the "pitch") becomes a real measurement and the pitch
+#                analysis is meaningful. This is the legacy configuration, the one PA broke.
+#
+# KNOWN GAP, as of 2026-11-09
+# ---------------------------
+# `blockage_detection` is implemented in the HOLD branch only. A machine running `free` — which
+# is every machine with the slide — therefore has NO jam detection, whatever the config asks
+# for. The option is accepted and silently dropped (see __init__). This is why jam detection has
+# never fired in production: it was written for the configuration that was abandoned when the
+# slide was built. The detector that suits a mobile sensor is a SUM comparison, not a pitch:
+# count the ticks over a window of commanded extruder travel and compare with what that travel
+# should have produced. PA cannot fool a sum — it is conservative, it redistributes filament in
+# time without changing the total — and on this hardware the slide has already removed it anyway.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# WHAT "PRESENT" AND "ABSENT" MEAN HERE
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+#   PRESENT   only when the encoder ticks, i.e. filament really moving through the YMS. Never
+#             inferred from "the extruder barely moved": doing that made an EMPTY YMS look
+#             loaded, because no movement produces no evidence either way.
+#   ABSENT    when the tracked extruder has travelled `detection_length` since the last tick.
+#             Checked every 250 ms while the toolhead moves, and once more the moment it stops,
+#             so a move that crosses the threshold just before stopping is never missed between
+#             two timer ticks.
+#
+# NO GRACE PERIOD AFTER A TICK, and that is deliberate. T0's MOTION_SENSOR_INIT re-arms every
+# YMS by moving the fictive extruder 50 mm with no feeder synced, less than 2 s after the
+# loading YMS last ticked. A time-based grace swallowed that move: the sensor stayed "present"
+# and a second insertion into the same YMS was never seen.
+#
+# WHICH TICKS COUNT (bench 2026-09-06)
+# ------------------------------------
+# Ticks arriving at rest right after a load, once the motors were released, used to re-arm
+# "present" and the next insertion was never seen. So a tick is only evidence when:
+#
+#   FEEDING     the extruder moves AND this YMS's motor is synced to it — filament is driven.
+#   INSERTION   the toolhead is idle (idle_timeout not "Printing") and someone pushes filament
+#               in by hand.
+#   ignored     everything else: a tick while the extruder moves but ANOTHER feeder drives it
+#               (drag, vibration, EMI), or a tick at rest while the toolhead has not settled —
+#               filament relaxing after the motors were released. Counted and logged in
+#               klippy.log as "encoder tick ignored", at most once every 5 s with its count, so
+#               a noisy encoder shows up without flooding the log.
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# OPTIONS — what each one is for, not just what it is
+# ════════════════════════════════════════════════════════════════════════════════════════════
+#
+# WIRING AND SCOPE
+#   switch_pin          the YMS encoder pin.
+#   extruder            whose travel is compared with the ticks (default `extruder`). On a
+#                       CHROMAX head this is the FICTIVE extruder: the real pushers are the
+#                       YMS steppers synced to it.
+#   motor               this YMS's own feeder, an [extruder_stepper <name>]. A tick while the
+#                       extruder moves only counts as feeding when THAT feeder is synced to it.
+#                       Without it, any tick during movement counts, and a jam on channel 2
+#                       could be masked by channel 1 doing the work. YMS-n is fed by
+#                       extruder{n-1}.
+#   mode                free or hold — see the hardware section above. This is not a preference,
+#                       it must match how the sensor is mounted.
+#
+# ABSENCE (both modes)
+#   detection_length    mm of commanded extruder travel without a single tick before the
+#                       filament is declared absent (default 7). This is the ONLY detector that
+#                       works in free mode today. Note what it costs: at a normal print flow of
+#                       ~2 mm/s of filament, 50 mm is about 24 s, and with blockage_threshold 2
+#                       that is ~48 s of the gear biting a stationary filament before anything
+#                       happens — which deepens the flat it is grinding. Shorter is better here,
+#                       as long as it stays above the longest legitimate gap between ticks.
+#
+# OBSERVATION (both modes)
+#   pitch_view          echo every pitch to the console. For tuning by eye, not for production:
+#                       it writes a line per tick.
+#   data_logging        CSV of every tick, one row with everything that was known at that
+#                       instant (default off, /tmp/filament_sensor_log.csv). This is the right
+#                       source for analysis — pitch_view drowns the console, the CSV does not.
+#                       Reopened at each print start so one file is one print.
+#   log_file_path       where that CSV goes.
+#   low_pitch_filter    mm; two ticks closer than this are encoder noise, not filament movement,
+#                       and are left out of the pitch (default 0.015). Without it, contact
+#                       bounce would show up as an impossibly small pitch and read as a jam.
+#
+# PITCH ANALYSIS AND BLOCKAGE — hold mode only, see the known gap above
+#   blockage_detection  pause the print when the averaged pitch leaves [min_pitch, max_pitch]
+#                       (default off). Accepted and IGNORED in free mode.
+#   min_pitch           mm per tick below which feeding is suspect: the extruder is commanding
+#                       travel but the wheel barely turns, which is what a jam looks like.
+#   max_pitch           mm per tick above which it is suspect the other way: the wheel turns far
+#                       less often than the travel demands, which is slip.
+#   pitch_window        ticks averaged before a verdict (default 4). A single pitch is far too
+#                       noisy to act on; the average is what is judged.
+#   blockage_threshold  abnormal windows required before declaring a blockage (default 2). The
+#                       contract is CONSECUTIVE: one normal window must clear the run, otherwise
+#                       ordinary intermittent noise accumulates into a false pause.
+#   reset_motion_sensor_threshold
+#                       normal windows needed to clear a pending anomaly, and to re-arm the
+#                       sensor after a pause (default 16). Deliberately much larger than
+#                       blockage_threshold: it should be quick to suspect and slow to forgive.
+#   post_retract_skip   windows ignored after a travel or retraction artefact (default 2). The
+#                       filament rebounds after a long move and the first windows are not
+#                       representative.
+#   retraction_min      mm; a negative delta smaller than this is a pressure-advance
+#                       micro-retraction, not a real one, and must not reset the measurement
+#                       window (default 0.1). In free mode PA never reaches the wheel, so this
+#                       only matters in hold.
+#
+# KLIPPER-STANDARD BEHAVIOUR
+#   pause_on_runout, runout_gcode, insert_gcode, event_delay, pause_delay
+#                       exactly as Klipper's own filament sensors. Yumi machines set
+#                       pause_on_runout False and do the deciding in runout_gcode, so the
+#                       printer can verify a suspicion before giving up on a print.
+#
+# COMMANDS   SET_FILAMENT_SENSOR SENSOR=<name> ENABLE=0|1, QUERY_FILAMENT_SENSOR SENSOR=<name>.
+# STATUS     printer["filament_yumi_smart_motion_sensor <name>"]: filament_detected, enabled.
+#
 import logging
 import csv
 import os
