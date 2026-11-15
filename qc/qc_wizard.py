@@ -462,14 +462,7 @@ class Panel(ScreenPanel):
     # ─── QC MODE (swap printer.cfg <-> qc_printer.cfg) ─────────
 
     def _is_qc_mode(self):
-        """True if printer.cfg is a QC cfg (its [gcode_macro _QC_MODE] marker). Read on disk, not
-        from Klipper: a QC cfg whose board does not answer leaves Klipper in error with no config
-        loaded, and the pad must still offer Exit QC mode (15/11)."""
-        try:
-            with open(PROD_CFG, encoding="utf-8") as f:
-                return "[%s]" % QC_MODE_SECTION in f.read()
-        except FileNotFoundError:
-            return False
+        return cfg_is_qc()
 
     def _active_qc_model(self):
         """Taille machine gravée dans la cfg QC active (variable_model du marqueur
@@ -2470,16 +2463,28 @@ def exit_qc_mode(screen):
         if os.path.exists(BACKUP_CFG):
             Panel._copy_cfg_content(BACKUP_CFG, PROD_CFG)
             os.remove(BACKUP_CFG)
-        else:
+        elif cfg_is_qc():
             # No production cfg kept (QC cfg loaded by hand): set the QC cfg aside, the
-            # detection writes a new printer.cfg for whatever is plugged (ADXL mode at worst).
+            # detection writes a new printer.cfg for whatever is plugged.
             logger.warning("QC: no %s, %s moved to %s for the detection", BACKUP_CFG, PROD_CFG,
                            QC_EXIT_CFG)
             os.replace(PROD_CFG, QC_EXIT_CFG)
+        # else: not in QC mode, printer.cfg stays as it is: the restart alone runs the detection
     except Exception as e:
         logger.error(f"QC: cfg restore failed: {e}")
         screen.show_popup_message(f"恢复失败 / Restore failed: {e}", level=3)
         return
     screen.show_popup_message(
-        "恢复生产配置，重启中… / Production cfg restored, restarting…", level=1)
+        "重启中，重新识别机器… / Restarting, detecting the machine…", level=1)
     screen._ws.send_method("machine.services.restart", {"service": "klipper"})
+
+
+def cfg_is_qc():
+    """True if printer.cfg is a QC cfg (its [gcode_macro _QC_MODE] marker). Read on disk, not
+    from Klipper: a QC cfg whose board does not answer leaves Klipper in error with no config
+    loaded, and the pad must still offer Exit QC mode (15/11)."""
+    try:
+        with open(PROD_CFG, encoding="utf-8") as f:
+            return "[%s]" % QC_MODE_SECTION in f.read()
+    except FileNotFoundError:
+        return False
