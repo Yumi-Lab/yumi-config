@@ -111,6 +111,25 @@ gcode:
     {% endif %}
     RESPOND MSG="QC:HOTEND_EXTRUDE:VISUAL"
 
+[gcode_macro QC_HOTEND_CUT]
+description: QC hot end - the operator cuts the filament; the answer runs QC_HOTEND_RETRACT
+gcode:
+    RESPOND MSG="QC:FILAMENT_CUT:START"
+    RESPOND MSG="QC:FILAMENT_CUT:VISUAL"
+
+[gcode_macro QC_HOTEND_RETRACT]
+description: QC hot end - pull the cut filament back MM mm: the head motor (DD), or FEEDER synced to it (X12, YMS-3)
+gcode:
+    M83
+    {% if params.FEEDER %}
+        SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=extruder
+    {% endif %}
+    G1 E-{params.MM|float} F{params.SPEED|float * 60}
+    M400
+    {% if params.FEEDER %}
+        SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=
+    {% endif %}
+
 [gcode_macro QC_CLEANUP]
 description: QC hot end - heater, part fan and motor off. The hotend fan keeps cooling the head
 gcode:
@@ -167,21 +186,6 @@ gcode:
         SET_GCODE_VARIABLE MACRO=QC_HOTEND_SWITCH VARIABLE=pushed VALUE={pushed + v.chunk|int}
         UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0.1
     {% endif %}
-
-[gcode_macro QC_HOTEND_CUT]
-description: QC hot end - the operator cuts the filament; the answer runs QC_HOTEND_RETRACT
-gcode:
-    RESPOND MSG="QC:FILAMENT_CUT:START"
-    RESPOND MSG="QC:FILAMENT_CUT:VISUAL"
-
-[gcode_macro QC_HOTEND_RETRACT]
-description: QC hot end - FEEDER (YMS-3) pulls the cut filament back MM mm
-gcode:
-    M83
-    SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=extruder
-    G1 E-{params.MM|float} F{params.SPEED|float * 60}
-    M400
-    SYNC_EXTRUDER_MOTION EXTRUDER={params.FEEDER} MOTION_QUEUE=
 
 """
 

@@ -273,6 +273,8 @@ HOTEND_PLUGGED_MIN_C = 0
 HOTEND_FEED_MAX_MM = 800      # same budget as the machine QC feed (_QC_HEAD_FEED maxd)
 HOTEND_FEED_MM_S = 10          # machine QC feed speed (F600); 50 mm/s was far too fast (21/10)
 HOTEND_RETRACT_MM = 80         # after the operator cuts the filament (21/10: 40 mm too short)
+HOTEND_DD_RETRACT_MM = 30      # DD: the head's own motor backs the cut piece out of the head,
+HOTEND_DD_RETRACT_MM_S = 30    # fast, so the head is left empty (Nicolas 15/11: 2-3 cm is enough)
 
 _HEAT_START = {
     # Same id as the YMS heat start: after a FIRMWARE_RESTART the wizard replays it.
@@ -326,6 +328,11 @@ _FILAMENT_CUT = {
                                                               HOTEND_FEEDER),
     "timeout": 30,
 }
+# DD: same cut, then the head's own motor backs the cut piece out (no feeder on a DD bench).
+_DD_FILAMENT_CUT = dict(
+    _FILAMENT_CUT,
+    prompt="剪断耗材后按“是”，电机会退料3厘米\nCut the filament, then press YES: the motor backs it out 3 cm",
+    cleanup="QC_HOTEND_RETRACT MM=%d SPEED=%s" % (HOTEND_DD_RETRACT_MM, HOTEND_DD_RETRACT_MM_S))
 # X12: no motor on the head, YMS-3 pushes the filament from the switch through the hot nozzle.
 _X12_EXTRUDE = dict(
     _HOTEND_EXTRUDE,
@@ -335,7 +342,7 @@ _X12_EXTRUDE = dict(
 _FANS = [_QC_BY_ID["fan_hotend"], _QC_BY_ID["fan_part"]]
 HOTEND_TESTS = {
     "X12": [_HEAT_START, _HEAD_SWITCH] + _FANS + [_HOTEND_TEMP, _X12_EXTRUDE, _FILAMENT_CUT],
-    "DD": [_HEAT_START] + _FANS + [_HOTEND_TEMP, _HOTEND_EXTRUDE],
+    "DD": [_HEAT_START] + _FANS + [_HOTEND_TEMP, _HOTEND_EXTRUDE, _DD_FILAMENT_CUT],
 }
 
 

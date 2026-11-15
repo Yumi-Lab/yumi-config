@@ -4,7 +4,7 @@ import sys
 import unittest
 from datetime import datetime
 
-from qc.qc_engine import (HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
+from qc.qc_engine import (HOTEND_DD_RETRACT_MM, HOTEND_DD_RETRACT_MM_S, HOTEND_DEVICES, HOTEND_FEED_MM_S, HOTEND_RETRACT_MM, HOTEND_TEMP, HOTEND_TESTS,
                           MEASURE_DIGITS_MAX, QCEngine, hotend_plugged, hotend_report, measure_value,
                           measure_verdict,
                           tests_for_model)
@@ -44,7 +44,8 @@ class TestSequences(unittest.TestCase):
 
     def test_dd_also_extrudes(self):
         self.assertEqual([t["id"] for t in tests_for_model("DD")],
-                         ["heat_start", "fan_hotend", "fan_part", "hotend_temp", "hotend_extrude"])
+                         ["heat_start", "fan_hotend", "fan_part", "hotend_temp", "hotend_extrude",
+                          "filament_cut"])
 
     def test_operator_types_the_reading(self):
         temp = next(t for t in HOTEND_TESTS["X12"] if t["id"] == "hotend_temp")
@@ -190,11 +191,22 @@ class TestHeadSwitch(unittest.TestCase):
         """The operator's answer to the cut prompt runs the retract (visual test cleanup)."""
         cut = HOTEND_TESTS["X12"][-1]
         self.assertEqual((cut["id"], cut["type"]), ("filament_cut", "visual"))
-        macro, mm, speed = re.match(r"(\w+) MM=(\d+) SPEED=(\S+)", cut["cleanup"]).groups()
-        out = _render(_macro_body(self.cfg, macro), False, params={"MM": mm, "SPEED": speed})
+        macro, mm, speed, feeder = re.match(r"(\w+) MM=(\d+) SPEED=(\S+) FEEDER=(\S+)$", cut["cleanup"]).groups()
+        out = _render(_macro_body(self.cfg, macro), False, params={"MM": mm, "SPEED": speed, "FEEDER": feeder})
         self.assertIn("G1 E-%.1f F%.1f" % (HOTEND_RETRACT_MM, HOTEND_FEED_MM_S * 60), out)
         self.assertIn("MOTION_QUEUE=extruder\n", out)
         self.assertTrue(out.rstrip().endswith("MOTION_QUEUE="))
+
+    def test_dd_cut_then_the_head_backs_out(self):
+        """Nicolas 15/11: after the DD extrusion the operator cuts the filament; the answer backs the
+        head's own motor out 3 cm, fast, so the cut piece comes out and the head is left empty."""
+        cut = HOTEND_TESTS["DD"][-1]
+        self.assertEqual((cut["id"], cut["type"]), ("filament_cut", "visual"))
+        macro, mm, speed = re.match(r"(\w+) MM=(\d+) SPEED=(\S+)$", cut["cleanup"]).groups()
+        out = _render(_macro_body(_generator().build("DD"), macro), False, params={"MM": mm, "SPEED": speed})
+        self.assertIn("G1 E-%.1f F%.1f" % (HOTEND_DD_RETRACT_MM, HOTEND_DD_RETRACT_MM_S * 60), out)
+        self.assertNotIn("SYNC_EXTRUDER_MOTION", out)
+        self.assertEqual(HOTEND_DD_RETRACT_MM, 30)
 
     def test_cleanup_stops_the_loop(self):
         self.assertIn("UPDATE_DELAYED_GCODE ID=_qc_hotend_switch DURATION=0\n",
