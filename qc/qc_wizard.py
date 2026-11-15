@@ -28,6 +28,9 @@ logger = logging.getLogger("KlipperScreen.qc_wizard")
 CONFIG_DIR = os.path.expanduser("~/printer_data/config")
 PROD_CFG = os.path.join(CONFIG_DIR, "printer.cfg")
 BACKUP_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-backup")
+# A QC cfg left without a production backup is set aside here on Exit QC mode
+QC_EXIT_CFG = os.path.join(CONFIG_DIR, "printer.cfg.qc-exit")
+QC_MODE_SECTION = "gcode_macro _QC_MODE"
 
 # Tailles machine sélectionnables AVANT le QC. Chaque taille a sa propre cfg
 # qc_printer_<TAILLE>.cfg (géométrie/course différentes), déployée par install.sh.
@@ -459,18 +462,20 @@ class Panel(ScreenPanel):
     # ─── QC MODE (swap printer.cfg <-> qc_printer.cfg) ─────────
 
     def _is_qc_mode(self):
-        """True if the currently loaded Klipper config is the QC one
-        (detected via the [gcode_macro _QC_MODE] marker)."""
+        """True if printer.cfg is a QC cfg (its [gcode_macro _QC_MODE] marker). Read on disk, not
+        from Klipper: a QC cfg whose board does not answer leaves Klipper in error with no config
+        loaded, and the pad must still offer Exit QC mode (15/11)."""
         try:
-            return bool(self._screen.printer.get_config_section("gcode_macro _QC_MODE"))
-        except Exception:
+            with open(PROD_CFG, encoding="utf-8") as f:
+                return "[%s]" % QC_MODE_SECTION in f.read()
+        except FileNotFoundError:
             return False
 
     def _active_qc_model(self):
         """Taille machine gravée dans la cfg QC active (variable_model du marqueur
         _QC_MODE), ou None si absente/illisible."""
         try:
-            sec = self._screen.printer.get_config_section("gcode_macro _QC_MODE") or {}
+            sec = self._screen.printer.get_config_section(QC_MODE_SECTION) or {}
             val = str(sec.get("variable_model", "")).strip().strip('"').strip("'")
             return val or None
         except Exception:
@@ -551,13 +556,16 @@ class Panel(ScreenPanel):
         """Restore the production printer.cfg and restart the Klipper service: its start runs the
         machine detection (autoconfig --boot) that rebuilds the cfg; a FIRMWARE_RESTART does not
         (15/11: the C235 came back on a stale DD cfg, motor not inverted, 22.68 with 50:17)."""
-        if not os.path.exists(BACKUP_CFG):
-            self._screen.show_popup_message(
-                "无备份 / No backup found (printer.cfg.qc-backup)", level=3)
-            return
         try:
-            self._copy_cfg_content(BACKUP_CFG, PROD_CFG)
-            os.remove(BACKUP_CFG)
+            if os.path.exists(BACKUP_CFG):
+                self._copy_cfg_content(BACKUP_CFG, PROD_CFG)
+                os.remove(BACKUP_CFG)
+            else:
+                # No production cfg kept (QC cfg loaded by hand): set the QC cfg aside, the
+                # detection writes a new printer.cfg for whatever is plugged (ADXL mode at worst).
+                logger.warning("QC: no %s, %s moved to %s for the detection", BACKUP_CFG, PROD_CFG,
+                               QC_EXIT_CFG)
+                os.replace(PROD_CFG, QC_EXIT_CFG)
         except Exception as e:
             logger.error(f"QC: cfg restore failed: {e}")
             self._screen.show_popup_message(f"恢复失败 / Restore failed: {e}", level=3)

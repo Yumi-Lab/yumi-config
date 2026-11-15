@@ -365,6 +365,18 @@ QCMENU
         else
             echo "QC menu entry already in KlipperScreen.conf"
         fi
+        # Also on the error screen's Menu: a QC cfg whose board does not answer leaves Klipper in
+        # error, the main menu is gone and Exit QC mode must stay reachable (15/11)
+        if ! grep -q "^\[menu __splashscreen qc\]" "$CONFIG_FILE"; then
+            cat >> "$CONFIG_FILE" <<'QCSPLASH'
+
+[menu __splashscreen qc]
+name: Quality Control
+icon: qc-check
+panel: qc_wizard
+QCSPLASH
+            echo "Added QC entry to the error screen menu"
+        fi
     fi
 
     # Exclude symlinked files from KlipperScreen git tracking
