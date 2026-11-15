@@ -548,7 +548,9 @@ class Panel(ScreenPanel):
         self._screen._ws.klippy.restart_firmware()
 
     def _on_exit_qc_mode(self, widget):
-        """Restore the production printer.cfg and restart Klipper."""
+        """Restore the production printer.cfg and restart the Klipper service: its start runs the
+        machine detection (autoconfig --boot) that rebuilds the cfg; a FIRMWARE_RESTART does not
+        (15/11: the C235 came back on a stale DD cfg, motor not inverted, 22.68 with 50:17)."""
         if not os.path.exists(BACKUP_CFG):
             self._screen.show_popup_message(
                 "无备份 / No backup found (printer.cfg.qc-backup)", level=3)
@@ -562,7 +564,7 @@ class Panel(ScreenPanel):
             return
         self._screen.show_popup_message(
             "恢复生产配置，重启中… / Production cfg restored, restarting…", level=1)
-        self._screen._ws.klippy.restart_firmware()
+        self._screen._ws.send_method("machine.services.restart", {"service": "klipper"})
 
     def _build_running_screen(self):
         self._clear_content()
