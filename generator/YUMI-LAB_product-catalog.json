@@ -1013,9 +1013,9 @@
         "extruder": {
           "motor_slot": 0,
           "dir_invert": true,
-          "rotation_distance": 14.6,
+          "rotation_distance": 33.5,
           "_comments": {
-            "rotation_distance": "36 mm round geared head motor (36BYG1204-9M-6QHT), Nicolas's note 36圆形电机, with the common gear_ratio 50:17 = 4.96 mm/turn; the BMG 22.68 of the YMS gave ~64 % of the asked length (14/11). To calibrate: mark, push 100 mm, measure"
+            "rotation_distance": "Nicolas 15/11: the DD head is the 'before 33.500' of the cfg comments, with the BMG gear_ratio 50:17 (11.39 mm per motor turn). To calibrate: mark 200 mm, push 150 mm, measure what is left"
           }
         },
         "extruder_motor": {
