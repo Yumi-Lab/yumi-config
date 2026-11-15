@@ -553,26 +553,7 @@ class Panel(ScreenPanel):
         self._screen._ws.klippy.restart_firmware()
 
     def _on_exit_qc_mode(self, widget):
-        """Restore the production printer.cfg and restart the Klipper service: its start runs the
-        machine detection (autoconfig --boot) that rebuilds the cfg; a FIRMWARE_RESTART does not
-        (15/11: the C235 came back on a stale DD cfg, motor not inverted, 22.68 with 50:17)."""
-        try:
-            if os.path.exists(BACKUP_CFG):
-                self._copy_cfg_content(BACKUP_CFG, PROD_CFG)
-                os.remove(BACKUP_CFG)
-            else:
-                # No production cfg kept (QC cfg loaded by hand): set the QC cfg aside, the
-                # detection writes a new printer.cfg for whatever is plugged (ADXL mode at worst).
-                logger.warning("QC: no %s, %s moved to %s for the detection", BACKUP_CFG, PROD_CFG,
-                               QC_EXIT_CFG)
-                os.replace(PROD_CFG, QC_EXIT_CFG)
-        except Exception as e:
-            logger.error(f"QC: cfg restore failed: {e}")
-            self._screen.show_popup_message(f"恢复失败 / Restore failed: {e}", level=3)
-            return
-        self._screen.show_popup_message(
-            "恢复生产配置，重启中… / Production cfg restored, restarting…", level=1)
-        self._screen._ws.send_method("machine.services.restart", {"service": "klipper"})
+        exit_qc_mode(self._screen)
 
     def _build_running_screen(self):
         self._clear_content()
@@ -2478,3 +2459,27 @@ class Panel(ScreenPanel):
         """Remove all children from the content container."""
         for child in self.content.get_children():
             self.content.remove(child)
+
+
+def exit_qc_mode(screen):
+    """Leave QC mode: put the production printer.cfg back and restart the Klipper service, whose
+    start runs the machine detection (autoconfig --boot) that rebuilds the cfg; a FIRMWARE_RESTART
+    does not (15/11: the C235 came back on a stale DD cfg, motor not inverted, 22.68 with 50:17).
+    Shared by the wizard's Exit QC mode and the error screen's Autoconfig (panels/autoconfig.py)."""
+    try:
+        if os.path.exists(BACKUP_CFG):
+            Panel._copy_cfg_content(BACKUP_CFG, PROD_CFG)
+            os.remove(BACKUP_CFG)
+        else:
+            # No production cfg kept (QC cfg loaded by hand): set the QC cfg aside, the
+            # detection writes a new printer.cfg for whatever is plugged (ADXL mode at worst).
+            logger.warning("QC: no %s, %s moved to %s for the detection", BACKUP_CFG, PROD_CFG,
+                           QC_EXIT_CFG)
+            os.replace(PROD_CFG, QC_EXIT_CFG)
+    except Exception as e:
+        logger.error(f"QC: cfg restore failed: {e}")
+        screen.show_popup_message(f"恢复失败 / Restore failed: {e}", level=3)
+        return
+    screen.show_popup_message(
+        "恢复生产配置，重启中… / Production cfg restored, restarting…", level=1)
+    screen._ws.send_method("machine.services.restart", {"service": "klipper"})

@@ -336,6 +336,9 @@ if [ -d "$QC_DIR" ]; then
         rm -f "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
         ln -sf "$QC_DIR/qc_wizard.py" "$USER_HOME/KlipperScreen/panels/qc_wizard.py"
         echo "Symlink created: panels/qc_wizard.py"
+        rm -f "$USER_HOME/KlipperScreen/panels/autoconfig.py"
+        ln -sf "$QC_DIR/autoconfig.py" "$USER_HOME/KlipperScreen/panels/autoconfig.py"
+        echo "Symlink created: panels/autoconfig.py"
 
         # QC engine module
         rm -f "$USER_HOME/KlipperScreen/ks_includes/qc_engine.py"
@@ -365,24 +368,17 @@ QCMENU
         else
             echo "QC menu entry already in KlipperScreen.conf"
         fi
-        # Also on the error screen's Menu: a QC cfg whose board does not answer leaves Klipper in
-        # error, the main menu is gone and Exit QC mode must stay reachable (15/11)
-        if ! grep -q "^\[menu __splashscreen qc\]" "$CONFIG_FILE"; then
-            cat >> "$CONFIG_FILE" <<'QCSPLASH'
-
-[menu __splashscreen qc]
-name: Quality Control
-icon: qc-check
-panel: qc_wizard
-QCSPLASH
-            echo "Added QC entry to the error screen menu"
-        fi
+        # Error screen Menu > Autoconfig: a QC cfg whose board does not answer leaves Klipper in
+        # error, the main menu is gone and leaving QC mode must stay possible (15/11). Inserted
+        # ABOVE KlipperScreen's "#~# --- Do not edit below" block: it rewrites everything below
+        # it and dropped an entry appended at the end (15/11).
+        python3 "$QC_DIR/ks_menu_entry.py" "$CONFIG_FILE"
     fi
 
     # Exclude symlinked files from KlipperScreen git tracking
     KS_EXCLUDE="$USER_HOME/KlipperScreen/.git/info/exclude"
     if [ -f "$KS_EXCLUDE" ]; then
-        for entry in "panels/qc_wizard.py" "panels/yumilab.py" "ks_includes/qc_engine.py" "styles/material-dark/images/Yumi-Lab-Picto.svg" "styles/material-dark/images/qc-check.svg" "styles/material-darker/images/Yumi-Lab-Picto.svg" "styles/material-darker/images/qc-check.svg"; do
+        for entry in "panels/qc_wizard.py" "panels/autoconfig.py" "panels/yumilab.py" "ks_includes/qc_engine.py" "styles/material-dark/images/Yumi-Lab-Picto.svg" "styles/material-dark/images/qc-check.svg" "styles/material-darker/images/Yumi-Lab-Picto.svg" "styles/material-darker/images/qc-check.svg"; do
             if ! grep -qF "$entry" "$KS_EXCLUDE"; then
                 echo "$entry" >> "$KS_EXCLUDE"
             fi
