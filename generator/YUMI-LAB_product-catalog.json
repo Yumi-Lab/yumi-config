@@ -1012,11 +1012,7 @@
         "has_dryer": false,
         "extruder": {
           "motor_slot": 0,
-          "dir_invert": true,
-          "rotation_distance": 33.5,
-          "_comments": {
-            "rotation_distance": "Nicolas 15/11: the DD head is the 'before 33.500' of the cfg comments, with the BMG gear_ratio 50:17 (11.39 mm per motor turn). To calibrate: mark 200 mm, push 150 mm, measure what is left"
-          }
+          "dir_invert": true
         },
         "extruder_motor": {
           "_doc": "The head motor is not a YMS motor: its own autotune constants and current (Nicolas 14/11). 0.8 A under its 1.0 A rating",
@@ -1028,7 +1024,7 @@
           }
         }
       },
-      "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens inverse (!PB10, Nicolas 14/11 : le moteur de la tete DD tourne a l'envers du YMS sur le meme driver ; PB10 non inverse venait du QC C235) ; ratio 50:17."
+      "_doc": "Tete direct drive : moteur reel sur le driver E0. [extruder] prend les pins du slot 0 (motor_slot), son TMC et son autotune ceux d'extruder_stepper (meme driver, meme famille de moteur). Sens inverse (!PB10, Nicolas 14/11 : le moteur de la tete DD tourne a l'envers du YMS sur le meme driver ; PB10 non inverse venait du QC C235) ; extrudeur Bondtech BMG (Nicolas 15/11) : rotation_distance 22.6789511 + gear_ratio 50:17 communs, valeurs Bondtech."
     },
     "CHROMAX_X12": {
       "layer": "hotend",
