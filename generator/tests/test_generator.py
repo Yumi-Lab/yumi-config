@@ -139,6 +139,9 @@ class QCReference(unittest.TestCase):
                                   "the direct drive product wires the real motor on E0",
         ("extruder", "dir_pin"): "same",
         ("extruder", "enable_pin"): "same",
+        ("extruder", "rotation_distance"): "the DD head's own drive: 4.5, gear_ratio disabled (factory setting, "
+                                            "Jinfang 15/11); the QC file keeps the YMS BMG 22.6789511 with 50:17",
+        ("extruder", "gear_ratio"): "same",
         ("autotune_tmc stepper_x", "motor"): "V31 and V03 share the same constants; the catalog keeps V31 on the C series",
         ("autotune_tmc stepper_y", "motor"): "same",
         ("autotune_tmc stepper_z", "tuning_goal"): "performance in the trunk: in stealthChop the C335 Z stalled "
@@ -810,8 +813,9 @@ class Heads(unittest.TestCase):
         self.assertEqual(gen["autotune_tmc extruder"]["motor"], "36BYG1204-9M-6QHT")
         self.assertIn("motor_constants 36BYG1204-9M-6QHT", gen)
         self.assertEqual(float(gen["tmc2209 extruder"]["run_current"]), 0.8)
-        # a Bondtech BMG like the YMS (Nicolas 15/11): Bondtech's 22.6789511 with 50:17
-        self.assertEqual(float(gen["extruder"]["rotation_distance"]), 22.6789511)
+        # the factory's value (Jinfang 15/11): rotation_distance 4.5, no gear_ratio
+        self.assertEqual(float(gen["extruder"]["rotation_distance"]), 4.5)
+        self.assertNotIn("gear_ratio", gen["extruder"])
         self.assertFalse([s for s in gen if s.startswith("extruder_stepper")])
         self.assertEqual(gen["filament_motion_sensor filament_sensor"]["switch_pin"], slot0["filament_sensor_pin"])
 

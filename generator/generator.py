@@ -195,7 +195,8 @@ def emit(header, data, order=(), skip=()):
         if k in META_KEYS or k in SUBSECTION_KEYS or k in skip:
             continue
         v = data[k]
-        if isinstance(v, (dict, list)):
+        # None: a layer removes a key it inherits (e.g. a head without gear_ratio)
+        if v is None or isinstance(v, (dict, list)):
             continue
         line = f"{k}: {fmt(v)}"
         if comments.get(k):

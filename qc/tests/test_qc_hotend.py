@@ -85,8 +85,10 @@ class TestCfg(unittest.TestCase):
         ext = dd[dd.index("[extruder]"):]
         ext = ext[:ext.index("\n[")]
         for line in ("step_pin: PB12", "dir_pin: !PB10", "enable_pin: !PB13",
-                     "rotation_distance: 22.6789511", "gear_ratio: 50:17"):
+                     "rotation_distance: 4.5"):
             self.assertIn(line, ext)
+        # the factory's setting (Jinfang 15/11): 4.5 per motor turn, no gear ratio
+        self.assertNotIn("gear_ratio", ext)
         self.assertNotIn("PA12", ext)
         tmc = dd[dd.index("[tmc2209 extruder]"):]
         self.assertIn("uart_pin: PB14", tmc[:tmc.index("\n[")])
